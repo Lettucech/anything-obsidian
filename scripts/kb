@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+usage() {
+  cat <<'USAGE'
+Usage: ./scripts/kb <command>
+
+Commands:
+  init              Create .env from .env.example when missing
+  start             Start core AnythingLLM only
+  start-mcp         Build and start optional MCP server
+  start-sync        Build and start auto sync watcher
+  stop              Stop local services
+  restart           Restart local services
+  logs              Follow service logs
+  status            Show Git and container status
+  embed [--all]     Run Docker embed job for changed vault files
+  verify            Check Docker services and AnythingLLM API access
+USAGE
+}
+
+compose() {
+  if [[ -f .env ]]; then
+    docker compose --env-file .env -f docker/anythingllm/compose.yml "$@"
+  else
+    docker compose --env-file .env.example -f docker/anythingllm/compose.yml "$@"
+  fi
+}
+
+compose_mcp() {
+  if [[ -f .env ]]; then
+    docker compose --env-file .env -f docker/mcp/compose.yml "$@"
+  else
+    docker compose --env-file .env.example -f docker/mcp/compose.yml "$@"
+  fi
+}
+
+load_env() {
+  if [[ -f .env ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+  fi
+}
+
+ensure_env() {
+  if [[ ! -f .env ]]; then
+    echo "Missing .env. Run: ./scripts/kb init" >&2
+    exit 1
+  fi
+}
+
+case "${1:-}" in
+  init)
+    if [[ -f .env ]]; then
+      echo ".env already exists"
+    else
+      cp .env.example .env
+      echo "Created .env. Edit it before running ./scripts/kb start."
+    fi
+    ;;
+  start)
+    ensure_env
+    compose up -d
+    ;;
+  start-mcp)
+    ensure_env
+    load_env
+    if [[ -z "${ANYTHINGLLM_API_KEY:-}" ]]; then
+      echo "ANYTHINGLLM_API_KEY is empty. Create an API key in AnythingLLM and add it to .env first." >&2
+      exit 1
+    fi
+    compose_mcp up -d --build mcp
+    ;;
+  start-sync)
+    ensure_env
+    load_env
+    if [[ -z "${ANYTHINGLLM_API_KEY:-}" ]]; then
+      echo "ANYTHINGLLM_API_KEY is empty. Create an API key in AnythingLLM and add it to .env first." >&2
+      exit 1
+    fi
+    compose_mcp up -d --build sync
+    ;;
+  stop)
+    compose_mcp down
+    compose down
+    ;;
+  restart)
+    ensure_env
+    load_env
+    compose_mcp down
+    compose up -d
+    if [[ -n "${ANYTHINGLLM_API_KEY:-}" ]]; then
+      compose_mcp up -d --build mcp
+    fi
+    ;;
+  logs)
+    compose_mcp logs -f
+    ;;
+  status)
+    git status --short --branch
+    compose ps
+    load_env
+    if [[ -n "${ANYTHINGLLM_API_KEY:-}" ]]; then
+      compose_mcp ps
+    fi
+    ;;
+  embed)
+    ensure_env
+    load_env
+    if [[ -z "${ANYTHINGLLM_API_KEY:-}" ]]; then
+      echo "ANYTHINGLLM_API_KEY is empty. Create an API key in AnythingLLM and add it to .env first." >&2
+      exit 1
+    fi
+    shift
+    if [[ "$#" -gt 0 ]]; then
+      compose_mcp run --rm embed node scripts/embed-vault.mjs "$@"
+    else
+      compose_mcp run --rm embed
+    fi
+    ;;
+  verify)
+    ensure_env
+    load_env
+    anythingllm_base_url="${ANYTHINGLLM_BASE_URL:-http://localhost:${HOST_ANYTHINGLLM_PORT:-11301}}"
+    compose_mcp ps
+    curl --fail --silent --show-error "${anythingllm_base_url}/api/docs" >/dev/null
+    curl --fail --silent --show-error "http://localhost:${HOST_MCP_PORT:-11333}/health" >/dev/null
+    if [[ -z "${ANYTHINGLLM_API_KEY:-}" ]]; then
+      echo "ANYTHINGLLM_API_KEY is empty. Create an API key in AnythingLLM and add it to .env." >&2
+      exit 1
+    fi
+    compose_mcp exec -T mcp sh -c 'test -n "$ANYTHINGLLM_API_KEY"'
+    curl --fail --silent --show-error \
+      -H "Authorization: Bearer ${ANYTHINGLLM_API_KEY}" \
+      "${anythingllm_base_url}${ANYTHINGLLM_WORKSPACES_PATH:-/api/v1/workspaces}" >/dev/null
+    echo "AnythingLLM, MCP server, and API key are reachable."
+    ;;
+  ""|-h|--help|help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

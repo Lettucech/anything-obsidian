@@ -1,0 +1,6 @@
+[mcp_servers.anything-obsidian]
+command = "node"
+args = ["/Users/lettucech/Documents/anything-obsidian/mcp/anythingllm/dist/index.js"]
+
+# If your Codex version supports streamable HTTP MCP servers, use this local endpoint instead:
+# url = "http://localhost:11333/mcp"

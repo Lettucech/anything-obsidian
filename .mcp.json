@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "anything-obsidian": {
+      "type": "http",
+      "url": "http://localhost:11333/mcp"
+    }
+  }
+}
