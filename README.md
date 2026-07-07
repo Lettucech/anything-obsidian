@@ -115,6 +115,7 @@ KB_GIT_AUTO_PUSH=true
 KB_GIT_USER_NAME=anything-obsidian
 KB_GIT_USER_EMAIL=anything-obsidian@local
 KB_GIT_PUSH_URL=
+KB_WATCH_INTERVAL_SECONDS=300
 KB_SYNC_DEBOUNCE_SECONDS=300
 ```
 
@@ -232,7 +233,7 @@ docker compose --env-file ../../.env logs -f sync
 
 How it works:
 
-1. The sync service polls `/Users/lettucech/Documents/vault` through the `/vault` container mount.
+1. The sync service polls `/Users/lettucech/Documents/vault` through the `/vault` container mount every 5 minutes.
 2. Any file change starts a 5-minute countdown.
 3. Each new file change resets the countdown.
 4. After the vault is idle for 5 minutes, it runs:
@@ -242,13 +243,14 @@ How it works:
    - `git push` when `KB_GIT_AUTO_PUSH=true`
    - re-embedding of changed vault files
 
-The default debounce is:
+The default watch interval and debounce are:
 
 ```bash
+KB_WATCH_INTERVAL_SECONDS=300
 KB_SYNC_DEBOUNCE_SECONDS=300
 ```
 
-Change it in `.env` if you want a shorter test cycle.
+Change them in `.env` if you want a shorter test cycle.
 
 ## 7. Verify Auto Sync And Re-embedding
 
@@ -263,10 +265,11 @@ The local knowledge base auto sync and embedding pipeline is working.
 Wait for the debounce window. For a quick test, temporarily edit `.env` and set:
 
 ```bash
+KB_WATCH_INTERVAL_SECONDS=30
 KB_SYNC_DEBOUNCE_SECONDS=30
 ```
 
-Then recreate `sync`, edit the note again, and wait about 30 seconds:
+Then recreate `sync`, edit the note again, and wait for the next scan plus the idle window:
 
 ```bash
 cd /Users/lettucech/Documents/anything-obsidian/docker/mcp

@@ -10,7 +10,7 @@ const repoRoot = path.resolve(path.dirname(__filename), "..");
 const env = loadEnv(path.join(repoRoot, ".env"));
 
 const vaultPath = path.resolve(repoRoot, env.VAULT_PATH ?? "../vault");
-const pollMs = seconds(env.KB_WATCH_INTERVAL_SECONDS, 10) * 1000;
+const pollMs = seconds(env.KB_WATCH_INTERVAL_SECONDS, 300) * 1000;
 const debounceMs = seconds(env.KB_SYNC_DEBOUNCE_SECONDS, 300) * 1000;
 const watchExcludeDirs = new Set(csv(env.KB_WATCH_EXCLUDE_DIRS ?? ".git"));
 const gitRemote = env.KB_GIT_REMOTE ?? "origin";
