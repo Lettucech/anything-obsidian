@@ -49,11 +49,39 @@ compose_mcp() {
 
 load_env() {
   if [[ -f .env ]]; then
-    set -a
-    # shellcheck disable=SC1091
-    source .env
-    set +a
+    local line
+    local key
+    local value
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "$line" || "$line" == \#* || "$line" != *=* ]] && continue
+      key="${line%%=*}"
+      value="${line#*=}"
+      [[ "$key" =~ ^[A-Z0-9_]+$ ]] || continue
+      value="$(parse_env_value "$value")"
+      export "$key=$value"
+    done < .env
   fi
+}
+
+parse_env_value() {
+  local value="$1"
+
+  if [[ "$value" == \'*\' && ${#value} -ge 2 ]]; then
+    value="${value:1:${#value}-2}"
+    printf '%s\n' "${value//\\\'/\'}"
+    return
+  fi
+
+  if [[ "$value" == \"*\" && ${#value} -ge 2 ]]; then
+    value="${value:1:${#value}-2}"
+    value="${value//\\\\/\\}"
+    value="${value//\\\"/\"}"
+    value="${value//\\\$/\$}"
+    printf '%s\n' "${value//\\\`/\`}"
+    return
+  fi
+
+  printf '%s\n' "$value"
 }
 
 ensure_env() {
@@ -96,27 +124,15 @@ set_env_value() {
 
 quote_env_value() {
   local value="$1"
-  local quoted='"'
-  local char
-  local i
 
   if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
     echo "Env values must be single-line." >&2
     exit 2
   fi
 
-  for ((i = 0; i < ${#value}; i += 1)); do
-    char="${value:i:1}"
-    case "$char" in
-      "\\") quoted+='\\' ;;
-      '"') quoted+='\"' ;;
-      '$') quoted+='\$' ;;
-      '`') quoted+='\`' ;;
-      *) quoted+="$char" ;;
-    esac
-  done
-
-  printf '%s"\n' "$quoted"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"\n' "$value"
 }
 
 anythingllm_url() {
