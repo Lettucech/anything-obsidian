@@ -2,7 +2,7 @@
 
 Anything Obsidian exposes AnythingLLM through the MCP server in `mcp/anythingllm`.
 
-The user-facing server setup path is Docker Compose. The helper scripts are optional maintainer conveniences.
+The recommended first-run path is the installer TUI. It starts MCP after you paste and verify the AnythingLLM API key. Manual MCP startup remains available with `./scripts/kb start-mcp`, and the explicit Docker Compose steps are below.
 
 ## Docker HTTP Server
 

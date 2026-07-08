@@ -7,7 +7,7 @@ The important split:
 - `anything-obsidian`: this tooling repo. It contains Docker Compose, the MCP wrapper, and the embedding job.
 - `vault`: your Obsidian vault repo. It is your own private Git repo and does not have to be `pingkiuho/anything-obsidian`.
 
-The main setup path uses plain Git and Docker Compose. Helper scripts exist for maintainers, but users do not need them.
+The recommended first-run path is the installer. It clones the repo, configures `.env`, starts AnythingLLM, walks you through creating and verifying an AnythingLLM API key, and starts MCP. The plain Git and Docker Compose steps are still documented below under [Manual setup](#manual-setup).
 
 ## What You Will End Up With
 
@@ -21,6 +21,24 @@ The main setup path uses plain Git and Docker Compose. Helper scripts exist for 
 - Codex / Claude / Copilot able to query your AnythingLLM workspace via MCP.
 
 AnythingLLM storage, API keys, embedding state, and vector data stay local on each machine. Your vault content lives in your vault Git repo.
+
+## First-run setup
+
+Bootstrap with one command. You need [Git](https://git-scm.com/downloads) and [Docker Desktop](https://www.docker.com/products/docker-desktop/) running, plus [Go](https://go.dev/dl/) for the guided TUI:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pingkiuho/anything-obsidian/main/install.sh | bash
+```
+
+Or from a local clone:
+
+```bash
+git clone https://github.com/pingkiuho/anything-obsidian.git anything-obsidian
+cd anything-obsidian
+./install.sh
+```
+
+The TUI collects your vault path and ports, starts AnythingLLM, waits for you to create and paste an AnythingLLM API key, verifies it, then starts MCP and optionally the auto sync watcher. Without Go, or with `./install.sh --no-tui`, it prints manual next steps instead.
 
 ## Folder Layout
 
@@ -41,6 +59,10 @@ Inside `anything-obsidian`:
 - `scripts/watch-vault.mjs`: auto sync watcher used by Docker.
 
 The Docker embed job mounts the sibling `vault` folder into the container as `/vault`.
+
+## Manual setup
+
+Prefer the installer above. These steps are the explicit Git and Docker Compose path, useful when the TUI is unavailable or you want full control.
 
 ## 1. Install Obsidian
 
