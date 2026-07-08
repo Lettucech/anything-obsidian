@@ -18,6 +18,9 @@ mcp/anythingllm/dist/
 .chroma/
 .lancedb/
 
+# Go installer TUI build output
+/installer/installer
+
 # OS/editor noise
 .DS_Store
 Thumbs.db
