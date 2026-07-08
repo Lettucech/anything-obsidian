@@ -76,6 +76,7 @@ parse_env_value() {
     value="${value:1:${#value}-2}"
     value="${value//\\\\/\\}"
     value="${value//\\\"/\"}"
+    value="${value//\$\$/\$}"
     value="${value//\\\$/\$}"
     printf '%s\n' "${value//\\\`/\`}"
     return
@@ -132,6 +133,7 @@ quote_env_value() {
 
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
+  value="${value//\$/\$\$}"
   printf '"%s"\n' "$value"
 }
 
