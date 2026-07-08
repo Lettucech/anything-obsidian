@@ -114,6 +114,7 @@ KB_GIT_AUTO_PULL=true
 KB_GIT_AUTO_PUSH=true
 KB_GIT_USER_NAME=anything-obsidian
 KB_GIT_USER_EMAIL=anything-obsidian@local
+KB_EMBED_AFTER_SYNC=true
 KB_GIT_PUSH_URL=
 KB_WATCH_INTERVAL_SECONDS=300
 KB_SYNC_DEBOUNCE_SECONDS=300
@@ -241,7 +242,9 @@ How it works:
    - `git add -A`
    - `git commit -m "Auto sync vault <timestamp>"` when there are changes
    - `git push` when `KB_GIT_AUTO_PUSH=true`
-   - re-embedding of changed vault files
+   - re-embedding of changed vault files when `KB_EMBED_AFTER_SYNC=true`
+
+Git is the source of truth. AnythingLLM is a local derived index. If `KB_GIT_AUTO_PUSH=true` and push fails, the watcher keeps the local commit but skips re-embedding so the RAG index does not move ahead of the vault repo.
 
 The default watch interval and debounce are:
 
@@ -359,8 +362,10 @@ After that, the sync service handles future idle-window commits, pushes, pulls, 
 The MCP server exposes these tools:
 
 - `anythingllm_workspaces`
-- `anythingllm_query`
 - `anythingllm_vector_search`
+- `anythingllm_query`
+
+For code agents, prefer `anythingllm_vector_search`. It returns source chunks for the agent to reason over. Use `anythingllm_query` only when you want AnythingLLM to produce the answer itself.
 
 ### Claude Code
 
@@ -463,7 +468,7 @@ Use the anything-obsidian MCP tool to search for anything-obsidian-smoke-test-20
 
 Expected behavior:
 
-- The agent calls `anythingllm_vector_search` or `anythingllm_query`.
+- The agent calls `anythingllm_vector_search`.
 - The result mentions your smoke-test note.
 - If no result appears, check sync logs or rerun the manual embed job:
 

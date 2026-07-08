@@ -56,6 +56,8 @@ Watch logs:
 docker compose --env-file ../../.env logs -f sync
 ```
 
+Git is the source of truth. AnythingLLM is a local derived index. If `KB_GIT_AUTO_PUSH=true` and push fails, the watcher keeps the local commit but skips re-embedding until the push succeeds.
+
 Manual embed is available for repair or first-run checks:
 
 ```bash
@@ -86,10 +88,10 @@ The stdio server reads `.env` from the tooling repo root.
 ## Tools
 
 - `anythingllm_workspaces`: list available workspaces.
+- `anythingllm_vector_search`: directly search the workspace vector index. Prefer this for code agents.
 - `anythingllm_query`: ask the configured workspace through AnythingLLM.
-- `anythingllm_vector_search`: directly search the workspace vector index.
 
-Use `mode=query` for retrieval-first answers and `mode=chat` for normal workspace chat.
+Use `anythingllm_vector_search` when the agent should inspect source chunks and reason itself. Use `anythingllm_query` with `mode=query` or `mode=chat` only when you want AnythingLLM to produce the answer.
 
 AnythingLLM documents its live API for your instance at:
 

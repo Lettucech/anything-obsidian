@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..");
@@ -23,28 +23,36 @@ const commitPrefix = env.KB_GIT_COMMIT_MESSAGE_PREFIX ?? "Auto sync vault";
 const gitPushUrl = env.KB_GIT_PUSH_URL ?? "";
 const embedAfterSync = bool(env.KB_EMBED_AFTER_SYNC, true);
 
-let snapshot = await scanVault();
+let snapshot;
 let deadline = 0;
 let syncing = false;
 let changeCount = 0;
 
-log(`Watching ${vaultPath}`);
-log(`Debounce: ${Math.round(debounceMs / 1000)}s; poll: ${Math.round(pollMs / 1000)}s`);
-
-try {
-  const initialStatus = await capture("git", ["status", "--porcelain"], {
-    cwd: vaultPath,
-  });
-  if (initialStatus.trim()) {
-    deadline = Date.now() + debounceMs;
-    changeCount = 1;
-    log("Existing vault changes detected; auto sync scheduled after idle window");
-  }
-} catch (error) {
-  logError("Failed to inspect initial vault Git status", error);
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await main();
 }
 
-setInterval(tick, pollMs);
+async function main() {
+  snapshot = await scanVault();
+
+  log(`Watching ${vaultPath}`);
+  log(`Debounce: ${Math.round(debounceMs / 1000)}s; poll: ${Math.round(pollMs / 1000)}s`);
+
+  try {
+    const initialStatus = await capture("git", ["status", "--porcelain"], {
+      cwd: vaultPath,
+    });
+    if (initialStatus.trim()) {
+      deadline = Date.now() + debounceMs;
+      changeCount = 1;
+      log("Existing vault changes detected; auto sync scheduled after idle window");
+    }
+  } catch (error) {
+    logError("Failed to inspect initial vault Git status", error);
+  }
+
+  setInterval(tick, pollMs);
+}
 
 async function tick() {
   if (syncing) return;
@@ -84,6 +92,7 @@ async function syncOnce() {
   log("Idle window reached; starting auto sync");
 
   await configureGit();
+  let pushSucceeded = !gitAutoPush;
 
   if (gitAutoPull) {
     await run("git", ["pull", "--rebase", "--autostash", gitRemote, gitBranch], {
@@ -114,20 +123,27 @@ async function syncOnce() {
       } else {
         await run("git", ["push", "-u", gitRemote, gitBranch], { cwd: vaultPath });
       }
+      pushSucceeded = true;
       log("Pushed vault changes");
     } catch (error) {
-      logError("Git push failed; local commit is kept and re-embedding will continue", error);
+      logError("Git push failed; local commit is kept and re-embedding will wait", error);
     }
   }
 
-  if (embedAfterSync) {
+  if (shouldEmbedAfterSync({ embedAfterSync, gitAutoPush, pushSucceeded })) {
     try {
       await run("node", ["scripts/embed-vault.mjs"], { cwd: repoRoot });
       log("Re-embedding complete");
     } catch (error) {
       logError("Re-embedding failed; git sync already completed", error);
     }
+  } else if (embedAfterSync) {
+    log("Skipped re-embedding because Git push did not complete");
   }
+}
+
+export function shouldEmbedAfterSync({ embedAfterSync, gitAutoPush, pushSucceeded }) {
+  return embedAfterSync && (!gitAutoPush || pushSucceeded);
 }
 
 async function configureGit() {

@@ -50,7 +50,7 @@ function createServer() {
 
   server.tool(
     "anythingllm_query",
-    "Ask an AnythingLLM workspace. Use mode=query for RAG-first retrieval.",
+    "Ask AnythingLLM to answer from a workspace. Prefer anythingllm_vector_search when an agent needs source chunks.",
     {
       question: z.string().min(1),
       workspaceSlug: z.string().min(1).optional(),
@@ -69,7 +69,7 @@ function createServer() {
 
   server.tool(
     "anythingllm_vector_search",
-    "Run direct vector search against an AnythingLLM workspace and return matching source chunks.",
+    "Search the AnythingLLM workspace vector index and return matching source chunks. Prefer this for agent RAG.",
     {
       query: z.string().min(1),
       workspaceSlug: z.string().min(1).optional(),
