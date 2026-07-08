@@ -66,7 +66,7 @@ ensure_env() {
 set_env_value() {
   local key="$1"
   local value="$2"
-  local escaped_value
+  local quoted_value
   local tmp
 
   if [[ ! "$key" =~ ^[A-Z0-9_]+$ ]]; then
@@ -74,24 +74,49 @@ set_env_value() {
     exit 2
   fi
 
-  escaped_value="$(printf '%q' "$value")"
+  quoted_value="$(quote_env_value "$value")"
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' RETURN
 
   if [[ -f .env ]] && grep -q "^${key}=" .env; then
     while IFS= read -r line || [[ -n "$line" ]]; do
       case "$line" in
-        "${key}="*) printf '%s=%s\n' "$key" "$escaped_value" ;;
+        "${key}="*) printf '%s=%s\n' "$key" "$quoted_value" ;;
         *) printf '%s\n' "$line" ;;
       esac
     done < .env > "$tmp"
   else
     [[ -f .env ]] && cp .env "$tmp"
-    printf '%s=%s\n' "$key" "$escaped_value" >> "$tmp"
+    printf '%s=%s\n' "$key" "$quoted_value" >> "$tmp"
   fi
 
   mv "$tmp" .env
   trap - RETURN
+}
+
+quote_env_value() {
+  local value="$1"
+  local quoted='"'
+  local char
+  local i
+
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    echo "Env values must be single-line." >&2
+    exit 2
+  fi
+
+  for ((i = 0; i < ${#value}; i += 1)); do
+    char="${value:i:1}"
+    case "$char" in
+      "\\") quoted+='\\' ;;
+      '"') quoted+='\"' ;;
+      '$') quoted+='\$' ;;
+      '`') quoted+='\`' ;;
+      *) quoted+="$char" ;;
+    esac
+  done
+
+  printf '%s"\n' "$quoted"
 }
 
 anythingllm_url() {
