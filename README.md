@@ -12,6 +12,13 @@ Docker Compose is the supported command surface from the tooling repo root.
 - `anything-obsidian-mcp`: HTTP MCP server for coding agents.
 - `anything-obsidian-worker`: one-shot and maintenance worker for `embed`, `sync`, and `doctor`.
 
+Docker-managed volumes hold runtime data:
+
+- `anything-obsidian-anythingllm-storage`: AnythingLLM storage, API keys, uploaded documents, and vector data.
+- `anything-obsidian-worker-state`: worker state such as the embedding manifest.
+
+The Obsidian vault is still mounted from `HOST_VAULT_PATH` because it is your Git-backed vault repo, not Docker-owned storage.
+
 ## Quick Start
 
 1. Clone the tooling repo and your vault repo side by side.
@@ -77,6 +84,7 @@ docker compose run --rm worker embed --all
 docker compose run --rm worker sync
 docker compose run --rm worker doctor
 docker compose down
+docker volume ls --filter name=anything-obsidian
 ```
 
 ## MCP Clients
@@ -104,4 +112,5 @@ docker compose run --rm worker embed --all
 
 - Keep the tooling repo and vault repo separate.
 - `.env` is the local configuration file for the tooling repo.
+- Docker runtime data lives in named Docker volumes, not inside the tooling repo.
 - AnythingLLM API docs are available from the live server at `http://localhost:11301/api/docs`.

@@ -627,7 +627,7 @@ services:
     ports:
       - "${HOST_ANYTHINGLLM_PORT:-11301}:3001"
     volumes:
-      - ./.anything-obsidian-storage:/app/server/storage
+      - anything-obsidian-anythingllm-storage:/app/server/storage
     environment:
       DISABLE_TELEMETRY: "true"
       STORAGE_DIR: /app/server/storage
@@ -669,8 +669,14 @@ services:
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
       VAULT_PATH: /vault
     volumes:
-      - ./.anything-obsidian-state:/workspace/.anything-obsidian-state
+      - anything-obsidian-worker-state:/workspace/.anything-obsidian-state
       - ${HOST_VAULT_PATH:?Set HOST_VAULT_PATH in .env}:/vault
+
+volumes:
+  anything-obsidian-anythingllm-storage:
+    name: anything-obsidian-anythingllm-storage
+  anything-obsidian-worker-state:
+    name: anything-obsidian-worker-state
 ```
 
 - [ ] **Step 4: Validate Compose config**
