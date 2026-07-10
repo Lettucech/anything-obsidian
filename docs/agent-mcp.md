@@ -1,23 +1,17 @@
 # Code Agent MCP Setup
 
-Anything Obsidian exposes AnythingLLM through the MCP server in `mcp/anythingllm`.
+Anything Obsidian exposes AnythingLLM through the MCP server in Docker.
 
-The recommended first-run path is the installer TUI. It starts MCP after you paste and verify the AnythingLLM API key. Manual MCP startup remains available with `./scripts/kb start-mcp`, and the explicit Docker Compose steps are below.
-
-## Docker HTTP Server
-
-Start core AnythingLLM:
+Start the stack from the tooling repo root:
 
 ```bash
-cd docker/anythingllm
-docker compose --env-file ../../.env up -d
+docker compose up -d
 ```
 
-After creating an AnythingLLM API key and adding it to `.env`, start the optional MCP service:
+After you create an AnythingLLM API key and save it in `.env`, recreate MCP:
 
 ```bash
-cd docker/mcp
-docker compose --env-file ../../.env up -d --build mcp
+docker compose up -d --force-recreate mcp
 ```
 
 Connect MCP clients to:
@@ -34,69 +28,23 @@ The health endpoint is:
 http://localhost:11333/health
 ```
 
-If `ANYTHINGLLM_API_KEY` changes, recreate MCP:
+If `ANYTHINGLLM_API_KEY` changes, recreate MCP again with the same command.
+
+## Worker Commands
+
+Use the worker service for index maintenance:
 
 ```bash
-cd docker/mcp
-docker compose --env-file ../../.env up -d --build --force-recreate mcp
+docker compose run --rm worker embed --all
+docker compose run --rm worker doctor
 ```
 
-## Docker Embed Job
-
-The normal path is the auto sync watcher. It waits for a quiet edit window, commits/pushes vault changes, then re-embeds:
-
-```bash
-cd docker/mcp
-docker compose --env-file ../../.env up -d --build sync
-```
-
-Watch logs:
-
-```bash
-docker compose --env-file ../../.env logs -f sync
-```
-
-Git is the source of truth. AnythingLLM is a local derived index. If `KB_GIT_AUTO_PUSH=true` and push fails, the watcher keeps the local commit but skips re-embedding until the push succeeds.
-
-Manual embed is available for repair or first-run checks:
-
-```bash
-cd docker/mcp
-docker compose --env-file ../../.env run --rm embed
-```
-
-Re-embed all tracked file types:
-
-```bash
-cd docker/mcp
-docker compose --env-file ../../.env run --rm embed node scripts/embed-vault.mjs --all
-```
-
-## Local Stdio Server
-
-Some clients prefer local stdio MCP servers:
-
-```bash
-cd mcp/anythingllm
-npm install
-npm run build
-node dist/index.js
-```
-
-The stdio server reads `.env` from the tooling repo root.
+`embed --all` rebuilds the vault index, and `doctor` checks Docker-visible config and service reachability.
 
 ## Tools
 
 - `anythingllm_workspaces`: list available workspaces.
-- `anythingllm_vector_search`: directly search the workspace vector index. Prefer this for code agents.
+- `anythingllm_vector_search`: search the workspace vector index directly.
 - `anythingllm_query`: ask the configured workspace through AnythingLLM.
 
-Use `anythingllm_vector_search` when the agent should inspect source chunks and reason itself. Use `anythingllm_query` with `mode=query` or `mode=chat` only when you want AnythingLLM to produce the answer.
-
-AnythingLLM documents its live API for your instance at:
-
-```text
-http://localhost:11301/api/docs
-```
-
-If you changed `HOST_ANYTHINGLLM_PORT` in `.env`, use that port instead.
+Use `anythingllm_vector_search` when the agent should inspect source chunks and reason itself. Use `anythingllm_query` only when you want AnythingLLM to produce the answer itself.
