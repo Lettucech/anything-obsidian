@@ -47,8 +47,11 @@ Create the `obsidian` workspace, configure your model and embedder, and create a
 
 5. Save the API key in `.env`, then recreate MCP.
 
-```bash
+```text
 ANYTHINGLLM_API_KEY=your-api-key-here
+```
+
+```bash
 docker compose up -d --force-recreate mcp
 ```
 
@@ -69,9 +72,9 @@ docker compose run --rm worker doctor
 ```bash
 docker compose ps
 docker compose logs -f mcp
-docker compose logs -f worker
 docker compose run --rm worker embed
 docker compose run --rm worker embed --all
+docker compose run --rm worker sync
 docker compose run --rm worker doctor
 docker compose down
 ```
