@@ -1,0 +1,54 @@
+name: anything-obsidian
+
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: anything-obsidian-anythingllm
+    restart: unless-stopped
+    ports:
+      - "${HOST_ANYTHINGLLM_PORT:-11301}:3001"
+    volumes:
+      - ./.anything-obsidian-storage:/app/server/storage
+    environment:
+      DISABLE_TELEMETRY: "true"
+      STORAGE_DIR: /app/server/storage
+      UID: "1000"
+      GID: "1000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  mcp:
+    build:
+      context: ./mcp/anythingllm
+    container_name: anything-obsidian-mcp
+    restart: unless-stopped
+    depends_on:
+      - anythingllm
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      ANYTHINGLLM_BASE_URL: http://anythingllm:3001
+      MCP_TRANSPORT: http
+      MCP_PORT: "3333"
+    ports:
+      - "${HOST_MCP_PORT:-11333}:3333"
+
+  worker:
+    profiles:
+      - tools
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    container_name: anything-obsidian-worker
+    depends_on:
+      - anythingllm
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      ANYTHINGLLM_BASE_URL: http://anythingllm:3001
+      VAULT_PATH: /vault
+    volumes:
+      - ./.anything-obsidian-state:/workspace/.anything-obsidian-state
+      - ${HOST_VAULT_PATH:?Set HOST_VAULT_PATH in .env}:/vault
