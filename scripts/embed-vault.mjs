@@ -1,104 +1,119 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { createReadStream, readFileSync } from "node:fs";
+import { createReadStream } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { loadEnvFile, resolveConfig } from "./lib/env.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..");
-const env = loadEnv(path.join(repoRoot, ".env"));
-const args = new Set(process.argv.slice(2));
 
-const baseUrl = stripTrailingSlash(
-  env.ANYTHINGLLM_BASE_URL ?? `http://localhost:${env.HOST_ANYTHINGLLM_PORT ?? "11301"}`,
-);
-const apiKey = env.ANYTHINGLLM_API_KEY;
-const workspaceSlug = env.ANYTHINGLLM_WORKSPACE_SLUG ?? "obsidian";
-const documentFolder = env.ANYTHINGLLM_DOCUMENT_FOLDER ?? "anything-obsidian-vault";
-const vaultPath = path.resolve(repoRoot, env.VAULT_PATH ?? "../vault");
-const stateDir = path.resolve(repoRoot, env.KB_STATE_DIR ?? ".anything-obsidian-state");
-const manifestPath = path.join(stateDir, "embed-manifest.json");
-const extensions = csv(env.KB_EMBED_EXTENSIONS ?? ".md,.txt,.pdf,.docx").map((ext) =>
-  ext.startsWith(".") ? ext.toLowerCase() : `.${ext.toLowerCase()}`,
-);
-const excludeDirs = new Set(
-  csv(
-    env.KB_EMBED_EXCLUDE_DIRS ??
-      ".git,.obsidian,node_modules,mcp,.anything-obsidian-storage,.anything-obsidian-state",
-  ),
-);
-const uploadPathTemplate =
-  env.ANYTHINGLLM_DOCUMENT_UPLOAD_PATH_TEMPLATE ?? "/api/v1/document/upload/{folder}";
-const updateEmbeddingsPathTemplate =
-  env.ANYTHINGLLM_UPDATE_EMBEDDINGS_PATH_TEMPLATE ??
-  "/api/v1/workspace/{slug}/update-embeddings";
+export async function embedVault({ config, all = false }) {
+  const baseUrl = stripTrailingSlash(config.anythingllmBaseUrl);
+  const apiKey = config.apiKey;
+  const workspaceSlug = config.workspaceSlug;
+  const documentFolder = config.documentFolder ?? "anything-obsidian-vault";
+  const vaultPath = config.vaultPath;
+  const stateDir = config.stateDir ?? path.resolve(repoRoot, ".anything-obsidian-state");
+  const manifestPath = path.join(stateDir, "embed-manifest.json");
+  const extensions = csv(config.embedExtensions ?? ".md,.txt,.pdf,.docx").map((ext) =>
+    ext.startsWith(".") ? ext.toLowerCase() : `.${ext.toLowerCase()}`,
+  );
+  const excludeDirs = new Set(
+    csv(
+      config.embedExcludeDirs ??
+        ".git,.obsidian,node_modules,mcp,.anything-obsidian-storage,.anything-obsidian-state",
+    ),
+  );
+  const uploadPathTemplate =
+    config.documentUploadPathTemplate ?? "/api/v1/document/upload/{folder}";
+  const updateEmbeddingsPathTemplate =
+    config.updateEmbeddingsPathTemplate ?? "/api/v1/workspace/{slug}/update-embeddings";
 
-if (!apiKey) {
-  fail("Missing ANYTHINGLLM_API_KEY in .env.");
-}
-
-const manifest = await readManifest();
-const files = await listVaultFiles(vaultPath);
-const seen = new Set();
-const additions = [];
-const deletions = [];
-const nextManifest = { version: 1, files: { ...manifest.files } };
-
-for (const file of files) {
-  const rel = toPosix(path.relative(vaultPath, file));
-  seen.add(rel);
-
-  const hash = await sha256(file);
-  const previous = manifest.files[rel];
-  if (!args.has("--all") && previous?.hash === hash && previous?.locations?.length) {
-    continue;
+  if (!apiKey) {
+    throw new Error("Missing ANYTHINGLLM_API_KEY in .env.");
   }
 
-  const uploaded = await uploadFile(file, rel);
-  const locations = uploaded.documents
-    ?.map((document) => document.location)
-    .filter(Boolean);
+  const manifest = await readManifest(manifestPath);
+  const files = await listVaultFiles(vaultPath, { extensions, excludeDirs });
+  const seen = new Set();
+  const additions = [];
+  const deletions = [];
+  const nextManifest = { version: 1, files: { ...manifest.files } };
 
-  if (!locations?.length) {
-    console.warn(`No document locations returned for ${rel}; skipping embedding update.`);
-    continue;
+  for (const file of files) {
+    const rel = toPosix(path.relative(vaultPath, file));
+    seen.add(rel);
+
+    const hash = await sha256(file);
+    const previous = manifest.files[rel];
+    if (!all && previous?.hash === hash && previous?.locations?.length) {
+      continue;
+    }
+
+    const uploaded = await uploadFile({
+      file,
+      rel,
+      baseUrl,
+      apiKey,
+      documentFolder,
+      uploadPathTemplate,
+    });
+    const locations = uploaded.documents
+      ?.map((document) => document.location)
+      .filter(Boolean);
+
+    if (!locations?.length) {
+      console.warn(`No document locations returned for ${rel}; skipping embedding update.`);
+      continue;
+    }
+
+    additions.push(...locations);
+    if (previous?.locations?.length) deletions.push(...previous.locations);
+    nextManifest.files[rel] = { hash, locations, embeddedAt: new Date().toISOString() };
+    console.log(`Prepared ${rel}`);
   }
 
-  additions.push(...locations);
-  if (previous?.locations?.length) deletions.push(...previous.locations);
-  nextManifest.files[rel] = { hash, locations, embeddedAt: new Date().toISOString() };
-  console.log(`Prepared ${rel}`);
-}
+  for (const [rel, previous] of Object.entries(manifest.files)) {
+    if (seen.has(rel)) continue;
+    if (previous?.locations?.length) deletions.push(...previous.locations);
+    delete nextManifest.files[rel];
+    console.log(`Marked deleted ${rel}`);
+  }
 
-for (const [rel, previous] of Object.entries(manifest.files)) {
-  if (seen.has(rel)) continue;
-  if (previous?.locations?.length) deletions.push(...previous.locations);
-  delete nextManifest.files[rel];
-  console.log(`Marked deleted ${rel}`);
-}
-
-if (additions.length || deletions.length) {
-  await updateEmbeddings(additions, deletions);
-  await mkdir(stateDir, { recursive: true });
-  await writeFile(manifestPath, `${JSON.stringify(nextManifest, null, 2)}\n`);
-}
-
-console.log(
-  JSON.stringify(
-    {
-      scanned: files.length,
-      uploaded: additions.length,
-      removed: deletions.length,
+  if (additions.length || deletions.length) {
+    await updateEmbeddings({
+      adds: additions,
+      deletes: deletions,
+      baseUrl,
+      apiKey,
       workspaceSlug,
-    },
-    null,
-    2,
-  ),
-);
+      updateEmbeddingsPathTemplate,
+    });
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(manifestPath, `${JSON.stringify(nextManifest, null, 2)}\n`);
+  }
 
-async function uploadFile(file, rel) {
+  return {
+    scanned: files.length,
+    uploaded: additions.length,
+    removed: deletions.length,
+    workspaceSlug,
+  };
+}
+
+async function uploadFile({
+  file,
+  rel,
+  baseUrl,
+  apiKey,
+  documentFolder,
+  uploadPathTemplate,
+}) {
   const url = apiUrl(
+    baseUrl,
     uploadPathTemplate.replace("{folder}", encodeURIComponent(documentFolder)),
   );
   const body = new FormData();
@@ -121,8 +136,16 @@ async function uploadFile(file, rel) {
   return readResponse(response, `upload ${rel}`);
 }
 
-async function updateEmbeddings(adds, deletes) {
+async function updateEmbeddings({
+  adds,
+  deletes,
+  baseUrl,
+  apiKey,
+  workspaceSlug,
+  updateEmbeddingsPathTemplate,
+}) {
   const url = apiUrl(
+    baseUrl,
     updateEmbeddingsPathTemplate.replace("{slug}", encodeURIComponent(workspaceSlug)),
   );
   const response = await fetch(url, {
@@ -146,7 +169,7 @@ async function readResponse(response, action) {
   return data;
 }
 
-async function listVaultFiles(dir) {
+async function listVaultFiles(dir, { extensions, excludeDirs }) {
   const entries = await readdir(dir, { withFileTypes: true });
   const files = [];
 
@@ -154,7 +177,7 @@ async function listVaultFiles(dir) {
     if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
     const abs = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...(await listVaultFiles(abs)));
+      files.push(...(await listVaultFiles(abs, { extensions, excludeDirs })));
       continue;
     }
     if (!entry.isFile()) continue;
@@ -178,7 +201,7 @@ async function sha256(file) {
   return hash.digest("hex");
 }
 
-async function readManifest() {
+async function readManifest(manifestPath) {
   try {
     const raw = await readFile(manifestPath, "utf8");
     const parsed = JSON.parse(raw);
@@ -186,30 +209,6 @@ async function readManifest() {
   } catch {
     return { version: 1, files: {} };
   }
-}
-
-function loadEnv(file) {
-  const values = {};
-  try {
-    const raw = readFileSyncCompat(file);
-    for (const line of raw.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const index = trimmed.indexOf("=");
-      if (index === -1) continue;
-      const key = trimmed.slice(0, index).trim();
-      let value = trimmed.slice(index + 1).trim();
-      value = value.replace(/^['"]|['"]$/g, "");
-      values[key] = process.env[key] ?? value;
-    }
-  } catch {
-    // Missing .env is handled by required config checks.
-  }
-  return { ...values, ...process.env };
-}
-
-function readFileSyncCompat(file) {
-  return readFileSync(file, "utf8");
 }
 
 function safeJson(text) {
@@ -227,7 +226,7 @@ function csv(value) {
     .filter(Boolean);
 }
 
-function apiUrl(pathOrUrl) {
+function apiUrl(baseUrl, pathOrUrl) {
   if (pathOrUrl.startsWith("http")) return pathOrUrl;
   return `${baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
 }
@@ -240,7 +239,35 @@ function toPosix(value) {
   return value.split(path.sep).join("/");
 }
 
-function fail(message) {
-  console.error(message);
-  process.exit(1);
+function extendConfig(config, env) {
+  return {
+    ...config,
+    documentFolder: env.ANYTHINGLLM_DOCUMENT_FOLDER ?? config.documentFolder,
+    stateDir: env.KB_STATE_DIR
+      ? path.resolve(repoRoot, env.KB_STATE_DIR)
+      : config.stateDir,
+    embedExtensions: env.KB_EMBED_EXTENSIONS ?? config.embedExtensions,
+    embedExcludeDirs: env.KB_EMBED_EXCLUDE_DIRS ?? config.embedExcludeDirs,
+    documentUploadPathTemplate:
+      env.ANYTHINGLLM_DOCUMENT_UPLOAD_PATH_TEMPLATE ?? config.documentUploadPathTemplate,
+    updateEmbeddingsPathTemplate:
+      env.ANYTHINGLLM_UPDATE_EMBEDDINGS_PATH_TEMPLATE ??
+      config.updateEmbeddingsPathTemplate,
+  };
+}
+
+async function runCli() {
+  const env = { ...(await loadEnvFile(path.join(repoRoot, ".env"))), ...process.env };
+  const config = extendConfig(resolveConfig(env), env);
+  const result = await embedVault({ config, all: process.argv.includes("--all") });
+  console.log(JSON.stringify(result, null, 2));
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  try {
+    await runCli();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }
