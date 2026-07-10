@@ -92,7 +92,9 @@ function createServer() {
 
 async function requestJson(pathOrUrl: string, init: RequestInit) {
   if (!apiKey) {
-    throw new Error("Missing ANYTHINGLLM_API_KEY in repo root .env");
+    throw new Error(
+      "Missing ANYTHINGLLM_API_KEY. Finish AnythingLLM setup, add the key to .env, then recreate the MCP service.",
+    );
   }
 
   const url = pathOrUrl.startsWith("http")
@@ -147,7 +149,11 @@ if (useHttp) {
   const app = createMcpExpressApp();
 
   app.get("/health", (_: any, res: any) => {
-    res.status(200).json({ ok: true, name: "anything-obsidian-mcp" });
+    res.status(200).json({
+      ok: true,
+      name: "anything-obsidian-mcp",
+      apiKeyConfigured: Boolean(apiKey),
+    });
   });
 
   app.post("/mcp", async (req: any, res: any) => {
