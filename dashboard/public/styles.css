@@ -1,0 +1,155 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f7f4;
+  --panel: #ffffff;
+  --text: #222629;
+  --muted: #66706b;
+  --line: #d7ddd8;
+  --ok: #1f7a4d;
+  --warn: #9a6200;
+  --off: #697078;
+  --accent: #245b73;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 20px;
+}
+
+h2 {
+  font-size: 14px;
+}
+
+button {
+  min-height: 36px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  padding: 0 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+button:disabled {
+  border-color: var(--line);
+  background: #d5dad6;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+main {
+  padding: 20px 24px;
+}
+
+.services {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.service,
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.service {
+  padding: 14px;
+  border-left-width: 5px;
+}
+
+.service.ok {
+  border-left-color: var(--ok);
+}
+
+.service.warn {
+  border-left-color: var(--warn);
+}
+
+.service.off {
+  border-left-color: var(--off);
+}
+
+.service p,
+.service small,
+.config span {
+  color: var(--muted);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  gap: 16px;
+}
+
+.panel {
+  padding: 14px;
+}
+
+pre {
+  min-height: 420px;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #111416;
+  color: #e9eee9;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.config {
+  display: grid;
+  gap: 10px;
+}
+
+.config div {
+  display: grid;
+  gap: 2px;
+}
+
+@media (max-width: 800px) {
+  .topbar,
+  main {
+    padding-inline: 14px;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+}
