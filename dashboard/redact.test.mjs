@@ -22,6 +22,27 @@ test("redacts known secret env assignments in text", () => {
   );
 });
 
+test("redacts JSON-style quoted secret key/value pairs", () => {
+  assert.equal(
+    redactSecretsText('{"ANYTHINGLLM_API_KEY":"sk-secret","name":"dashboard"}'),
+    '{"ANYTHINGLLM_API_KEY":"[redacted]","name":"dashboard"}',
+  );
+});
+
+test("redacts colon-delimited secret key/value pairs", () => {
+  assert.equal(
+    redactSecretsText("KB_GIT_AUTH_TOKEN: ghp-secret\nGIT_PASSWORD: token-secret\nstatus: ready"),
+    "KB_GIT_AUTH_TOKEN: [redacted]\nGIT_PASSWORD: [redacted]\nstatus: ready",
+  );
+});
+
+test("redacts secret assignments with whitespace around equals", () => {
+  assert.equal(
+    redactSecretsText("ANYTHINGLLM_API_KEY = sk-secret\nKB_GIT_AUTH_TOKEN\t=\tghp-secret"),
+    "ANYTHINGLLM_API_KEY = [redacted]\nKB_GIT_AUTH_TOKEN\t=\t[redacted]",
+  );
+});
+
 test("redacts nested secret object keys", () => {
   assert.deepEqual(
     redactSecretsObject({
