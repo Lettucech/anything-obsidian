@@ -5,20 +5,53 @@ import test from "node:test";
 import { createDashboardServer } from "./server.mjs";
 
 test("status returns classified system state and public config", async () => {
+  const healthRequests = [];
   const app = createDashboardServer({
-    docker: fakeDocker({ running: new Set(["anything-obsidian-anythingllm"]) }),
+    docker: fakeDocker({
+      running: new Set(["anything-obsidian-anythingllm", "anything-obsidian-mcp", "anything-obsidian-syncer"]),
+    }),
     jobs: fakeJobs(),
     env: { HOST_DASHBOARD_PORT: "11300", HOST_ANYTHINGLLM_PORT: "11301" },
-    fetchImpl: async () => ({ ok: true, status: 200 }),
+    fetchImpl: async (url, options) => {
+      healthRequests.push({ url, options });
+      return { ok: true, status: 200 };
+    },
   });
 
   const response = await request(app, "GET", "/api/status");
 
   assert.equal(response.status, 200);
-  assert.equal(response.body.systemState, "partial");
+  assert.equal(response.body.systemState, "on");
   assert.equal(response.body.services.length, 3);
   assert.deepEqual(response.body.services.map((service) => service.id), ["anythingllm", "mcp", "syncer"]);
+  assert.equal(response.body.services.find((service) => service.id === "syncer").health.ok, true);
+  assert.equal(healthRequests.some((request) => request.url === "http://mcp:3333/health"), true);
   assert.equal(response.body.config.dashboardUrl, "http://localhost:11300");
+});
+
+test("system off stops all services concurrently", async () => {
+  let releaseFirstStop;
+  const firstStop = new Promise((resolve) => {
+    releaseFirstStop = resolve;
+  });
+  const docker = fakeDocker({
+    stopContainer: async (name) => {
+      docker.stopped.push(name);
+      if (name === "anything-obsidian-anythingllm") await firstStop;
+    },
+  });
+  const app = createDashboardServer({ docker, jobs: fakeJobs(), env: {} });
+
+  const responsePromise = request(app, "POST", "/api/system/off");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(docker.stopped, [
+    "anything-obsidian-anythingllm",
+    "anything-obsidian-mcp",
+    "anything-obsidian-syncer",
+  ]);
+  releaseFirstStop();
+  assert.equal((await responsePromise).status, 200);
 });
 
 test("system off stops only controlled services", async () => {
@@ -110,7 +143,7 @@ test("static files return not found instead of server error", async () => {
   assert.match(response.body.error, /Not found/);
 });
 
-function fakeDocker({ running = new Set() } = {}) {
+function fakeDocker({ running = new Set(), stopContainer } = {}) {
   return {
     started: [],
     stopped: [],
@@ -126,9 +159,9 @@ function fakeDocker({ running = new Set() } = {}) {
     async startContainer(name) {
       this.started.push(name);
     },
-    async stopContainer(name) {
+    stopContainer: stopContainer || (async function (name) {
       this.stopped.push(name);
-    },
+    }),
     async containerLogs() {
       return "ANYTHINGLLM_API_KEY=[redacted]";
     },

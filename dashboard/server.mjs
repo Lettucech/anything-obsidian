@@ -29,7 +29,9 @@ export function createDashboardServer({
         return sendJson(res, 200, await statusPayload({ docker, jobs, env, fetchImpl }));
       }
       if (req.method === "POST" && url.pathname === "/api/system/off") {
-        for (const service of Object.values(CONTROLLED_SERVICES)) await docker.stopContainer(service.name);
+        await Promise.all(
+          Object.values(CONTROLLED_SERVICES).map((service) => docker.stopContainer(service.name)),
+        );
         return sendJson(res, 200, await statusPayload({ docker, jobs, env, fetchImpl }));
       }
       if (req.method === "GET" && url.pathname === "/api/logs") {
@@ -82,9 +84,11 @@ async function serviceSnapshot({ docker, fetchImpl }) {
   return await Promise.all(
     Object.values(CONTROLLED_SERVICES).map(async (service) => {
       const inspected = await docker.inspectContainer(service.name);
-      const health = inspected.running && service.health
-        ? await probeHealth(fetchImpl, service.health.url, service.health.okStatus)
-        : { ok: false, status: "not-running" };
+      const health = !inspected.running
+        ? { ok: false, status: "not-running" }
+        : service.health
+          ? await probeHealth(fetchImpl, service.health.url, service.health.okStatus)
+          : { ok: true, status: "running" };
       return { ...inspected, id: service.id, label: service.label, health };
     }),
   );

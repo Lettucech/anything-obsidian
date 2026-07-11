@@ -8,6 +8,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { z } from "zod";
+import { mcpHttpOptions } from "./http-config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -146,7 +147,7 @@ function stripTrailingSlash(value: string) {
 }
 
 if (useHttp) {
-  const app = createMcpExpressApp();
+  const app = createMcpExpressApp(mcpHttpOptions());
 
   app.get("/health", (_: any, res: any) => {
     res.status(200).json({
