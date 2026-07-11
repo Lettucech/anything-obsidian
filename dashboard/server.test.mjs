@@ -73,6 +73,43 @@ test("actions reject unknown action ids and start allowed jobs", async () => {
   assert.equal(response.body.actionId, "doctor");
 });
 
+test("actions return conflict when job preconditions fail", async () => {
+  const app = createDashboardServer({
+    docker: fakeDocker(),
+    jobs: {
+      latest: () => null,
+      get: () => null,
+      async start() {
+        throw new Error("Embed changed requires AnythingLLM to be running");
+      },
+    },
+    env: {},
+  });
+
+  const response = await request(app, "POST", "/api/actions/embed");
+
+  assert.equal(response.status, 409);
+  assert.match(response.body.error, /requires AnythingLLM/);
+});
+
+test("static files do not serve traversal-looking paths", async () => {
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), env: {} });
+
+  const response = await request(app, "GET", "/..%2fserver.mjs");
+
+  assert.equal([403, 404].includes(response.status), true);
+  assert.notEqual(response.body, "#!/usr/bin/env node");
+});
+
+test("static files return not found instead of server error", async () => {
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), env: {} });
+
+  const response = await request(app, "GET", "/missing.css");
+
+  assert.equal(response.status, 404);
+  assert.match(response.body.error, /Not found/);
+});
+
 function fakeDocker({ running = new Set() } = {}) {
   return {
     started: [],

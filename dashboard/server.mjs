@@ -10,6 +10,7 @@ import { createJobManager } from "./jobs.mjs";
 import { redactSecretsObject, redactSecretsText } from "./redact.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const publicRoot = path.join(__dirname, "public");
 
 export function createDashboardServer({
   docker = new DockerClient(),
@@ -44,8 +45,12 @@ export function createDashboardServer({
           return sendJson(res, 404, { error: `Unknown action: ${actionId}` });
         }
         const snapshot = await serviceSnapshot({ docker, fetchImpl });
-        const job = await jobs.start(actionId, snapshot);
-        return sendJson(res, 202, job);
+        try {
+          const job = await jobs.start(actionId, snapshot);
+          return sendJson(res, 202, job);
+        } catch (error) {
+          return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
+        }
       }
       if (req.method === "GET" && url.pathname.startsWith("/api/actions/")) {
         const id = url.pathname.slice("/api/actions/".length);
@@ -96,9 +101,16 @@ async function probeHealth(fetchImpl, url, okStatus) {
 
 async function serveStatic(res, pathname) {
   const file = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-  const fullPath = path.join(__dirname, "public", file);
-  if (!fullPath.startsWith(path.join(__dirname, "public"))) return sendJson(res, 403, { error: "Forbidden" });
-  const body = await readFile(fullPath);
+  const fullPath = path.resolve(publicRoot, file);
+  const relative = path.relative(publicRoot, fullPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return sendJson(res, 403, { error: "Forbidden" });
+  let body;
+  try {
+    body = await readFile(fullPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return sendJson(res, 404, { error: "Not found" });
+    throw error;
+  }
   res.writeHead(200, { "content-type": contentType(file) });
   res.end(body);
 }
