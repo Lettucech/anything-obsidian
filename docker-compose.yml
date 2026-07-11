@@ -1,6 +1,26 @@
 name: anything-obsidian
 
 services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/dashboard/Dockerfile
+    container_name: anything-obsidian-dashboard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${HOST_DASHBOARD_PORT:-11300}:3000"
+    environment:
+      HOST_DASHBOARD_PORT: ${HOST_DASHBOARD_PORT:-11300}
+      HOST_ANYTHINGLLM_PORT: ${HOST_ANYTHINGLLM_PORT:-11301}
+      HOST_MCP_PORT: ${HOST_MCP_PORT:-11333}
+      ANYTHINGLLM_WORKSPACE_SLUG: ${ANYTHINGLLM_WORKSPACE_SLUG:-obsidian}
+      KB_SYNC_INTERVAL_SECONDS: ${KB_SYNC_INTERVAL_SECONDS:-300}
+      KB_GIT_REMOTE: ${KB_GIT_REMOTE:-origin}
+      KB_GIT_BRANCH: ${KB_GIT_BRANCH:-main}
+      HOST_VAULT_PATH: ${HOST_VAULT_PATH:?Set HOST_VAULT_PATH in .env}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
   anythingllm:
     image: mintplexlabs/anythingllm:latest
     container_name: anything-obsidian-anythingllm
@@ -37,6 +57,7 @@ services:
     build:
       context: .
       dockerfile: docker/worker/Dockerfile
+    image: anything-obsidian-worker
     container_name: anything-obsidian-syncer
     restart: unless-stopped
     depends_on:
@@ -56,6 +77,7 @@ services:
     build:
       context: .
       dockerfile: docker/worker/Dockerfile
+    image: anything-obsidian-worker
     container_name: anything-obsidian-worker
     depends_on:
       - anythingllm

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Anything Obsidian</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Anything Obsidian</h1>
+        <p id="system-state">loading</p>
+      </div>
+      <button id="power" type="button">Loading</button>
+    </header>
+    <main>
+      <section id="services" class="services"></section>
+      <section class="toolbar" id="actions">
+        <button type="button" data-action="sync">Sync now</button>
+        <button type="button" data-action="embed">Embed changed</button>
+        <button type="button" data-action="embed-all">Rebuild index</button>
+        <button type="button" data-action="doctor">Run doctor</button>
+      </section>
+      <section class="workspace">
+        <div class="panel">
+          <h2>Activity</h2>
+          <p id="latest-job">No dashboard worker job yet</p>
+          <pre id="logs"></pre>
+        </div>
+        <aside class="panel">
+          <h2>Config</h2>
+          <div id="config" class="config"></div>
+        </aside>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
