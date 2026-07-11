@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Readable, Writable } from "node:stream";
 import test from "node:test";
 
 import { createDashboardServer } from "./server.mjs";
@@ -104,13 +105,36 @@ function fakeJobs() {
 }
 
 async function request(server, method, path) {
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const { port } = server.address();
-    const response = await fetch(`http://127.0.0.1:${port}${path}`, { method });
-    const body = await response.json();
-    return { status: response.status, body };
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
+  return await new Promise((resolve) => {
+    const chunks = [];
+    const req = new Readable({
+      read() {
+        this.push(null);
+      },
+    });
+    req.method = method;
+    req.url = path;
+
+    const res = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    });
+    res.writeHead = (status, headers) => {
+      res.statusCode = status;
+      res.headers = headers;
+      return res;
+    };
+    res.end = (chunk) => {
+      if (chunk) chunks.push(Buffer.from(chunk));
+      resolve({
+        status: res.statusCode,
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+      });
+      return res;
+    };
+
+    server.emit("request", req, res);
+  });
 }
