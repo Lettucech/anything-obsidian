@@ -24,15 +24,31 @@ services:
     restart: unless-stopped
     depends_on:
       - anythingllm
-    env_file:
-      - path: ./.env
-        required: false
     environment:
+      ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
+      ANYTHINGLLM_WORKSPACE_SLUG: ${ANYTHINGLLM_WORKSPACE_SLUG:-obsidian}
       MCP_TRANSPORT: http
       MCP_PORT: "3333"
     ports:
       - "${HOST_MCP_PORT:-11333}:3333"
+
+  syncer:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    container_name: anything-obsidian-syncer
+    restart: unless-stopped
+    depends_on:
+      - anythingllm
+    environment:
+      ANYTHINGLLM_BASE_URL: http://anythingllm:3001
+      VAULT_PATH: /vault
+    volumes:
+      - ./.env:/workspace/.env:ro
+      - anything-obsidian-worker-state:/workspace/.anything-obsidian-state
+      - ${HOST_VAULT_PATH:?Set HOST_VAULT_PATH in .env}:/vault
+    command: ["autosync"]
 
   worker:
     profiles:
@@ -43,13 +59,11 @@ services:
     container_name: anything-obsidian-worker
     depends_on:
       - anythingllm
-    env_file:
-      - path: ./.env
-        required: false
     environment:
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
       VAULT_PATH: /vault
     volumes:
+      - ./.env:/workspace/.env:ro
       - anything-obsidian-worker-state:/workspace/.anything-obsidian-state
       - ${HOST_VAULT_PATH:?Set HOST_VAULT_PATH in .env}:/vault
 

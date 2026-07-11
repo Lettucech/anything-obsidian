@@ -15,26 +15,33 @@ let deadline = 0;
 let syncing = false;
 let changeCount = 0;
 
-export async function syncVaultOnce({ config }) {
-  await configureGit(config);
+export async function syncVaultOnce({ config, deps = {} }) {
+  const runner = deps.run ?? run;
+  const capturer = deps.capture ?? capture;
+  const env = gitEnv(config);
+
+  await configureGit(config, runner);
   let pushSucceeded = !config.gitAutoPush;
 
   if (config.gitAutoPull) {
-    await run("git", ["pull", "--rebase", "--autostash", config.gitRemote, config.gitBranch], {
+    await runner("git", ["pull", "--rebase", "--autostash", config.gitRemote, config.gitBranch], {
       cwd: config.vaultPath,
+      env,
     });
   }
 
-  const statusBefore = await capture("git", ["status", "--porcelain"], {
+  const statusBefore = await capturer("git", ["status", "--porcelain"], {
     cwd: config.vaultPath,
+    env,
   });
   if (statusBefore.trim()) {
-    await run("git", ["add", "-A"], { cwd: config.vaultPath });
-    const statusAfterAdd = await capture("git", ["status", "--porcelain"], {
+    await runner("git", ["add", "-A"], { cwd: config.vaultPath, env });
+    const statusAfterAdd = await capturer("git", ["status", "--porcelain"], {
       cwd: config.vaultPath,
+      env,
     });
     if (statusAfterAdd.trim()) {
-      await run("git", ["commit", "-m", commitMessage(config)], { cwd: config.vaultPath });
+      await runner("git", ["commit", "-m", commitMessage(config)], { cwd: config.vaultPath, env });
       log("Committed vault changes");
     }
   } else {
@@ -43,12 +50,14 @@ export async function syncVaultOnce({ config }) {
 
   if (config.gitAutoPush) {
     if (config.gitPushUrl) {
-      await run("git", ["push", config.gitPushUrl, `HEAD:${config.gitBranch}`], {
+      await runner("git", ["push", config.gitPushUrl, `HEAD:${config.gitBranch}`], {
         cwd: config.vaultPath,
+        env,
       });
     } else {
-      await run("git", ["push", "-u", config.gitRemote, config.gitBranch], {
+      await runner("git", ["push", "-u", config.gitRemote, config.gitBranch], {
         cwd: config.vaultPath,
+        env,
       });
     }
     pushSucceeded = true;
@@ -60,6 +69,17 @@ export async function syncVaultOnce({ config }) {
 
 export function shouldEmbedAfterSync({ embedAfterSync, gitAutoPush, pushSucceeded }) {
   return embedAfterSync && (!gitAutoPush || pushSucceeded);
+}
+
+export function gitEnv(config) {
+  if (!config.gitAuthToken) return process.env;
+  return {
+    ...process.env,
+    GIT_ASKPASS: path.join(repoRoot, "scripts", "git-askpass.sh"),
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_USERNAME: config.gitAuthUsername || "x-access-token",
+    GIT_PASSWORD: config.gitAuthToken,
+  };
 }
 
 async function main() {
@@ -146,9 +166,9 @@ async function syncOnceForWatcher() {
   }
 }
 
-async function configureGit(config) {
-  await run("git", ["config", "user.name", config.gitUserName], { cwd: config.vaultPath });
-  await run("git", ["config", "user.email", config.gitUserEmail], { cwd: config.vaultPath });
+async function configureGit(config, runner = run) {
+  await runner("git", ["config", "user.name", config.gitUserName], { cwd: config.vaultPath });
+  await runner("git", ["config", "user.email", config.gitUserEmail], { cwd: config.vaultPath });
 }
 
 async function scanVault(config, dir = config.vaultPath, base = config.vaultPath) {
@@ -183,7 +203,7 @@ async function run(command, args, options = {}) {
   await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: process.env,
+      env: options.env ?? process.env,
       stdio: "inherit",
     });
     child.on("error", reject);
@@ -200,7 +220,7 @@ async function capture(command, args, options = {}) {
     let stderr = "";
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: process.env,
+      env: options.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout.on("data", (chunk) => {

@@ -35,6 +35,7 @@ export async function embedVault({ config, all = false }) {
   if (!apiKey) {
     throw new Error("Missing ANYTHINGLLM_API_KEY in .env.");
   }
+  await assertWorkspaceExists({ baseUrl, apiKey, workspaceSlug });
 
   const manifest = await readManifest(manifestPath);
   const files = await listVaultFiles(vaultPath, { extensions, excludeDirs });
@@ -134,6 +135,26 @@ async function uploadFile({
     body,
   });
   return readResponse(response, `upload ${rel}`);
+}
+
+async function assertWorkspaceExists({ baseUrl, apiKey, workspaceSlug }) {
+  const response = await fetch(apiUrl(baseUrl, "/api/v1/workspaces"), {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+  });
+  const data = await readResponse(response, "list workspaces");
+  const workspaces = Array.isArray(data?.workspaces) ? data.workspaces : [];
+  const slugs = workspaces.map((workspace) => workspace.slug).filter(Boolean);
+
+  if (slugs.includes(workspaceSlug)) return;
+
+  const available = slugs.length ? slugs.join(", ") : "none";
+  throw new Error(
+    `AnythingLLM workspace '${workspaceSlug}' was not found. Available workspaces: ${available}. ` +
+      "Set ANYTHINGLLM_WORKSPACE_SLUG to an existing slug or create that workspace in AnythingLLM.",
+  );
 }
 
 async function updateEmbeddings({

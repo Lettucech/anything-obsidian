@@ -39,6 +39,8 @@ export function resolveConfig(env) {
     gitAutoPush: bool(env.KB_GIT_AUTO_PUSH, true),
     gitUserName: env.KB_GIT_USER_NAME ?? "anything-obsidian",
     gitUserEmail: env.KB_GIT_USER_EMAIL ?? "anything-obsidian@local",
+    gitAuthUsername: env.KB_GIT_AUTH_USERNAME ?? "x-access-token",
+    gitAuthToken: env.KB_GIT_AUTH_TOKEN ?? "",
     gitPushUrl: env.KB_GIT_PUSH_URL ?? "",
   };
 }
