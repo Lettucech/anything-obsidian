@@ -37,7 +37,7 @@ cd /Users/lettucech/Documents/anything-obsidian
 cp .env.example .env
 ```
 
-Set `HOST_VAULT_PATH` to your vault repo path. Change `HOST_ANYTHINGLLM_PORT` or `HOST_MCP_PORT` only if those host ports are already in use.
+Set `HOST_VAULT_PATH` to your vault repo path. Change `HOST_DASHBOARD_PORT`, `HOST_ANYTHINGLLM_PORT`, or `HOST_MCP_PORT` only if those host ports are already in use.
 
 The default sync interval is 300 seconds. Change `KB_SYNC_INTERVAL_SECONDS` only if you want a faster or slower background sync.
 
@@ -57,7 +57,15 @@ docker compose up -d
 
 This starts AnythingLLM, MCP, and the background syncer. The syncer reads `.env` on each interval, so it can pick up the AnythingLLM API key after first-run setup.
 
-4. Open AnythingLLM and finish first-run setup.
+4. Open the dashboard.
+
+```text
+http://localhost:11300
+```
+
+The dashboard stays running even when you turn the rest of the system off. Use it to start or stop AnythingLLM, MCP, and the background syncer, view recent logs, run `doctor`, sync now, or rebuild the index.
+
+5. Open AnythingLLM and finish first-run setup.
 
 ```text
 http://localhost:11301
@@ -65,7 +73,7 @@ http://localhost:11301
 
 Create the `obsidian` workspace, configure your model and embedder, and create an AnythingLLM API key.
 
-5. Save the API key in `.env`, then recreate MCP.
+6. Save the API key in `.env`, then recreate MCP.
 
 ```text
 ANYTHINGLLM_API_KEY=your-api-key-here
@@ -75,7 +83,7 @@ ANYTHINGLLM_API_KEY=your-api-key-here
 docker compose up -d --force-recreate mcp
 ```
 
-6. Watch the syncer, or run a manual full rebuild.
+7. Watch the syncer, or run a manual full rebuild.
 
 The syncer automatically pulls remote vault changes, commits and pushes local vault changes, then incrementally embeds after a successful Git sync.
 
@@ -84,13 +92,15 @@ docker compose logs -f syncer
 docker compose run --rm worker embed --all
 ```
 
-7. Run the worker health checks.
+8. Run the worker health checks.
 
 ```bash
 docker compose run --rm worker doctor
 ```
 
 ## Daily Commands
+
+Most daily commands are available from the dashboard. The CLI commands remain useful when Docker itself or the dashboard is unavailable.
 
 ```bash
 docker compose ps
@@ -143,3 +153,4 @@ docker compose run --rm worker embed --all
 - `.env` is the local configuration file for the tooling repo.
 - Docker runtime data lives in named Docker volumes, not inside the tooling repo.
 - AnythingLLM API docs are available from the live server at `http://localhost:11301/api/docs`.
+- The dashboard mounts the local Docker socket so it can control this Compose project. It binds to `127.0.0.1` by default and only exposes fixed project actions for `anythingllm`, `mcp`, `syncer`, and worker maintenance jobs.

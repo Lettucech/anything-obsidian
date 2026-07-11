@@ -80,7 +80,7 @@ async function serviceSnapshot({ docker, fetchImpl }) {
       const health = inspected.running && service.health
         ? await probeHealth(fetchImpl, service.health.url, service.health.okStatus)
         : { ok: false, status: "not-running" };
-      return { id: service.id, label: service.label, ...inspected, health };
+      return { ...inspected, id: service.id, label: service.label, health };
     }),
   );
 }

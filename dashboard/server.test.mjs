@@ -17,6 +17,7 @@ test("status returns classified system state and public config", async () => {
   assert.equal(response.status, 200);
   assert.equal(response.body.systemState, "partial");
   assert.equal(response.body.services.length, 3);
+  assert.deepEqual(response.body.services.map((service) => service.id), ["anythingllm", "mcp", "syncer"]);
   assert.equal(response.body.config.dashboardUrl, "http://localhost:11300");
 });
 
@@ -77,7 +78,13 @@ function fakeDocker({ running = new Set() } = {}) {
     started: [],
     stopped: [],
     async inspectContainer(name) {
-      return { found: true, name, state: running.has(name) ? "running" : "exited", running: running.has(name) };
+      return {
+        found: true,
+        id: `container-${name}`,
+        name,
+        state: running.has(name) ? "running" : "exited",
+        running: running.has(name),
+      };
     },
     async startContainer(name) {
       this.started.push(name);
