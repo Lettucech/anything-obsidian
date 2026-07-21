@@ -41,7 +41,7 @@ export async function doctor({
     const result = await runGit({
       args: ["ls-remote", "--heads", config.gitRemote, config.gitBranch],
       cwd: config.vaultPath,
-      env: gitEnv(config),
+      env: { ...gitEnv(config), GIT_TERMINAL_PROMPT: "0" },
     });
     if (!result.ok) {
       throw new Error(

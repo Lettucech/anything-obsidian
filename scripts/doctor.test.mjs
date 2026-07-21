@@ -49,6 +49,29 @@ test("doctor git check reports failure and hints at KB_GIT_AUTH_TOKEN", async ()
   }
 });
 
+test("doctor git check invokes ls-remote with non-interactive env", async () => {
+  const vaultPath = await mkdtemp(path.join(tmpdir(), "doctor-"));
+  try {
+    const calls = [];
+    const result = await doctor({
+      config: baseConfig(vaultPath),
+      fetchImpl: passingFetch(),
+      runGit: async (options) => {
+        calls.push(options);
+        return { ok: true, code: 0, stdout: "", stderr: "" };
+      },
+      readManifest: async () => ({ files: {} }),
+    });
+    assert.equal(byName(result).get("git remote").ok, true);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].args, ["ls-remote", "--heads", "origin", "main"]);
+    assert.equal(calls[0].cwd, vaultPath);
+    assert.equal(calls[0].env.GIT_TERMINAL_PROMPT, "0");
+  } finally {
+    await rm(vaultPath, { force: true, recursive: true });
+  }
+});
+
 test("doctor mcp health fails on non-200", async () => {
   const vaultPath = await mkdtemp(path.join(tmpdir(), "doctor-"));
   try {
