@@ -246,13 +246,19 @@ test("doctor checks vault mount and AnythingLLM with injected fetch", async () =
     const result = await doctor({
       config: {
         anythingllmBaseUrl: "http://anythingllm:3001",
+        mcpBaseUrl: "http://mcp:3333",
         apiKey: "key",
+        workspaceSlug: "obsidian",
         vaultPath,
+        gitRemote: "origin",
+        gitBranch: "main",
       },
       fetchImpl: async (url, options = {}) => {
         requests.push({ url, options });
         return { ok: true, status: 200 };
       },
+      runGit: async () => ({ ok: true, code: 0, stdout: "", stderr: "" }),
+      readManifest: async () => ({ files: {} }),
     });
 
     assert.equal(result.ok, true);
@@ -262,6 +268,10 @@ test("doctor checks vault mount and AnythingLLM with injected fetch", async () =
         ["vault mount", true],
         ["anythingllm api docs", true],
         ["anythingllm api key", true],
+        ["git remote", true],
+        ["mcp health", true],
+        ["embedder probe", true],
+        ["index drift", true],
       ],
     );
     assert.deepEqual(requests, [
@@ -269,6 +279,19 @@ test("doctor checks vault mount and AnythingLLM with injected fetch", async () =
       {
         url: "http://anythingllm:3001/api/v1/workspaces",
         options: { headers: { Authorization: "Bearer key" } },
+      },
+      { url: "http://mcp:3333/health", options: {} },
+      {
+        url: "http://anythingllm:3001/api/v1/workspace/obsidian/vector-search",
+        options: {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            Authorization: "Bearer key",
+          },
+          body: JSON.stringify({ query: "doctor", topN: 1 }),
+        },
       },
     ]);
   } finally {
