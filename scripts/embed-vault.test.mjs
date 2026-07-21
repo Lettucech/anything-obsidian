@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { embedVault } from "./embed-vault.mjs";
+import { embedVault, embeddableVaultFiles } from "./embed-vault.mjs";
 
 test("validates workspace slug before uploading vault files", async () => {
   const vaultPath = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vault-"));
@@ -44,6 +44,24 @@ test("validates workspace slug before uploading vault files", async () => {
     globalThis.fetch = originalFetch;
     await rm(vaultPath, { force: true, recursive: true });
     await rm(stateDir, { force: true, recursive: true });
+  }
+});
+
+test("embeddableVaultFiles lists markdown and skips excluded dirs and other extensions", async () => {
+  const vaultPath = await mkdtemp(path.join(tmpdir(), "embed-vault-"));
+  try {
+    await writeFile(path.join(vaultPath, "note.md"), "x");
+    await mkdir(path.join(vaultPath, ".git"), { recursive: true });
+    await writeFile(path.join(vaultPath, ".git", "config"), "x");
+    await writeFile(path.join(vaultPath, "image.png"), "x");
+
+    const files = await embeddableVaultFiles(vaultPath);
+    assert.deepEqual(
+      files.map((file) => path.relative(vaultPath, file)),
+      ["note.md"],
+    );
+  } finally {
+    await rm(vaultPath, { force: true, recursive: true });
   }
 });
 

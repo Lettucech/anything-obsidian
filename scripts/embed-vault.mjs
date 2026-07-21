@@ -18,15 +18,6 @@ export async function embedVault({ config, all = false }) {
   const vaultPath = config.vaultPath;
   const stateDir = config.stateDir ?? path.resolve(repoRoot, ".anything-obsidian-state");
   const manifestPath = path.join(stateDir, "embed-manifest.json");
-  const extensions = csv(config.embedExtensions ?? ".md,.txt,.pdf,.docx").map((ext) =>
-    ext.startsWith(".") ? ext.toLowerCase() : `.${ext.toLowerCase()}`,
-  );
-  const excludeDirs = new Set(
-    csv(
-      config.embedExcludeDirs ??
-        ".git,.obsidian,node_modules,mcp,.anything-obsidian-storage,.anything-obsidian-state",
-    ),
-  );
   const uploadPathTemplate =
     config.documentUploadPathTemplate ?? "/api/v1/document/upload/{folder}";
   const updateEmbeddingsPathTemplate =
@@ -38,7 +29,10 @@ export async function embedVault({ config, all = false }) {
   await assertWorkspaceExists({ baseUrl, apiKey, workspaceSlug });
 
   const manifest = await readManifest(manifestPath);
-  const files = await listVaultFiles(vaultPath, { extensions, excludeDirs });
+  const files = await embeddableVaultFiles(vaultPath, {
+    extensions: config.embedExtensions,
+    excludeDirs: config.embedExcludeDirs,
+  });
   const seen = new Set();
   const additions = [];
   const deletions = [];
@@ -188,6 +182,23 @@ async function readResponse(response, action) {
     throw new Error(`${action} failed with ${response.status}: ${text}`);
   }
   return data;
+}
+
+export const DEFAULT_EMBED_EXTENSIONS = ".md,.txt,.pdf,.docx";
+export const DEFAULT_EMBED_EXCLUDE_DIRS =
+  ".git,.obsidian,node_modules,mcp,.anything-obsidian-storage,.anything-obsidian-state";
+
+export async function embeddableVaultFiles(vaultPath, { extensions, excludeDirs } = {}) {
+  return listVaultFiles(vaultPath, {
+    extensions: normalizeExtensions(extensions ?? DEFAULT_EMBED_EXTENSIONS),
+    excludeDirs: new Set(csv(excludeDirs ?? DEFAULT_EMBED_EXCLUDE_DIRS)),
+  });
+}
+
+function normalizeExtensions(value) {
+  return csv(value).map((ext) =>
+    ext.startsWith(".") ? ext.toLowerCase() : `.${ext.toLowerCase()}`,
+  );
 }
 
 async function listVaultFiles(dir, { extensions, excludeDirs }) {
