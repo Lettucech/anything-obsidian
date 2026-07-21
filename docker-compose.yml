@@ -20,13 +20,18 @@ services:
       HOST_VAULT_PATH: ${HOST_VAULT_PATH:?Set HOST_VAULT_PATH in .env}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
 
   anythingllm:
     image: mintplexlabs/anythingllm:latest
     container_name: anything-obsidian-anythingllm
     restart: unless-stopped
     ports:
-      - "${HOST_ANYTHINGLLM_PORT:-11301}:3001"
+      - "127.0.0.1:${HOST_ANYTHINGLLM_PORT:-11301}:3001"
     volumes:
       - anything-obsidian-anythingllm-storage:/app/server/storage
     environment:
@@ -36,6 +41,11 @@ services:
       GID: "1000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/docs',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
 
   mcp:
     build:
@@ -43,7 +53,13 @@ services:
     container_name: anything-obsidian-mcp
     restart: unless-stopped
     depends_on:
-      - anythingllm
+      anythingllm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3333/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
     environment:
       ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
@@ -51,7 +67,7 @@ services:
       MCP_TRANSPORT: http
       MCP_PORT: "3333"
     ports:
-      - "${HOST_MCP_PORT:-11333}:3333"
+      - "127.0.0.1:${HOST_MCP_PORT:-11333}:3333"
 
   syncer:
     build:
@@ -61,7 +77,8 @@ services:
     container_name: anything-obsidian-syncer
     restart: unless-stopped
     depends_on:
-      - anythingllm
+      anythingllm:
+        condition: service_healthy
     environment:
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
       VAULT_PATH: /vault
