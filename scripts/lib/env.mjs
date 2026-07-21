@@ -42,6 +42,8 @@ export function resolveConfig(env) {
     gitAuthUsername: env.KB_GIT_AUTH_USERNAME ?? "x-access-token",
     gitAuthToken: env.KB_GIT_AUTH_TOKEN ?? "",
     gitPushUrl: env.KB_GIT_PUSH_URL ?? "",
+    mcpBaseUrl: stripTrailingSlash(env.ANYTHINGLLM_MCP_BASE_URL ?? "http://mcp:3333"),
+    kbStateDir: env.KB_STATE_DIR ?? "",
   };
 }
 

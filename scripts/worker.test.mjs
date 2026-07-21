@@ -31,6 +31,8 @@ test("resolves Docker worker defaults", () => {
   assert.equal(config.gitAutoPush, true);
   assert.equal(config.gitAuthUsername, "x-access-token");
   assert.equal(config.gitAuthToken, "");
+  assert.equal(config.mcpBaseUrl, "http://mcp:3333");
+  assert.equal(config.kbStateDir, "");
 });
 
 test("worker config honors explicit container values", () => {
@@ -43,6 +45,8 @@ test("worker config honors explicit container values", () => {
     KB_GIT_AUTO_PUSH: "0",
     KB_GIT_AUTH_USERNAME: "token-user",
     KB_GIT_AUTH_TOKEN: "secret",
+    ANYTHINGLLM_MCP_BASE_URL: "http://mcp.special:3333",
+    KB_STATE_DIR: "custom-state",
   });
 
   assert.equal(config.anythingllmBaseUrl, "http://custom:3001");
@@ -52,6 +56,8 @@ test("worker config honors explicit container values", () => {
   assert.equal(config.gitAutoPush, false);
   assert.equal(config.gitAuthUsername, "token-user");
   assert.equal(config.gitAuthToken, "secret");
+  assert.equal(config.mcpBaseUrl, "http://mcp.special:3333");
+  assert.equal(config.kbStateDir, "custom-state");
 });
 
 test("worker rejects unknown commands", async () => {
