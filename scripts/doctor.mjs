@@ -82,7 +82,10 @@ export async function doctor({
   await record(checks, "index drift", async () => {
     const manifest = await readManifest(manifestPath(config));
     const embedded = Object.keys(manifest.files ?? {}).length;
-    const files = await embeddableVaultFiles(config.vaultPath);
+    const files = await embeddableVaultFiles(config.vaultPath, {
+      extensions: config.embedExtensions,
+      excludeDirs: config.embedExcludeDirs,
+    });
     if (files.length === 0) {
       return `Vault has no embeddable files; index has ${embedded} entries`;
     }

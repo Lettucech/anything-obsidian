@@ -172,3 +172,22 @@ test("doctor drift is healthy when index matches vault", async () => {
     await rm(vaultPath, { force: true, recursive: true });
   }
 });
+
+test("doctor drift honors custom embed extensions from config", async () => {
+  const vaultPath = await mkdtemp(path.join(tmpdir(), "doctor-"));
+  try {
+    await writeFile(path.join(vaultPath, "note.md"), "n");
+    await writeFile(path.join(vaultPath, "draw.canvas"), "d");
+    const result = await doctor({
+      config: baseConfig(vaultPath, { embedExtensions: ".md,.canvas" }),
+      fetchImpl: passingFetch(),
+      runGit: passingRunGit(),
+      readManifest: async () => ({ files: { "note.md": { hash: "x" } } }),
+    });
+    const drift = byName(result).get("index drift");
+    assert.equal(drift.ok, false);
+    assert.match(drift.message, /draw\.canvas/);
+  } finally {
+    await rm(vaultPath, { force: true, recursive: true });
+  }
+});

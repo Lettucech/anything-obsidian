@@ -44,6 +44,10 @@ export function resolveConfig(env) {
     gitPushUrl: env.KB_GIT_PUSH_URL ?? "",
     mcpBaseUrl: stripTrailingSlash(env.ANYTHINGLLM_MCP_BASE_URL ?? "http://mcp:3333"),
     kbStateDir: env.KB_STATE_DIR ?? "",
+    // Optional overrides; left undefined when unset so embeddableVaultFiles applies
+    // its own DEFAULT_EMBED_EXTENSIONS / DEFAULT_EMBED_EXCLUDE_DIRS (single source).
+    embedExtensions: env.KB_EMBED_EXTENSIONS,
+    embedExcludeDirs: env.KB_EMBED_EXCLUDE_DIRS,
   };
 }
 
