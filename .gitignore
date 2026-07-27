@@ -25,3 +25,4 @@ mcp/anythingllm/dist/
 .DS_Store
 Thumbs.db
 *.swp
+.worktrees/
