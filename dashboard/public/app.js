@@ -29,7 +29,8 @@ if (typeof document !== "undefined") {
   const state = { status: null, vaults: [], editingId: null };
   const els = Object.fromEntries([
     "system-state", "power", "services", "vaults", "add-vault", "vault-form-panel", "vault-form",
-    "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs",
+    "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
+    "source-mode-field", "clone-url-field", "import-help", "workspace-slug-field", "allowlist-field", "vault-submit",
   ].map((id) => [id.replaceAll("-", ""), document.querySelector(`#${id}`)]));
 
   els.power.addEventListener("click", async () => {
@@ -40,6 +41,7 @@ if (typeof document !== "undefined") {
   els.cancelvault.addEventListener("click", hideForm);
   els.vaults.addEventListener("click", handleVaultAction);
   els.vaultform.addEventListener("submit", saveVault);
+  els.vaultform.addEventListener("change", syncFormControls);
 
   async function handleVaultAction(event) {
     const button = event.target.closest("button[data-vault-id]");
@@ -63,13 +65,16 @@ if (typeof document !== "undefined") {
     const input = formInput(form);
     try {
       if (state.editingId) {
-        delete input.id; delete input.directory; delete input.vaultMode; delete input.workspaceMode; delete input.workspaceSlug;
-        await request(`/api/vaults/${encodeURIComponent(state.editingId)}`, { method: "PATCH", body: JSON.stringify(input) });
+        delete input.id; delete input.directory; delete input.sourceMode; delete input.repositoryUrl;
+        delete input.workspaceMode; delete input.workspaceSlug;
+        const saved = await request(`/api/vaults/${encodeURIComponent(state.editingId)}`, { method: "PATCH", body: JSON.stringify(input) });
+        hideForm();
+        message(`Vault '${saved.id}' saved.`);
       } else {
-        await request("/api/vaults", { method: "POST", body: JSON.stringify(input) });
+        const saved = await request("/api/vaults", { method: "POST", body: JSON.stringify(input) });
+        hideForm();
+        message(`Vault '${saved.id}' added.`);
       }
-      hideForm();
-      message(`Vault '${state.editingId || input.id}' saved.`);
       await refresh();
     } catch (error) {
       message(error.message, true);
@@ -78,9 +83,9 @@ if (typeof document !== "undefined") {
 
   function formInput(form) {
     return {
-      id: form.get("id"), name: form.get("name"), directory: form.get("directory"), vaultMode: form.get("vaultMode"),
+      sourceMode: form.get("sourceMode"), repositoryUrl: form.get("repositoryUrl"),
+      id: form.get("id"), name: form.get("name"), directory: form.get("directory"),
       workspaceMode: form.get("workspaceMode"), workspaceSlug: form.get("workspaceSlug"),
-      gitRemote: form.get("gitRemote"), gitBranch: form.get("gitBranch"),
       gitAutoPull: form.get("gitAutoPull") === "on", gitAutoPush: form.get("gitAutoPush") === "on",
       gitUserName: form.get("gitUserName"), gitUserEmail: form.get("gitUserEmail"),
       gitPushUrl: form.get("gitPushUrl"), gitCommitMessagePrefix: form.get("gitCommitMessagePrefix"),
@@ -102,11 +107,35 @@ if (typeof document !== "undefined") {
       if (field.type === "checkbox") field.checked = Boolean(value);
       else field.value = Array.isArray(value) ? value.join("\n") : value;
     });
-    for (const name of ["id", "directory", "vaultMode", "workspaceMode", "workspaceSlug"]) {
+    for (const name of ["id", "directory", "workspaceMode", "workspaceSlug"]) {
       const field = els.vaultform.elements.namedItem(name); if (field) field.disabled = Boolean(vault);
     }
     els.vaultformtitle.textContent = vault ? `Edit ${vault.name}` : "Add vault";
+    syncFormControls();
     els.vaultformpanel.hidden = false;
+  }
+
+  function syncFormControls() {
+    const form = els.vaultform;
+    const editing = Boolean(state.editingId);
+    const sourceMode = form.elements.sourceMode.value;
+    const isClone = sourceMode === "clone";
+    const privateHttps = form.elements.gitAuthMode.value === "https-token";
+    const attachWorkspace = form.elements.workspaceMode.value === "attach";
+    const restricted = form.elements.accessMode.value === "restricted";
+
+    els.vaultsource.hidden = false;
+    els.sourcemodefield.hidden = editing;
+    els.cloneurlfield.hidden = editing || !isClone;
+    els.importhelp.hidden = editing || isClone;
+    form.elements.repositoryUrl.required = !editing && isClone;
+    for (const field of form.querySelectorAll(".clone-auth-field")) field.hidden = !privateHttps;
+    els.workspaceslugfield.hidden = !attachWorkspace || editing;
+    form.elements.workspaceSlug.required = attachWorkspace && !editing;
+    els.allowlistfield.hidden = !restricted;
+    for (const name of ["name", "id", "directory"]) form.elements[name].required = !editing && !isClone;
+    form.querySelector(".advanced-settings").open = !editing && !isClone;
+    els.vaultsubmit.textContent = editing ? "Save vault" : isClone ? "Clone and add vault" : "Import vault";
   }
 
   function hideForm() { state.editingId = null; els.vaultformpanel.hidden = true; }
@@ -154,7 +183,7 @@ if (typeof document !== "undefined") {
 
   function emptyState() {
     const card = element("article", "empty-state");
-    card.append(element("h3", "", "Add your first vault"), element("p", "", "Create a new Git repository or import one already beneath the configured vault root."));
+    card.append(element("h3", "", "Clone your first vault"), element("p", "", "Add a repository URL and let the dashboard clone and manage it beneath the configured vault root."));
     return card;
   }
 

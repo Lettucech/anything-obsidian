@@ -26,19 +26,36 @@
       <section id="vault-form-panel" class="panel" hidden>
         <h2 id="vault-form-title">Add vault</h2>
         <form id="vault-form">
-          <div class="form-grid">
-            <label>Name <input name="name" required maxlength="80" /></label>
-            <label>Vault id <input name="id" required pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
-            <label>Directory <input name="directory" required pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
-            <label>Vault setup
-              <select name="vaultMode"><option value="create">Create a new Git repository</option><option value="import">Import an existing Git repository</option></select>
-            </label>
-            <label>Workspace
-              <select name="workspaceMode"><option value="create">Create workspace</option><option value="attach">Attach workspace</option></select>
-            </label>
-            <label>Existing workspace slug <input name="workspaceSlug" pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
-            <label>Git remote <input name="gitRemote" value="origin" /></label>
-            <label>Git branch <input name="gitBranch" value="main" /></label>
+          <section id="vault-source" class="form-section">
+            <h3>Repository</h3>
+            <div class="form-grid">
+              <label id="source-mode-field">Add from
+                <select name="sourceMode"><option value="clone">Clone a repository</option><option value="import">Import a local repository</option></select>
+              </label>
+              <label id="clone-url-field">Repository URL <input name="repositoryUrl" type="url" placeholder="https://github.com/org/notes.git" /></label>
+              <p id="import-help" class="note" hidden>Import a Git repository that is already a direct child of the configured vault root.</p>
+              <label>Git authentication
+                <select name="gitAuthMode"><option value="none">Public repository or no credential</option><option value="https-token">Private HTTPS repository</option></select>
+              </label>
+              <label class="clone-auth-field" hidden>HTTPS username <input name="gitAuthUsername" value="x-access-token" autocomplete="username" /></label>
+              <label class="clone-auth-field" hidden>HTTPS token <input name="gitAuthToken" type="password" autocomplete="new-password" /></label>
+            </div>
+          </section>
+          <details class="advanced-settings">
+            <summary>Vault identity and workspace</summary>
+            <div class="form-grid">
+              <label>Name <input name="name" maxlength="80" placeholder="Derived from the repository" /></label>
+              <label>Vault ID <input name="id" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Derived from the repository" /></label>
+              <label>Directory <input name="directory" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Same as Vault ID" /></label>
+              <label>Workspace
+                <select name="workspaceMode"><option value="create">Create a workspace</option><option value="attach">Attach an existing workspace</option></select>
+              </label>
+              <label id="workspace-slug-field" hidden>Existing workspace slug <input name="workspaceSlug" pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
+            </div>
+          </details>
+          <details class="advanced-settings">
+            <summary>Sync and embedding policy</summary>
+            <div class="form-grid">
             <label class="checkbox"><input name="gitAutoPull" type="checkbox" checked /> Pull before syncing</label>
             <label class="checkbox"><input name="gitAutoPush" type="checkbox" checked /> Push after syncing</label>
             <label>Git commit author <input name="gitUserName" value="anything-obsidian" /></label>
@@ -54,12 +71,18 @@
             <label class="checkbox"><input name="embedAfterSync" type="checkbox" checked /> Embed after a successful sync</label>
             <label>Embeddable extensions <input name="embedExtensions" placeholder=".md,.txt,.pdf,.docx (default)" /></label>
             <label>Excluded directories <input name="embedExcludeDirs" placeholder=".git,.obsidian,node_modules (default)" /></label>
+            </div>
+          </details>
+          <details class="advanced-settings">
+            <summary>Access policy</summary>
+            <div class="form-grid">
             <label>Access mode <select name="accessMode"><option value="open">Open</option><option value="restricted">Restricted</option></select></label>
             <label class="checkbox"><input name="enabled" type="checkbox" checked /> Enable scheduled sync</label>
-            <label class="allowlist">Allowlist (one identity per line)<textarea name="allowlist" rows="3"></textarea></label>
-          </div>
-          <p class="note">All Git, sync, and embedding policy belongs to this vault record. Each vault can have a different HTTPS credential; the token is written only to the local runtime secret volume and is never returned by the dashboard. Restricted access policy is stored now but is not enforced until MCP caller identity is available.</p>
-          <div class="form-actions"><button type="submit">Save vault</button><button id="cancel-vault" type="button">Cancel</button></div>
+              <label id="allowlist-field" class="allowlist" hidden>Allowlist (one identity per line)<textarea name="allowlist" rows="3"></textarea></label>
+            </div>
+          </details>
+          <p class="note">Clone uses the repository URL's default branch. Each vault can have a different HTTPS credential; its token is saved only in the local runtime secret volume and is never returned by the dashboard. Restricted access policy is stored now but is not enforced until MCP caller identity is available.</p>
+          <div class="form-actions"><button id="vault-submit" type="submit">Clone and add vault</button><button id="cancel-vault" type="button">Cancel</button></div>
         </form>
       </section>
       <section id="vaults" class="vaults" aria-live="polite"></section>

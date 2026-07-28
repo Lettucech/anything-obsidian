@@ -209,6 +209,32 @@ main {
   grid-column: 1 / -1;
 }
 
+.form-section,
+.advanced-settings {
+  margin-bottom: 1rem;
+}
+
+.form-section h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.advanced-settings {
+  border-top: 1px solid var(--line);
+  padding-top: 0.85rem;
+}
+
+.advanced-settings summary {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 650;
+  margin-bottom: 0.85rem;
+}
+
+#import-help {
+  align-self: end;
+}
+
 .form-actions {
   margin-top: 1rem;
 }

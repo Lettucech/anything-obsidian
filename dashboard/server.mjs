@@ -43,12 +43,24 @@ export function createDashboardServer({
       }
       if (req.method === "POST" && url.pathname === "/api/vaults") {
         const input = await readJsonBody(req);
-        await vaultStorage.prepare(input);
-        const { gitAuth, ...vaultInput } = input;
+        const { gitAuth, sourceMode = "clone", workspaceMode = "create", ...request } = input;
+        let discovered;
+        if (sourceMode === "clone") {
+          discovered = await vaultStorage.clone({ ...request, gitAuth });
+        } else if (sourceMode === "import") {
+          discovered = await vaultStorage.import(request);
+        } else {
+          return sendJson(res, 400, { error: "sourceMode must be clone or import" });
+        }
+        const vaultInput = {
+          ...request,
+          ...discovered,
+          gitAuthMode: gitAuth?.mode === "https-token" ? "https-token" : "none",
+        };
         let workspace;
-        if (vaultInput.workspaceMode === "create") {
+        if (workspaceMode === "create") {
           workspace = await anythingllm.createWorkspace({ name: vaultInput.name });
-        } else if (vaultInput.workspaceMode === "attach") {
+        } else if (workspaceMode === "attach") {
           workspace = (await anythingllm.listWorkspaces()).find(
             (candidate) => candidate.slug === vaultInput.workspaceSlug,
           );

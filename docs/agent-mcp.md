@@ -52,7 +52,8 @@ Syncer logs use the `anything-obsidian-worker` prefix and show vault-specific
 Git sync results, embedding progress, failures, and the next scheduled run.
 
 For a private HTTPS remote, configure its username and token in that vault's
-dashboard form. The worker reads only that vault's local runtime secret and
+clone form. The dashboard uses it to clone that vault, then the worker reads
+only that vault's local runtime secret and
 uses Git askpass without putting the token in the remote URL. Different vaults
 may use different GitHub, GitLab, or other HTTPS credentials.
 

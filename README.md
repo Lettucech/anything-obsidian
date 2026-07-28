@@ -11,8 +11,9 @@ repository.
 
 ## Getting started
 
-1. Clone the tooling repository, create the local configuration, and choose a
-shared parent directory for managed vaults. It may be empty.
+1. Clone the tooling repository and create the local configuration. Choose a
+shared parent directory for the vault repositories you want this stack to
+manage; it may be empty.
 
 ```bash
 git clone https://github.com/pingkiuho/anything-obsidian.git
@@ -20,11 +21,11 @@ cd anything-obsidian
 cp .env.example .env
 ```
 
-Set `HOST_VAULTS_ROOT` in `.env` to a directory Docker Desktop can access, for
-example:
+Set `HOST_VAULTS_ROOT` in `.env` to that directory. It must exist and Docker
+Desktop must be allowed to access it, for example:
 
 ```text
-HOST_VAULTS_ROOT=/Users/you/.anything-obsidian/vaults
+HOST_VAULTS_ROOT=/Users/your-user/.anything-obsidian/vaults
 ```
 
 This is a parent directory, not a vault path. Each dashboard-managed vault is a
@@ -57,33 +58,28 @@ docker compose up -d --force-recreate dashboard mcp
 
 4. In the dashboard, select **Add vault**.
 
-Choose one of the following:
+Paste the repository's HTTP(S) clone URL. The dashboard clones it beneath
+`HOST_VAULTS_ROOT`, derives the vault name/id/directory, discovers `origin` and
+the checked-out default branch, and creates a matching AnythingLLM workspace.
+The normal Git sync and embedding policy is enabled with its safe defaults.
 
-- **Create a new Git repository** creates `<HOST_VAULTS_ROOT>/<directory>` and
-  initialises it as a Git repository.
-- **Import an existing Git repository** registers a direct child of
-  `HOST_VAULTS_ROOT`. Move, copy, or link the repository below that root first.
-
-Then choose whether to create an AnythingLLM workspace or attach one that
-already exists, and set that vault's Git remote, branch, pull/push policy,
-commit identity, embedding filters, schedule, access policy, and (when needed)
-HTTPS username and token. The dashboard stores vault mapping and operational
-policy in the registry; credentials live separately in the local runtime secret
-volume and are never returned by the API.
-
-5. Configure Git credentials only for vaults that need them.
-
-Choose **HTTPS username and token** in that vault's dashboard form and enter
-the credential appropriate for its own remote (for example, a GitHub PAT with
+For a private HTTPS repository, select **Private HTTPS repository** and enter
+the provider-appropriate username and token (for example, a GitHub PAT with
 `x-access-token`, or a GitLab token with its matching username). Each vault has
-an isolated credential record; no `.env` token is shared across vaults. Public
-or local-only repositories need no credential.
+an isolated credential record; no `.env` token is shared across vaults.
+
+Use the expanded settings only to override the derived identity, attach an
+existing workspace, or change sync, embedding, or access policy. **Import a
+local repository** remains available for an existing Git repository that is
+already a direct child of `HOST_VAULTS_ROOT`; it must have `origin` and a
+checked-out branch.
 
 ## How vault management works
 
 The dashboard stores a registry in a Docker volume. Each record has a stable
 vault id, a direct-child directory under `/vaults`, an AnythingLLM workspace,
-all Git/sync/embedding policy, a schedule, and an `open` or `restricted` policy.
+the cloned repository URL, all Git/sync/embedding policy, a schedule, and an
+`open` or `restricted` policy.
 
 - Each vault has its own embedding manifest and optional HTTPS credential at a
   namespaced runtime path.

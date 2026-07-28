@@ -20,7 +20,7 @@ services:
       VAULT_SECRETS_PATH: /workspace/.anything-obsidian-secrets
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env}:/vaults
+      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env to your vault parent directory}:/vaults
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
       - anything-obsidian-vault-secrets:/workspace/.anything-obsidian-secrets
     healthcheck:
@@ -95,7 +95,7 @@ services:
       - anything-obsidian-worker-state:/workspace/.anything-obsidian-state
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
       - anything-obsidian-vault-secrets:/workspace/.anything-obsidian-secrets
-      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env}:/vaults
+      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env to your vault parent directory}:/vaults
     command: ["scheduler"]
 
   worker:
@@ -119,7 +119,7 @@ services:
       - anything-obsidian-worker-state:/workspace/.anything-obsidian-state
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
       - anything-obsidian-vault-secrets:/workspace/.anything-obsidian-secrets
-      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env}:/vaults
+      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env to your vault parent directory}:/vaults
 
 volumes:
   anything-obsidian-anythingllm-storage:

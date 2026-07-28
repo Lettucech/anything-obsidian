@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { createDashboardServer } from "./server.mjs";
 
-test("vault routes list and create dashboard-managed vaults", async () => {
+test("vault routes clone a repository and create its managed workspace", async () => {
   const registry = fakeRegistry();
   const anythingllm = {
     async createWorkspace({ name }) {
@@ -13,7 +13,8 @@ test("vault routes list and create dashboard-managed vaults", async () => {
     },
   };
   const secrets = fakeSecrets();
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), secrets, env: {} });
+  const vaultStorage = fakeVaultStorage();
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage, secrets, env: {} });
 
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
   const created = await request(app, "POST", "/api/vaults", validVaultPayload());
@@ -21,12 +22,15 @@ test("vault routes list and create dashboard-managed vaults", async () => {
   assert.equal(created.status, 201);
   assert.equal(created.body.id, "work");
   assert.equal(created.body.workspaceSlug, "work");
+  assert.equal(created.body.gitBranch, "main");
+  assert.equal(vaultStorage.cloned[0].repositoryUrl, "https://github.com/acme/work.git");
+  assert.deepEqual(vaultStorage.cloned[0].gitAuth, { mode: "https-token", username: "oauth2", token: "work-secret" });
   assert.deepEqual(secrets.saved, [{ id: "work", auth: { mode: "https-token", username: "oauth2", token: "work-secret" } }]);
   assert.equal(created.body.gitAuth, undefined);
   assert.equal((await request(app, "GET", "/api/vaults")).body.vaults.length, 1);
 });
 
-test("vault routes attach an existing workspace and remove only its registry record", async () => {
+test("vault routes import a local repository, attach a workspace, and remove only its registry record", async () => {
   const registry = fakeRegistry();
   const anythingllm = {
     async listWorkspaces() { return [{ id: 2, name: "Personal", slug: "personal" }]; },
@@ -35,7 +39,7 @@ test("vault routes attach an existing workspace and remove only its registry rec
   const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), secrets, env: {} });
 
   const created = await request(app, "POST", "/api/vaults", {
-    ...validVaultPayload(), id: "personal", name: "Personal", directory: "personal",
+    sourceMode: "import", id: "personal", name: "Personal", directory: "personal",
     workspaceMode: "attach", workspaceSlug: "personal",
   });
   assert.equal(created.status, 201);
@@ -246,7 +250,21 @@ function fakeRegistry() {
 }
 
 function fakeVaultStorage() {
-  return { async prepare() {} };
+  return {
+    cloned: [],
+    imported: [],
+    async clone(input) {
+      this.cloned.push(input);
+      return {
+        name: "Work", id: "work", directory: "work", repositoryUrl: input.repositoryUrl,
+        gitRemote: "origin", gitBranch: "main",
+      };
+    },
+    async import(input) {
+      this.imported.push(input);
+      return { repositoryUrl: "https://github.com/acme/personal.git", gitRemote: "origin", gitBranch: "main" };
+    },
+  };
 }
 
 function fakeSecrets() {
@@ -260,12 +278,7 @@ function fakeSecrets() {
 
 function validVaultPayload() {
   return {
-    id: "work",
-    name: "Work",
-    directory: "work",
-    workspaceMode: "create",
-    gitRemote: "origin",
-    gitBranch: "main",
+    repositoryUrl: "https://github.com/acme/work.git",
     syncIntervalSeconds: 300,
     enabled: true,
     accessMode: "open",

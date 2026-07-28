@@ -6,6 +6,7 @@ WORKDIR /workspace
 
 COPY dashboard ./dashboard
 COPY lib ./lib
+RUN chmod +x ./dashboard/git-askpass.sh
 
 ENV DASHBOARD_PORT=3000
 
