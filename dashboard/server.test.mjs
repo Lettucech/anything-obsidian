@@ -4,6 +4,41 @@ import test from "node:test";
 
 import { createDashboardServer } from "./server.mjs";
 
+test("vault routes list and create dashboard-managed vaults", async () => {
+  const registry = fakeRegistry();
+  const anythingllm = {
+    async createWorkspace({ name }) {
+      assert.equal(name, "Work");
+      return { id: 1, name, slug: "work" };
+    },
+  };
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, env: {} });
+
+  assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
+  const created = await request(app, "POST", "/api/vaults", validVaultPayload());
+
+  assert.equal(created.status, 201);
+  assert.equal(created.body.id, "work");
+  assert.equal(created.body.workspaceSlug, "work");
+  assert.equal((await request(app, "GET", "/api/vaults")).body.vaults.length, 1);
+});
+
+test("vault routes attach an existing workspace and remove only its registry record", async () => {
+  const registry = fakeRegistry();
+  const anythingllm = {
+    async listWorkspaces() { return [{ id: 2, name: "Personal", slug: "personal" }]; },
+  };
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, env: {} });
+
+  const created = await request(app, "POST", "/api/vaults", {
+    ...validVaultPayload(), id: "personal", name: "Personal", directory: "personal",
+    workspaceMode: "attach", workspaceSlug: "personal",
+  });
+  assert.equal(created.status, 201);
+  assert.equal((await request(app, "DELETE", "/api/vaults/personal")).status, 204);
+  assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
+});
+
 test("status returns classified system state and public config", async () => {
   const healthRequests = [];
   const app = createDashboardServer({
@@ -181,11 +216,39 @@ function fakeJobs() {
   };
 }
 
-async function request(server, method, path) {
+function fakeRegistry() {
+  const vaults = [];
+  return {
+    async list() { return vaults; },
+    async create(vault) { vaults.push(vault); return vault; },
+    async remove(id) {
+      const index = vaults.findIndex((vault) => vault.id === id);
+      return index === -1 ? null : vaults.splice(index, 1)[0];
+    },
+  };
+}
+
+function validVaultPayload() {
+  return {
+    id: "work",
+    name: "Work",
+    directory: "work",
+    workspaceMode: "create",
+    gitRemote: "origin",
+    gitBranch: "main",
+    syncIntervalSeconds: 300,
+    enabled: true,
+    accessMode: "open",
+    allowlist: [],
+  };
+}
+
+async function request(server, method, path, body) {
   return await new Promise((resolve) => {
     const chunks = [];
     const req = new Readable({
       read() {
+        if (body !== undefined) this.push(JSON.stringify(body));
         this.push(null);
       },
     });
