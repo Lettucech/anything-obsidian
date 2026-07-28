@@ -8,13 +8,18 @@ const WORKER_IMAGE = "anything-obsidian-worker";
 
 export function createJobManager({ docker, now = Date.now } = {}) {
   const jobs = new Map();
-  let activeJobId = null;
+  const activeJobIds = new Map();
 
   return {
-    async start(actionId, serviceSnapshot = []) {
+    async start(vaultId, actionId, serviceSnapshot = []) {
+      if (Array.isArray(actionId)) {
+        serviceSnapshot = actionId;
+        actionId = vaultId;
+        vaultId = "legacy";
+      }
       const action = WORKER_ACTIONS[actionId];
       if (!action) throw new Error(`Unknown action: ${actionId}`);
-      if (activeJobId) throw new Error(`A worker job is already running: ${activeJobId}`);
+      if (activeJobIds.has(vaultId)) throw new Error(`A worker job is already running for vault '${vaultId}': ${activeJobIds.get(vaultId)}`);
       if (action.requiresAnythingLLM && !isRunning(serviceSnapshot, "anythingllm")) {
         throw new Error(`${action.label} requires AnythingLLM to be running`);
       }
@@ -22,6 +27,7 @@ export function createJobManager({ docker, now = Date.now } = {}) {
       const id = `job-${now()}-${randomUUID().slice(0, 8)}`;
       const job = {
         id,
+        vaultId,
         actionId,
         label: action.label,
         status: "queued",
@@ -32,16 +38,16 @@ export function createJobManager({ docker, now = Date.now } = {}) {
         error: null,
       };
       jobs.set(id, job);
-      activeJobId = id;
+      activeJobIds.set(vaultId, id);
 
-      runJob({ docker, job, action })
+      runJob({ docker, job, action, vaultId })
         .catch((error) => {
           job.status = "failed";
           job.error = error instanceof Error ? error.message : String(error);
         })
         .finally(() => {
           job.finishedAt = new Date(now()).toISOString();
-          activeJobId = null;
+          activeJobIds.delete(vaultId);
         });
 
       return job;
@@ -58,10 +64,10 @@ export function createJobManager({ docker, now = Date.now } = {}) {
   };
 }
 
-async function runJob({ docker, job, action }) {
+async function runJob({ docker, job, action, vaultId }) {
   job.status = "running";
   const syncer = await docker.inspectContainerDetails("anything-obsidian-syncer");
-  const container = await docker.createContainer(workerContainerConfig({ syncer, action }));
+  const container = await docker.createContainer(workerContainerConfig({ syncer, action, vaultId }));
   try {
     await docker.startContainerById(container.Id);
     const result = await docker.waitContainer(container.Id);
@@ -74,10 +80,10 @@ async function runJob({ docker, job, action }) {
   }
 }
 
-export function workerContainerConfig({ syncer, action }) {
+export function workerContainerConfig({ syncer, action, vaultId }) {
   return {
     Image: syncer.Config?.Image || WORKER_IMAGE,
-    Cmd: [...action.command],
+    Cmd: [...action.command, ...(vaultId && vaultId !== "legacy" ? ["--vault", vaultId] : [])],
     Env: workerEnv(syncer.Config?.Env || []),
     HostConfig: {
       AutoRemove: false,
@@ -88,12 +94,17 @@ export function workerContainerConfig({ syncer, action }) {
 }
 
 function workerEnv(envValues) {
-  const allowed = new Set(["ANYTHINGLLM_BASE_URL", "VAULT_PATH"]);
+  const allowed = new Set(["ANYTHINGLLM_BASE_URL", "VAULTS_ROOT", "VAULT_REGISTRY_PATH", "KB_STATE_DIR"]);
   return envValues.filter((entry) => allowed.has(entry.split("=")[0]));
 }
 
 function workerBinds(mounts) {
-  const destinations = new Set(["/workspace/.env", "/vault", "/workspace/.anything-obsidian-state"]);
+  const destinations = new Set([
+    "/workspace/.env",
+    "/vaults",
+    "/workspace/.anything-obsidian-state",
+    "/workspace/.anything-obsidian-registry",
+  ]);
   return mounts
     .filter((mount) => destinations.has(mount.Destination))
     .map((mount) => {

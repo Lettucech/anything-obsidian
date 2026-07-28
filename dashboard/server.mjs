@@ -10,6 +10,7 @@ import { createJobManager } from "./jobs.mjs";
 import { redactSecretsObject, redactSecretsText } from "./redact.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createAnythingllmClient } from "./anythingllm.mjs";
+import { createVaultStorage } from "./vault-storage.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, "public");
@@ -28,6 +29,7 @@ export function createDashboardServer({
     apiKey: env.ANYTHINGLLM_API_KEY || "",
     fetchImpl,
   }),
+  vaultStorage = createVaultStorage({ registry }),
 } = {}) {
   return createServer(async (req, res) => {
     try {
@@ -37,6 +39,7 @@ export function createDashboardServer({
       }
       if (req.method === "POST" && url.pathname === "/api/vaults") {
         const input = await readJsonBody(req);
+        await vaultStorage.prepare(input);
         let workspace;
         if (input.workspaceMode === "create") {
           workspace = await anythingllm.createWorkspace({ name: input.name });
@@ -50,6 +53,11 @@ export function createDashboardServer({
         }
         const vault = await registry.create({ ...input, workspaceSlug: workspace.slug });
         return sendJson(res, 201, vault);
+      }
+      if (req.method === "PATCH" && url.pathname.startsWith("/api/vaults/")) {
+        const id = url.pathname.slice("/api/vaults/".length);
+        const vault = await registry.update(id, await readJsonBody(req));
+        return vault ? sendJson(res, 200, vault) : sendJson(res, 404, { error: "Vault was not found" });
       }
       if (req.method === "DELETE" && url.pathname.startsWith("/api/vaults/")) {
         const id = url.pathname.slice("/api/vaults/".length);
@@ -76,21 +84,23 @@ export function createDashboardServer({
         const logs = redactSecretsText(await docker.containerLogs(service.name, { tail: 300 }));
         return sendJson(res, 200, { service: id, logs });
       }
-      if (req.method === "POST" && url.pathname.startsWith("/api/actions/")) {
-        const actionId = url.pathname.slice("/api/actions/".length);
+      const vaultActionMatch = url.pathname.match(/^\/api\/vaults\/([a-z0-9-]+)\/actions\/([a-z-]+)$/);
+      if (req.method === "POST" && vaultActionMatch) {
+        const [, vaultId, actionId] = vaultActionMatch;
         if (!["sync", "embed", "embed-all", "doctor"].includes(actionId)) {
           return sendJson(res, 404, { error: `Unknown action: ${actionId}` });
         }
+        if (!(await registry.get(vaultId))) return sendJson(res, 404, { error: "Vault was not found" });
         const snapshot = await serviceSnapshot({ docker, fetchImpl });
         try {
-          const job = await jobs.start(actionId, snapshot);
+          const job = await jobs.start(vaultId, actionId, snapshot);
           return sendJson(res, 202, job);
         } catch (error) {
           return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
         }
       }
-      if (req.method === "GET" && url.pathname.startsWith("/api/actions/")) {
-        const id = url.pathname.slice("/api/actions/".length);
+      if (req.method === "GET" && url.pathname.startsWith("/api/jobs/")) {
+        const id = url.pathname.slice("/api/jobs/".length);
         const job = jobs.get(id);
         return job ? sendJson(res, 200, job) : sendJson(res, 404, { error: `Unknown job: ${id}` });
       }
@@ -111,6 +121,7 @@ async function statusPayload({ docker, jobs, env, fetchImpl }) {
     systemState: classifySystemState(services),
     services,
     latestJob: jobs.latest(),
+    jobs: jobs.list?.() ?? [],
     config: publicConfig(env),
   });
 }

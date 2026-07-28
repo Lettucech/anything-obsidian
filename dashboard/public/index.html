@@ -10,28 +10,52 @@
     <header class="topbar">
       <div>
         <h1>Anything Obsidian</h1>
-        <p id="system-state">loading</p>
+        <p id="system-state">Loading system state…</p>
       </div>
       <button id="power" type="button">Loading</button>
     </header>
     <main>
-      <section id="services" class="services"></section>
-      <section class="toolbar" id="actions">
-        <button type="button" data-action="sync">Sync now</button>
-        <button type="button" data-action="embed">Embed changed</button>
-        <button type="button" data-action="embed-all">Rebuild index</button>
-        <button type="button" data-action="doctor">Run doctor</button>
+      <section class="panel vault-heading">
+        <div>
+          <h2>Managed vaults</h2>
+          <p>Git repositories remain on your machine. Add or import them from the shared vault root.</p>
+        </div>
+        <button id="add-vault" type="button">Add vault</button>
+      </section>
+      <p id="vault-message" class="message" role="status"></p>
+      <section id="vault-form-panel" class="panel" hidden>
+        <h2 id="vault-form-title">Add vault</h2>
+        <form id="vault-form">
+          <div class="form-grid">
+            <label>Name <input name="name" required maxlength="80" /></label>
+            <label>Vault id <input name="id" required pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
+            <label>Directory <input name="directory" required pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
+            <label>Vault setup
+              <select name="vaultMode"><option value="create">Create a new Git repository</option><option value="import">Import an existing Git repository</option></select>
+            </label>
+            <label>Workspace
+              <select name="workspaceMode"><option value="create">Create workspace</option><option value="attach">Attach workspace</option></select>
+            </label>
+            <label>Existing workspace slug <input name="workspaceSlug" pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
+            <label>Git remote <input name="gitRemote" value="origin" /></label>
+            <label>Git branch <input name="gitBranch" value="main" /></label>
+            <label>Sync interval (seconds) <input name="syncIntervalSeconds" type="number" min="30" value="300" /></label>
+            <label>Access mode <select name="accessMode"><option value="open">Open</option><option value="restricted">Restricted</option></select></label>
+            <label class="checkbox"><input name="enabled" type="checkbox" checked /> Enable scheduled sync</label>
+            <label class="allowlist">Allowlist (one identity per line)<textarea name="allowlist" rows="3"></textarea></label>
+          </div>
+          <p class="note">Restricted access policy is stored now but is not enforced until MCP caller identity is available. Git credentials are never stored in this form.</p>
+          <div class="form-actions"><button type="submit">Save vault</button><button id="cancel-vault" type="button">Cancel</button></div>
+        </form>
+      </section>
+      <section id="vaults" class="vaults" aria-live="polite"></section>
+      <section class="services-section">
+        <h2>Service health</h2>
+        <div id="services" class="services"></div>
       </section>
       <section class="workspace">
-        <div class="panel">
-          <h2>Activity</h2>
-          <p id="latest-job">No dashboard worker job yet</p>
-          <pre id="logs"></pre>
-        </div>
-        <aside class="panel">
-          <h2>Config</h2>
-          <div id="config" class="config"></div>
-        </aside>
+        <div class="panel"><h2>Activity</h2><p id="latest-job">No dashboard worker job yet</p></div>
+        <div class="panel"><h2>Recent logs</h2><pre id="logs"></pre></div>
       </section>
     </main>
     <script type="module" src="/app.js"></script>

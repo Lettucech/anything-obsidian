@@ -8,12 +8,13 @@ test("rejects unknown worker actions", async () => {
   await assert.rejects(() => manager.start("rm-all", []), /Unknown action/);
 });
 
-test("prevents duplicate active jobs", async () => {
+test("prevents duplicate active jobs for one vault while allowing another vault", async () => {
   const docker = fakeDocker({ wait: new Promise(() => {}) });
   const manager = createJobManager({ docker, now: () => 1 });
 
-  await manager.start("doctor", []);
-  await assert.rejects(() => manager.start("doctor", []), /already running/);
+  await manager.start("work", "doctor", []);
+  await assert.rejects(() => manager.start("work", "doctor", []), /already running/);
+  await manager.start("personal", "doctor", []);
 });
 
 test("blocks embed action when AnythingLLM is not running", async () => {
@@ -44,21 +45,24 @@ test("creates fixed worker container config for embed all", async () => {
     now: () => 1,
   });
 
-  await manager.start("embed-all", [{ id: "anythingllm", running: true }]);
+  await manager.start("work", "embed-all", [{ id: "anythingllm", running: true }]);
   await settle();
 
   assert.equal(docker.created.length, 1);
-  assert.deepEqual(docker.created[0].Cmd, ["embed", "--all"]);
+  assert.deepEqual(docker.created[0].Cmd, ["embed", "--all", "--vault", "work"]);
   assert.equal(docker.created[0].Image, "anything-obsidian-worker");
   assert.deepEqual(docker.created[0].HostConfig.Binds, [
     "/repo/.env:/workspace/.env:ro",
-    "/Users/me/vault:/vault",
+    "/Users/me/vaults:/vaults",
     "anything-obsidian-worker-state:/workspace/.anything-obsidian-state",
+    "anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry",
   ]);
   assert.equal(docker.created[0].HostConfig.NetworkMode, "anything-obsidian_default");
   assert.deepEqual(docker.created[0].Env, [
     "ANYTHINGLLM_BASE_URL=http://anythingllm:3001",
-    "VAULT_PATH=/vault",
+    "VAULTS_ROOT=/vaults",
+    "VAULT_REGISTRY_PATH=/workspace/.anything-obsidian-registry/vaults.json",
+    "KB_STATE_DIR=/workspace/.anything-obsidian-state",
   ]);
 });
 
@@ -70,18 +74,30 @@ function fakeDocker({ wait = Promise.resolve({ StatusCode: 0 }) } = {}) {
       return {
         Config: {
           Image: "anything-obsidian-worker",
-          Env: ["ANYTHINGLLM_BASE_URL=http://anythingllm:3001", "VAULT_PATH=/vault"],
+          Env: [
+            "ANYTHINGLLM_BASE_URL=http://anythingllm:3001",
+            "VAULTS_ROOT=/vaults",
+            "VAULT_REGISTRY_PATH=/workspace/.anything-obsidian-registry/vaults.json",
+            "KB_STATE_DIR=/workspace/.anything-obsidian-state",
+          ],
         },
         HostConfig: {
           NetworkMode: "anything-obsidian_default",
         },
         Mounts: [
           { Type: "bind", Source: "/repo/.env", Destination: "/workspace/.env", Mode: "ro", RW: false },
-          { Type: "bind", Source: "/Users/me/vault", Destination: "/vault", Mode: "rw", RW: true },
+          { Type: "bind", Source: "/Users/me/vaults", Destination: "/vaults", Mode: "rw", RW: true },
           {
             Type: "volume",
             Name: "anything-obsidian-worker-state",
             Destination: "/workspace/.anything-obsidian-state",
+            Mode: "rw",
+            RW: true,
+          },
+          {
+            Type: "volume",
+            Name: "anything-obsidian-vault-registry",
+            Destination: "/workspace/.anything-obsidian-registry",
             Mode: "rw",
             RW: true,
           },

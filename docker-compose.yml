@@ -13,13 +13,14 @@ services:
       HOST_DASHBOARD_PORT: ${HOST_DASHBOARD_PORT:-11300}
       HOST_ANYTHINGLLM_PORT: ${HOST_ANYTHINGLLM_PORT:-11301}
       HOST_MCP_PORT: ${HOST_MCP_PORT:-11333}
-      ANYTHINGLLM_WORKSPACE_SLUG: ${ANYTHINGLLM_WORKSPACE_SLUG:-obsidian}
-      KB_SYNC_INTERVAL_SECONDS: ${KB_SYNC_INTERVAL_SECONDS:-300}
-      KB_GIT_REMOTE: ${KB_GIT_REMOTE:-origin}
-      KB_GIT_BRANCH: ${KB_GIT_BRANCH:-main}
-      HOST_VAULT_PATH: ${HOST_VAULT_PATH:?Set HOST_VAULT_PATH in .env}
+      ANYTHINGLLM_BASE_URL: http://anythingllm:3001
+      ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
+      VAULTS_ROOT: /vaults
+      VAULT_REGISTRY_PATH: /workspace/.anything-obsidian-registry/vaults.json
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env}:/vaults
+      - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -63,11 +64,13 @@ services:
     environment:
       ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
-      ANYTHINGLLM_WORKSPACE_SLUG: ${ANYTHINGLLM_WORKSPACE_SLUG:-obsidian}
+      VAULT_REGISTRY_PATH: /workspace/.anything-obsidian-registry/vaults.json
       MCP_TRANSPORT: http
       MCP_PORT: "3333"
     ports:
       - "127.0.0.1:${HOST_MCP_PORT:-11333}:3333"
+    volumes:
+      - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry:ro
 
   syncer:
     build:
@@ -81,12 +84,15 @@ services:
         condition: service_healthy
     environment:
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
-      VAULT_PATH: /vault
+      VAULTS_ROOT: /vaults
+      VAULT_REGISTRY_PATH: /workspace/.anything-obsidian-registry/vaults.json
+      KB_STATE_DIR: /workspace/.anything-obsidian-state
     volumes:
       - ./.env:/workspace/.env:ro
       - anything-obsidian-worker-state:/workspace/.anything-obsidian-state
-      - ${HOST_VAULT_PATH:?Set HOST_VAULT_PATH in .env}:/vault
-    command: ["autosync"]
+      - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
+      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env}:/vaults
+    command: ["scheduler"]
 
   worker:
     profiles:
@@ -100,14 +106,19 @@ services:
       - anythingllm
     environment:
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
-      VAULT_PATH: /vault
+      VAULTS_ROOT: /vaults
+      VAULT_REGISTRY_PATH: /workspace/.anything-obsidian-registry/vaults.json
+      KB_STATE_DIR: /workspace/.anything-obsidian-state
     volumes:
       - ./.env:/workspace/.env:ro
       - anything-obsidian-worker-state:/workspace/.anything-obsidian-state
-      - ${HOST_VAULT_PATH:?Set HOST_VAULT_PATH in .env}:/vault
+      - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
+      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env}:/vaults
 
 volumes:
   anything-obsidian-anythingllm-storage:
     name: anything-obsidian-anythingllm-storage
   anything-obsidian-worker-state:
     name: anything-obsidian-worker-state
+  anything-obsidian-vault-registry:
+    name: anything-obsidian-vault-registry

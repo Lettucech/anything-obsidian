@@ -71,9 +71,6 @@ test("public config exposes only non-secret operational values", () => {
     dashboardUrl: "http://localhost:11300",
     anythingllmUrl: "http://localhost:11301",
     mcpUrl: "http://localhost:11333/mcp",
-    workspaceSlug: "obsidian",
-    syncIntervalSeconds: "300",
-    gitRemote: "origin",
-    gitBranch: "main",
+    vaultsRoot: "/vaults",
   });
 });

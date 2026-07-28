@@ -6,6 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { doctor } from "./doctor.mjs";
 import { embedVault } from "./embed-vault.mjs";
 import { loadEnvFile, resolveConfig } from "./lib/env.mjs";
+import { registryFor, loadVaultConfig } from "./vault-config.mjs";
+import { runScheduler } from "./scheduler.mjs";
 import { shouldEmbedAfterSync, syncVaultOnce } from "./watch-vault.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -15,11 +17,14 @@ const defaultDeps = {
   doctor,
   embedVault,
   loadConfig,
+  loadVaultConfig,
+  loadRegistry: registryFor,
   loadEnv: loadRuntimeEnv,
   logger: createLogger(),
   sleep,
   shouldEmbedAfterSync,
   syncVaultOnce,
+  runScheduler,
 };
 
 export async function runWorker(argv = process.argv.slice(2), env = process.env, deps = {}) {
@@ -30,7 +35,7 @@ export async function runWorker(argv = process.argv.slice(2), env = process.env,
   switch (command) {
     case "embed":
       return runCommand(async () => {
-        const config = await worker.loadConfig(env);
+        const config = await commandConfig(argv, env, worker);
         worker.logger.info("Embedding command started");
         const result = await worker.embedVault({ config, all: argv.includes("--all") });
         worker.logger.info(formatEmbedResult("Embedding command completed", result));
@@ -39,16 +44,29 @@ export async function runWorker(argv = process.argv.slice(2), env = process.env,
       });
     case "sync":
       return runCommand(async () => {
-        const config = await worker.loadConfig(env);
+        const config = await commandConfig(argv, env, worker);
         const result = await syncAndEmbed({ worker, config });
         console.log(JSON.stringify(result, null, 2));
         return 0;
       });
     case "autosync":
       return runAutosync({ env, worker });
+    case "scheduler":
+      return runCommand(async () => {
+        await worker.runScheduler({
+          registry: worker.loadRegistry(await worker.loadEnv(env)),
+          runVault: async (vaultId) => {
+            const config = await worker.loadVaultConfig(await worker.loadEnv(env), vaultId);
+            await syncAndEmbed({ worker, config });
+          },
+          sleep: worker.sleep,
+          logger: worker.logger,
+        });
+        return 0;
+      });
     case "doctor":
       return runCommand(async () => {
-        const config = await worker.loadConfig(env);
+        const config = await commandConfig(argv, env, worker);
         const result = await worker.doctor({ config });
         console.log(JSON.stringify(result, null, 2));
         return result.ok ? 0 : 1;
@@ -90,10 +108,18 @@ function printUsage() {
   console.error(`Usage: node scripts/worker.mjs <command>
 
 Commands:
-  embed [--all]  Embed vault documents into AnythingLLM
-  sync           Sync vault Git changes, then embed after successful push
-  autosync       Keep syncing and embedding on an interval
-  doctor         Check Docker-visible config and service reachability`);
+  embed --vault <id> [--all]  Embed one managed vault
+  sync --vault <id>           Sync one managed vault, then embed
+  doctor --vault <id>         Check one managed vault
+  scheduler                   Run due managed-vault syncs`);
+}
+
+async function commandConfig(argv, env, worker) {
+  const index = argv.indexOf("--vault");
+  if (index === -1) return worker.loadConfig(env);
+  const vaultId = argv[index + 1];
+  if (!vaultId) throw new Error("--vault requires a vault id");
+  return worker.loadVaultConfig(await worker.loadEnv(env), vaultId);
 }
 
 async function runAutosync({ env, worker }) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { actionDisabledReason, serviceTone, systemPowerLabel } from "./app.js";
+import { actionDisabledReason, serviceTone, systemPowerLabel, vaultActionUrl } from "./app.js";
 
 test("system power label follows state", () => {
   assert.equal(systemPowerLabel("on"), "Turn Off");
@@ -32,4 +32,8 @@ test("action disabled reason blocks while a job is running", () => {
   };
 
   assert.equal(actionDisabledReason("doctor", status), "Worker job running");
+});
+
+test("vault action URLs are scoped by stable vault id", () => {
+  assert.equal(vaultActionUrl("work", "embed-all"), "/api/vaults/work/actions/embed-all");
 });

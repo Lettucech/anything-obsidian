@@ -12,7 +12,7 @@ test("vault routes list and create dashboard-managed vaults", async () => {
       return { id: 1, name, slug: "work" };
     },
   };
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, env: {} });
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), env: {} });
 
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
   const created = await request(app, "POST", "/api/vaults", validVaultPayload());
@@ -28,7 +28,7 @@ test("vault routes attach an existing workspace and remove only its registry rec
   const anythingllm = {
     async listWorkspaces() { return [{ id: 2, name: "Personal", slug: "personal" }]; },
   };
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, env: {} });
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), env: {} });
 
   const created = await request(app, "POST", "/api/vaults", {
     ...validVaultPayload(), id: "personal", name: "Personal", directory: "personal",
@@ -127,21 +127,26 @@ test("logs reject unknown service ids", async () => {
   assert.match(response.body.error, /Unknown log service/);
 });
 
-test("actions reject unknown action ids and start allowed jobs", async () => {
+test("vault actions reject unknown action ids and start an allowed scoped job", async () => {
   const jobs = fakeJobs();
+  const registry = fakeRegistry();
+  await registry.create({ id: "work" });
   const app = createDashboardServer({
     docker: fakeDocker({ running: new Set(["anything-obsidian-anythingllm"]) }),
     jobs,
+    registry,
     env: {},
   });
 
-  assert.equal((await request(app, "POST", "/api/actions/rm-all")).status, 404);
-  const response = await request(app, "POST", "/api/actions/doctor");
+  assert.equal((await request(app, "POST", "/api/vaults/work/actions/rm-all")).status, 404);
+  const response = await request(app, "POST", "/api/vaults/work/actions/doctor");
   assert.equal(response.status, 202);
   assert.equal(response.body.actionId, "doctor");
 });
 
 test("actions return conflict when job preconditions fail", async () => {
+  const registry = fakeRegistry();
+  await registry.create({ id: "work" });
   const app = createDashboardServer({
     docker: fakeDocker(),
     jobs: {
@@ -151,10 +156,11 @@ test("actions return conflict when job preconditions fail", async () => {
         throw new Error("Embed changed requires AnythingLLM to be running");
       },
     },
+    registry,
     env: {},
   });
 
-  const response = await request(app, "POST", "/api/actions/embed");
+  const response = await request(app, "POST", "/api/vaults/work/actions/embed");
 
   assert.equal(response.status, 409);
   assert.match(response.body.error, /requires AnythingLLM/);
@@ -208,8 +214,9 @@ function fakeJobs() {
   return {
     latest: () => null,
     get: (id) => store.get(id) || null,
-    async start(actionId) {
-      const job = { id: "job1", actionId, status: "queued" };
+    list: () => Array.from(store.values()),
+    async start(vaultId, actionId) {
+      const job = { id: "job1", vaultId, actionId, status: "queued" };
       store.set(job.id, job);
       return job;
     },
@@ -220,12 +227,21 @@ function fakeRegistry() {
   const vaults = [];
   return {
     async list() { return vaults; },
+    async get(id) { return vaults.find((vault) => vault.id === id) || null; },
     async create(vault) { vaults.push(vault); return vault; },
     async remove(id) {
       const index = vaults.findIndex((vault) => vault.id === id);
       return index === -1 ? null : vaults.splice(index, 1)[0];
     },
+    async update(id, changes) {
+      const vault = vaults.find((candidate) => candidate.id === id);
+      return vault ? Object.assign(vault, changes) : null;
+    },
   };
+}
+
+function fakeVaultStorage() {
+  return { async prepare() {} };
 }
 
 function validVaultPayload() {

@@ -9,6 +9,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { z } from "zod";
 import { mcpHttpOptions } from "./http-config.js";
+import { loadVaults, resolveVault } from "./vault-registry.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,7 +22,7 @@ const baseUrl = stripTrailingSlash(
     `http://localhost:${process.env.HOST_ANYTHINGLLM_PORT ?? "11301"}`,
 );
 const apiKey = process.env.ANYTHINGLLM_API_KEY;
-const defaultWorkspaceSlug = process.env.ANYTHINGLLM_WORKSPACE_SLUG ?? "obsidian";
+const vaultRegistryPath = process.env.VAULT_REGISTRY_PATH ?? "/workspace/.anything-obsidian-registry/vaults.json";
 const workspacesPath =
   process.env.ANYTHINGLLM_WORKSPACES_PATH ?? "/api/v1/workspaces";
 const chatPathTemplate =
@@ -40,25 +41,25 @@ function createServer() {
   });
 
   server.tool(
-    "anythingllm_workspaces",
-    "List AnythingLLM workspaces visible to the configured API key.",
+    "anythingllm_vaults",
+    "List managed vaults visible to MCP. Restricted vault policies are shown but are not enforced until caller identity exists.",
     {},
     async () => {
-      const data = await requestJson(workspacesPath, { method: "GET" });
-      return asJsonContent(data);
+      return asJsonContent({ vaults: await loadVaults(vaultRegistryPath) });
     },
   );
 
   server.tool(
     "anythingllm_query",
-    "Ask AnythingLLM to answer from a workspace. Prefer anythingllm_vector_search when an agent needs source chunks.",
+    "Ask AnythingLLM to answer from one managed vault. Prefer anythingllm_vector_search when an agent needs source chunks.",
     {
       question: z.string().min(1),
-      workspaceSlug: z.string().min(1).optional(),
+      vaultId: z.string().min(1).optional(),
       mode: z.enum(["query", "chat"]).default("query"),
     },
-    async ({ question, workspaceSlug, mode }) => {
-      const slug = encodeURIComponent(workspaceSlug ?? defaultWorkspaceSlug);
+    async ({ question, vaultId, mode }) => {
+      const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId);
+      const slug = encodeURIComponent(vault.workspaceSlug);
       const apiPath = chatPathTemplate.replace("{slug}", slug);
       const data = await requestJson(apiPath, {
         method: "POST",
@@ -70,15 +71,16 @@ function createServer() {
 
   server.tool(
     "anythingllm_vector_search",
-    "Search the AnythingLLM workspace vector index and return matching source chunks. Prefer this for agent RAG.",
+    "Search one managed vault vector index and return matching source chunks. Prefer this for agent RAG.",
     {
       query: z.string().min(1),
-      workspaceSlug: z.string().min(1).optional(),
+      vaultId: z.string().min(1).optional(),
       topN: z.number().int().positive().max(20).default(4),
       scoreThreshold: z.number().min(0).max(1).optional(),
     },
-    async ({ query, workspaceSlug, topN, scoreThreshold }) => {
-      const slug = encodeURIComponent(workspaceSlug ?? defaultWorkspaceSlug);
+    async ({ query, vaultId, topN, scoreThreshold }) => {
+      const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId);
+      const slug = encodeURIComponent(vault.workspaceSlug);
       const apiPath = vectorSearchPathTemplate.replace("{slug}", slug);
       const data = await requestJson(apiPath, {
         method: "POST",

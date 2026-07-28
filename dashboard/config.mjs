@@ -67,9 +67,6 @@ export function publicConfig(env) {
     dashboardUrl: `http://localhost:${dashboardPort}`,
     anythingllmUrl: `http://localhost:${anythingllmPort}`,
     mcpUrl: `http://localhost:${mcpPort}/mcp`,
-    workspaceSlug: env.ANYTHINGLLM_WORKSPACE_SLUG || "obsidian",
-    syncIntervalSeconds: env.KB_SYNC_INTERVAL_SECONDS || "300",
-    gitRemote: env.KB_GIT_REMOTE || "origin",
-    gitBranch: env.KB_GIT_BRANCH || "main",
+    vaultsRoot: env.VAULTS_ROOT || "/vaults",
   };
 }
