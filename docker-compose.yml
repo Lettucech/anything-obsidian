@@ -17,10 +17,12 @@ services:
       ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
       VAULTS_ROOT: /vaults
       VAULT_REGISTRY_PATH: /workspace/.anything-obsidian-registry/vaults.json
+      VAULT_SECRETS_PATH: /workspace/.anything-obsidian-secrets
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env}:/vaults
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
+      - anything-obsidian-vault-secrets:/workspace/.anything-obsidian-secrets
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -86,11 +88,13 @@ services:
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
       VAULTS_ROOT: /vaults
       VAULT_REGISTRY_PATH: /workspace/.anything-obsidian-registry/vaults.json
-      KB_STATE_DIR: /workspace/.anything-obsidian-state
+      VAULT_STATE_ROOT: /workspace/.anything-obsidian-state
+      VAULT_SECRETS_PATH: /workspace/.anything-obsidian-secrets
     volumes:
       - ./.env:/workspace/.env:ro
       - anything-obsidian-worker-state:/workspace/.anything-obsidian-state
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
+      - anything-obsidian-vault-secrets:/workspace/.anything-obsidian-secrets
       - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env}:/vaults
     command: ["scheduler"]
 
@@ -108,11 +112,13 @@ services:
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
       VAULTS_ROOT: /vaults
       VAULT_REGISTRY_PATH: /workspace/.anything-obsidian-registry/vaults.json
-      KB_STATE_DIR: /workspace/.anything-obsidian-state
+      VAULT_STATE_ROOT: /workspace/.anything-obsidian-state
+      VAULT_SECRETS_PATH: /workspace/.anything-obsidian-secrets
     volumes:
       - ./.env:/workspace/.env:ro
       - anything-obsidian-worker-state:/workspace/.anything-obsidian-state
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
+      - anything-obsidian-vault-secrets:/workspace/.anything-obsidian-secrets
       - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env}:/vaults
 
 volumes:
@@ -122,3 +128,5 @@ volumes:
     name: anything-obsidian-worker-state
   anything-obsidian-vault-registry:
     name: anything-obsidian-vault-registry
+  anything-obsidian-vault-secrets:
+    name: anything-obsidian-vault-secrets

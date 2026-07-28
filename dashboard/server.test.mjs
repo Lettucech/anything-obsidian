@@ -12,7 +12,8 @@ test("vault routes list and create dashboard-managed vaults", async () => {
       return { id: 1, name, slug: "work" };
     },
   };
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), env: {} });
+  const secrets = fakeSecrets();
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), secrets, env: {} });
 
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
   const created = await request(app, "POST", "/api/vaults", validVaultPayload());
@@ -20,6 +21,8 @@ test("vault routes list and create dashboard-managed vaults", async () => {
   assert.equal(created.status, 201);
   assert.equal(created.body.id, "work");
   assert.equal(created.body.workspaceSlug, "work");
+  assert.deepEqual(secrets.saved, [{ id: "work", auth: { mode: "https-token", username: "oauth2", token: "work-secret" } }]);
+  assert.equal(created.body.gitAuth, undefined);
   assert.equal((await request(app, "GET", "/api/vaults")).body.vaults.length, 1);
 });
 
@@ -28,7 +31,8 @@ test("vault routes attach an existing workspace and remove only its registry rec
   const anythingllm = {
     async listWorkspaces() { return [{ id: 2, name: "Personal", slug: "personal" }]; },
   };
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), env: {} });
+  const secrets = fakeSecrets();
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), secrets, env: {} });
 
   const created = await request(app, "POST", "/api/vaults", {
     ...validVaultPayload(), id: "personal", name: "Personal", directory: "personal",
@@ -36,6 +40,7 @@ test("vault routes attach an existing workspace and remove only its registry rec
   });
   assert.equal(created.status, 201);
   assert.equal((await request(app, "DELETE", "/api/vaults/personal")).status, 204);
+  assert.deepEqual(secrets.removed, ["personal"]);
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
 });
 
@@ -244,6 +249,15 @@ function fakeVaultStorage() {
   return { async prepare() {} };
 }
 
+function fakeSecrets() {
+  return {
+    saved: [],
+    removed: [],
+    async save(id, auth) { this.saved.push({ id, auth }); },
+    async remove(id) { this.removed.push(id); },
+  };
+}
+
 function validVaultPayload() {
   return {
     id: "work",
@@ -256,6 +270,8 @@ function validVaultPayload() {
     enabled: true,
     accessMode: "open",
     allowlist: [],
+    gitAuthMode: "https-token",
+    gitAuth: { mode: "https-token", username: "oauth2", token: "work-secret" },
   };
 }
 

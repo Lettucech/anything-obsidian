@@ -94,7 +94,7 @@ export function workerContainerConfig({ syncer, action, vaultId }) {
 }
 
 function workerEnv(envValues) {
-  const allowed = new Set(["ANYTHINGLLM_BASE_URL", "VAULTS_ROOT", "VAULT_REGISTRY_PATH", "KB_STATE_DIR"]);
+  const allowed = new Set(["ANYTHINGLLM_BASE_URL", "VAULTS_ROOT", "VAULT_REGISTRY_PATH", "VAULT_SECRETS_PATH", "VAULT_STATE_ROOT"]);
   return envValues.filter((entry) => allowed.has(entry.split("=")[0]));
 }
 
@@ -104,6 +104,7 @@ function workerBinds(mounts) {
     "/vaults",
     "/workspace/.anything-obsidian-state",
     "/workspace/.anything-obsidian-registry",
+    "/workspace/.anything-obsidian-secrets",
   ]);
   return mounts
     .filter((mount) => destinations.has(mount.Destination))

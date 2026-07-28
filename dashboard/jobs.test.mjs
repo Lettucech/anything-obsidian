@@ -56,13 +56,15 @@ test("creates fixed worker container config for embed all", async () => {
     "/Users/me/vaults:/vaults",
     "anything-obsidian-worker-state:/workspace/.anything-obsidian-state",
     "anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry",
+    "anything-obsidian-vault-secrets:/workspace/.anything-obsidian-secrets",
   ]);
   assert.equal(docker.created[0].HostConfig.NetworkMode, "anything-obsidian_default");
   assert.deepEqual(docker.created[0].Env, [
     "ANYTHINGLLM_BASE_URL=http://anythingllm:3001",
     "VAULTS_ROOT=/vaults",
     "VAULT_REGISTRY_PATH=/workspace/.anything-obsidian-registry/vaults.json",
-    "KB_STATE_DIR=/workspace/.anything-obsidian-state",
+    "VAULT_SECRETS_PATH=/workspace/.anything-obsidian-secrets",
+    "VAULT_STATE_ROOT=/workspace/.anything-obsidian-state",
   ]);
 });
 
@@ -78,7 +80,8 @@ function fakeDocker({ wait = Promise.resolve({ StatusCode: 0 }) } = {}) {
             "ANYTHINGLLM_BASE_URL=http://anythingllm:3001",
             "VAULTS_ROOT=/vaults",
             "VAULT_REGISTRY_PATH=/workspace/.anything-obsidian-registry/vaults.json",
-            "KB_STATE_DIR=/workspace/.anything-obsidian-state",
+            "VAULT_SECRETS_PATH=/workspace/.anything-obsidian-secrets",
+            "VAULT_STATE_ROOT=/workspace/.anything-obsidian-state",
           ],
         },
         HostConfig: {
@@ -98,6 +101,13 @@ function fakeDocker({ wait = Promise.resolve({ StatusCode: 0 }) } = {}) {
             Type: "volume",
             Name: "anything-obsidian-vault-registry",
             Destination: "/workspace/.anything-obsidian-registry",
+            Mode: "rw",
+            RW: true,
+          },
+          {
+            Type: "volume",
+            Name: "anything-obsidian-vault-secrets",
+            Destination: "/workspace/.anything-obsidian-secrets",
             Mode: "rw",
             RW: true,
           },

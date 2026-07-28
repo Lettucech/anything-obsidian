@@ -39,12 +39,26 @@
             <label>Existing workspace slug <input name="workspaceSlug" pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
             <label>Git remote <input name="gitRemote" value="origin" /></label>
             <label>Git branch <input name="gitBranch" value="main" /></label>
+            <label class="checkbox"><input name="gitAutoPull" type="checkbox" checked /> Pull before syncing</label>
+            <label class="checkbox"><input name="gitAutoPush" type="checkbox" checked /> Push after syncing</label>
+            <label>Git commit author <input name="gitUserName" value="anything-obsidian" /></label>
+            <label>Git commit email <input name="gitUserEmail" type="email" value="anything-obsidian@local" /></label>
+            <label>Git push URL (optional) <input name="gitPushUrl" /></label>
+            <label>Commit message prefix <input name="gitCommitMessagePrefix" value="Auto sync vault" /></label>
+            <label>Git authentication
+              <select name="gitAuthMode"><option value="none">None or public remote</option><option value="https-token">HTTPS username and token</option></select>
+            </label>
+            <label>HTTPS username <input name="gitAuthUsername" value="x-access-token" autocomplete="username" /></label>
+            <label>HTTPS token <input name="gitAuthToken" type="password" autocomplete="new-password" /></label>
             <label>Sync interval (seconds) <input name="syncIntervalSeconds" type="number" min="30" value="300" /></label>
+            <label class="checkbox"><input name="embedAfterSync" type="checkbox" checked /> Embed after a successful sync</label>
+            <label>Embeddable extensions <input name="embedExtensions" placeholder=".md,.txt,.pdf,.docx (default)" /></label>
+            <label>Excluded directories <input name="embedExcludeDirs" placeholder=".git,.obsidian,node_modules (default)" /></label>
             <label>Access mode <select name="accessMode"><option value="open">Open</option><option value="restricted">Restricted</option></select></label>
             <label class="checkbox"><input name="enabled" type="checkbox" checked /> Enable scheduled sync</label>
             <label class="allowlist">Allowlist (one identity per line)<textarea name="allowlist" rows="3"></textarea></label>
           </div>
-          <p class="note">Restricted access policy is stored now but is not enforced until MCP caller identity is available. Git credentials are never stored in this form.</p>
+          <p class="note">All Git, sync, and embedding policy belongs to this vault record. Each vault can have a different HTTPS credential; the token is written only to the local runtime secret volume and is never returned by the dashboard. Restricted access policy is stored now but is not enforced until MCP caller identity is available.</p>
           <div class="form-actions"><button type="submit">Save vault</button><button id="cancel-vault" type="button">Cancel</button></div>
         </form>
       </section>

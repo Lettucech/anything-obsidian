@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { doctor } from "./doctor.mjs";
 import { embedVault } from "./embed-vault.mjs";
-import { loadEnvFile, resolveConfig } from "./lib/env.mjs";
+import { loadEnvFile } from "./lib/env.mjs";
 import { registryFor, loadVaultConfig } from "./vault-config.mjs";
 import { runScheduler } from "./scheduler.mjs";
 import { shouldEmbedAfterSync, syncVaultOnce } from "./watch-vault.mjs";
@@ -16,7 +16,6 @@ const repoRoot = path.resolve(path.dirname(__filename), "..");
 const defaultDeps = {
   doctor,
   embedVault,
-  loadConfig,
   loadVaultConfig,
   loadRegistry: registryFor,
   loadEnv: loadRuntimeEnv,
@@ -49,8 +48,6 @@ export async function runWorker(argv = process.argv.slice(2), env = process.env,
         console.log(JSON.stringify(result, null, 2));
         return 0;
       });
-    case "autosync":
-      return runAutosync({ env, worker });
     case "scheduler":
       return runCommand(async () => {
         await worker.runScheduler({
@@ -84,10 +81,6 @@ export async function runWorker(argv = process.argv.slice(2), env = process.env,
   }
 }
 
-async function loadConfig(env) {
-  return resolveConfig(await loadRuntimeEnv(env));
-}
-
 async function loadRuntimeEnv(env) {
   return {
     ...(await loadEnvFile(path.join(repoRoot, ".env"))),
@@ -116,34 +109,10 @@ Commands:
 
 async function commandConfig(argv, env, worker) {
   const index = argv.indexOf("--vault");
-  if (index === -1) return worker.loadConfig(env);
+  if (index === -1) throw new Error("--vault is required for managed vault commands");
   const vaultId = argv[index + 1];
   if (!vaultId) throw new Error("--vault requires a vault id");
   return worker.loadVaultConfig(await worker.loadEnv(env), vaultId);
-}
-
-async function runAutosync({ env, worker }) {
-  worker.logger.info("Autosync loop started");
-
-  let running = true;
-  while (running) {
-    const runtimeEnv = await worker.loadEnv(env);
-    const intervalMs = seconds(runtimeEnv.KB_SYNC_INTERVAL_SECONDS, 300) * 1000;
-
-    try {
-      worker.logger.info(`Autosync round started; intervalSeconds=${Math.round(intervalMs / 1000)}`);
-      const config = await worker.loadConfig(env);
-      const result = await syncAndEmbed({ worker, config });
-      console.log(JSON.stringify(result, null, 2));
-    } catch (error) {
-      worker.logger.error(`Autosync round failed: ${errorMessage(error)}`);
-    }
-
-    worker.logger.info(`Autosync waiting ${Math.round(intervalMs / 1000)}s before next round`);
-    running = await worker.sleep(intervalMs);
-  }
-
-  return 0;
 }
 
 async function syncAndEmbed({ worker, config }) {
@@ -153,7 +122,7 @@ async function syncAndEmbed({ worker, config }) {
   let embedded = false;
   if (
     worker.shouldEmbedAfterSync({
-      embedAfterSync: true,
+      embedAfterSync: config.embedAfterSync,
       gitAutoPush: config.gitAutoPush,
       pushSucceeded: syncResult.pushed,
     })
@@ -175,11 +144,6 @@ async function sleep(ms) {
   return true;
 }
 
-function seconds(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : fallback;
-}
-
 function createLogger() {
   return {
     info: (message) => console.error(formatLog(message)),
@@ -193,10 +157,6 @@ function formatLog(message) {
 
 function formatEmbedResult(prefix, result) {
   return `${prefix}; scanned=${result.scanned} uploaded=${result.uploaded} removed=${result.removed} workspace=${result.workspaceSlug}`;
-}
-
-function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

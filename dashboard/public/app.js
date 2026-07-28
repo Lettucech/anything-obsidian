@@ -81,7 +81,14 @@ if (typeof document !== "undefined") {
       id: form.get("id"), name: form.get("name"), directory: form.get("directory"), vaultMode: form.get("vaultMode"),
       workspaceMode: form.get("workspaceMode"), workspaceSlug: form.get("workspaceSlug"),
       gitRemote: form.get("gitRemote"), gitBranch: form.get("gitBranch"),
+      gitAutoPull: form.get("gitAutoPull") === "on", gitAutoPush: form.get("gitAutoPush") === "on",
+      gitUserName: form.get("gitUserName"), gitUserEmail: form.get("gitUserEmail"),
+      gitPushUrl: form.get("gitPushUrl"), gitCommitMessagePrefix: form.get("gitCommitMessagePrefix"),
+      gitAuthMode: form.get("gitAuthMode"),
+      gitAuth: { mode: form.get("gitAuthMode"), username: form.get("gitAuthUsername"), token: form.get("gitAuthToken") },
       syncIntervalSeconds: Number(form.get("syncIntervalSeconds")), enabled: form.get("enabled") === "on",
+      embedAfterSync: form.get("embedAfterSync") === "on", embedExtensions: form.get("embedExtensions"),
+      embedExcludeDirs: form.get("embedExcludeDirs"),
       accessMode: form.get("accessMode"), allowlist: String(form.get("allowlist") || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
     };
   }

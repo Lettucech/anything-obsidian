@@ -31,7 +31,7 @@ function byName(result) {
   return new Map(result.checks.map((check) => [check.name, check]));
 }
 
-test("doctor git check reports failure and hints at KB_GIT_AUTH_TOKEN", async () => {
+test("doctor git check reports failure and points to the vault credential form", async () => {
   const vaultPath = await mkdtemp(path.join(tmpdir(), "doctor-"));
   try {
     const result = await doctor({
@@ -43,7 +43,7 @@ test("doctor git check reports failure and hints at KB_GIT_AUTH_TOKEN", async ()
     const git = byName(result).get("git remote");
     assert.equal(git.ok, false);
     assert.match(git.message, /exit 128/);
-    assert.match(git.message, /KB_GIT_AUTH_TOKEN/);
+    assert.match(git.message, /credential in the dashboard/);
   } finally {
     await rm(vaultPath, { force: true, recursive: true });
   }

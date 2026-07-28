@@ -15,49 +15,18 @@ test("parses simple env text without shell evaluation", () => {
   });
 });
 
-test("resolves Docker worker defaults", () => {
-  const config = resolveConfig({
-    ANYTHINGLLM_API_KEY: "key",
-    HOST_VAULT_PATH: "/Users/me/vault",
-  });
-
-  assert.equal(config.anythingllmBaseUrl, "http://anythingllm:3001");
-  assert.equal(config.apiKey, "key");
-  assert.equal(config.workspaceSlug, "obsidian");
-  assert.equal(config.vaultPath, "/vault");
-  assert.equal(config.gitRemote, "origin");
-  assert.equal(config.gitBranch, "main");
-  assert.equal(config.gitAutoPull, true);
-  assert.equal(config.gitAutoPush, true);
-  assert.equal(config.gitAuthUsername, "x-access-token");
-  assert.equal(config.gitAuthToken, "");
-  assert.equal(config.mcpBaseUrl, "http://mcp:3333");
-  assert.equal(config.kbStateDir, "");
-});
-
-test("worker config honors explicit container values", () => {
+test("resolves only global service and worker infrastructure settings", () => {
   const config = resolveConfig({
     ANYTHINGLLM_API_KEY: "key",
     ANYTHINGLLM_BASE_URL: "http://custom:3001",
-    ANYTHINGLLM_WORKSPACE_SLUG: "notes",
-    VAULT_PATH: "/mounted-vault",
-    KB_GIT_AUTO_PULL: "false",
-    KB_GIT_AUTO_PUSH: "0",
-    KB_GIT_AUTH_USERNAME: "token-user",
-    KB_GIT_AUTH_TOKEN: "secret",
     ANYTHINGLLM_MCP_BASE_URL: "http://mcp.special:3333",
-    KB_STATE_DIR: "custom-state",
+    VAULT_STATE_ROOT: "custom-state",
   });
 
   assert.equal(config.anythingllmBaseUrl, "http://custom:3001");
-  assert.equal(config.workspaceSlug, "notes");
-  assert.equal(config.vaultPath, "/mounted-vault");
-  assert.equal(config.gitAutoPull, false);
-  assert.equal(config.gitAutoPush, false);
-  assert.equal(config.gitAuthUsername, "token-user");
-  assert.equal(config.gitAuthToken, "secret");
   assert.equal(config.mcpBaseUrl, "http://mcp.special:3333");
-  assert.equal(config.kbStateDir, "custom-state");
+  assert.equal(config.vaultStateRoot, "custom-state");
+  assert.equal(config.gitRemote, undefined);
 });
 
 test("worker rejects unknown commands", async () => {
@@ -70,8 +39,8 @@ test("worker help succeeds", async () => {
 
 test("worker embed command runs embedVault with all flag", async () => {
   const calls = [];
-  const code = await runWorker(["embed", "--all"], {}, {
-    loadConfig: async () => ({ workspaceSlug: "notes" }),
+  const code = await runWorker(["embed", "--all", "--vault", "work"], {}, {
+    loadVaultConfig: async () => ({ workspaceSlug: "notes" }),
     embedVault: async (options) => {
       calls.push(options);
       return { scanned: 1, uploaded: 1, removed: 0, workspaceSlug: "notes" };
@@ -84,8 +53,9 @@ test("worker embed command runs embedVault with all flag", async () => {
 
 test("worker sync embeds after successful push", async () => {
   const calls = [];
-  const code = await runWorker(["sync"], {}, {
-    loadConfig: async () => ({ gitAutoPush: true }),
+  const config = { gitAutoPush: true, embedAfterSync: true };
+  const code = await runWorker(["sync", "--vault", "work"], {}, {
+    loadVaultConfig: async () => config,
     syncVaultOnce: async (options) => {
       calls.push(["sync", options]);
       return { pushed: true, embedded: false };
@@ -98,15 +68,15 @@ test("worker sync embeds after successful push", async () => {
 
   assert.equal(code, 0);
   assert.deepEqual(calls, [
-    ["sync", { config: { gitAutoPush: true } }],
-    ["embed", { config: { gitAutoPush: true }, all: false }],
+    ["sync", { config }],
+    ["embed", { config, all: false }],
   ]);
 });
 
 test("worker sync skips embedding after unsuccessful push", async () => {
   let embedCalls = 0;
-  const code = await runWorker(["sync"], {}, {
-    loadConfig: async () => ({ gitAutoPush: true }),
+  const code = await runWorker(["sync", "--vault", "work"], {}, {
+    loadVaultConfig: async () => ({ gitAutoPush: true, embedAfterSync: true }),
     syncVaultOnce: async () => ({ pushed: false, embedded: false }),
     embedVault: async () => {
       embedCalls += 1;
@@ -119,12 +89,12 @@ test("worker sync skips embedding after unsuccessful push", async () => {
 
 test("worker sync logs progress", async () => {
   const messages = [];
-  const code = await runWorker(["sync"], {}, {
+  const code = await runWorker(["sync", "--vault", "work"], {}, {
     logger: {
       info: (message) => messages.push(message),
       error: (message) => messages.push(message),
     },
-    loadConfig: async () => ({ gitAutoPush: true }),
+    loadVaultConfig: async () => ({ gitAutoPush: true, embedAfterSync: true }),
     syncVaultOnce: async () => ({ pushed: true, embedded: false }),
     embedVault: async () => ({ scanned: 3, uploaded: 2, removed: 1, workspaceSlug: "obsidian" }),
   });
@@ -139,85 +109,13 @@ test("worker sync logs progress", async () => {
   ]);
 });
 
-test("worker autosync keeps syncing until stopped", async () => {
-  const calls = [];
-  const sleeps = [];
-  const code = await runWorker(["autosync"], { KB_SYNC_INTERVAL_SECONDS: "12" }, {
-    loadConfig: async () => ({ gitAutoPush: true }),
-    syncVaultOnce: async (options) => {
-      calls.push(["sync", options]);
-      return { pushed: true, embedded: false };
-    },
-    embedVault: async (options) => {
-      calls.push(["embed", options]);
-      return { scanned: 0, uploaded: 0, removed: 0, workspaceSlug: "obsidian" };
-    },
-    sleep: async (ms) => {
-      sleeps.push(ms);
-      if (sleeps.length === 2) return false;
-      return true;
-    },
-  });
-
-  assert.equal(code, 0);
-  assert.deepEqual(calls, [
-    ["sync", { config: { gitAutoPush: true } }],
-    ["embed", { config: { gitAutoPush: true }, all: false }],
-    ["sync", { config: { gitAutoPush: true } }],
-    ["embed", { config: { gitAutoPush: true }, all: false }],
-  ]);
-  assert.deepEqual(sleeps, [12_000, 12_000]);
-});
-
-test("worker autosync reads interval from loaded env", async () => {
-  const sleeps = [];
-  const code = await runWorker(["autosync"], {}, {
-    loadEnv: async () => ({ KB_SYNC_INTERVAL_SECONDS: "7" }),
-    loadConfig: async () => ({ gitAutoPush: false }),
-    syncVaultOnce: async () => ({ pushed: true, embedded: false }),
-    embedVault: async () => ({ scanned: 0, uploaded: 0, removed: 0, workspaceSlug: "obsidian" }),
-    sleep: async (ms) => {
-      sleeps.push(ms);
-      return false;
-    },
-  });
-
-  assert.equal(code, 0);
-  assert.deepEqual(sleeps, [7_000]);
-});
-
-test("worker autosync logs errors and retries later", async () => {
-  let attempts = 0;
-  const sleeps = [];
-  const errors = [];
-  const code = await runWorker(["autosync"], { KB_SYNC_INTERVAL_SECONDS: "bad" }, {
-    logger: {
-      info: () => {},
-      error: (message) => errors.push(message),
-    },
-    loadConfig: async () => ({ gitAutoPush: true }),
-    syncVaultOnce: async () => {
-      attempts += 1;
-      throw new Error("Missing ANYTHINGLLM_API_KEY in .env.");
-    },
-    embedVault: async () => {
-      throw new Error("should not embed when sync fails");
-    },
-    sleep: async (ms) => {
-      sleeps.push(ms);
-      return false;
-    },
-  });
-
-  assert.equal(code, 0);
-  assert.equal(attempts, 1);
-  assert.deepEqual(sleeps, [300_000]);
-  assert.deepEqual(errors, ["Autosync round failed: Missing ANYTHINGLLM_API_KEY in .env."]);
+test("worker requires a vault id for a managed command", async () => {
+  assert.equal(await runWorker(["sync"], {}), 1);
 });
 
 test("worker doctor returns non-zero when a check fails", async () => {
-  const code = await runWorker(["doctor"], {}, {
-    loadConfig: async () => ({}),
+  const code = await runWorker(["doctor", "--vault", "work"], {}, {
+    loadVaultConfig: async () => ({}),
     doctor: async () => ({
       ok: false,
       checks: [{ name: "vault mount", ok: false, message: "missing" }],
@@ -228,8 +126,8 @@ test("worker doctor returns non-zero when a check fails", async () => {
 });
 
 test("worker command errors return non-zero", async () => {
-  const code = await runWorker(["embed"], {}, {
-    loadConfig: async () => ({}),
+  const code = await runWorker(["embed", "--vault", "work"], {}, {
+    loadVaultConfig: async () => ({}),
     embedVault: async () => {
       throw new Error("boom");
     },

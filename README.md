@@ -65,31 +65,28 @@ Choose one of the following:
   `HOST_VAULTS_ROOT`. Move, copy, or link the repository below that root first.
 
 Then choose whether to create an AnythingLLM workspace or attach one that
-already exists, set its Git remote, branch, schedule, and access policy. The
-dashboard stores only the vault mapping and policy; it never stores Git tokens
-or AnythingLLM API keys in the registry.
+already exists, and set that vault's Git remote, branch, pull/push policy,
+commit identity, embedding filters, schedule, access policy, and (when needed)
+HTTPS username and token. The dashboard stores vault mapping and operational
+policy in the registry; credentials live separately in the local runtime secret
+volume and are never returned by the API.
 
-5. Add Git credentials only when a vault actually needs them.
+5. Configure Git credentials only for vaults that need them.
 
-For a private GitHub remote, set this in the local `.env` before enabling that
-vault's scheduled sync:
-
-```text
-KB_GIT_AUTH_TOKEN=your-github-token
-```
-
-The current credential setting is stack-wide and is passed to Git through
-`GIT_ASKPASS`; it is not written into the vault remote URL or returned by the
-dashboard. A public repository, local-only vault, or vault with credentials
-already available to Git needs no token.
+Choose **HTTPS username and token** in that vault's dashboard form and enter
+the credential appropriate for its own remote (for example, a GitHub PAT with
+`x-access-token`, or a GitLab token with its matching username). Each vault has
+an isolated credential record; no `.env` token is shared across vaults. Public
+or local-only repositories need no credential.
 
 ## How vault management works
 
 The dashboard stores a registry in a Docker volume. Each record has a stable
 vault id, a direct-child directory under `/vaults`, an AnythingLLM workspace,
-Git settings, a schedule, and an `open` or `restricted` policy.
+all Git/sync/embedding policy, a schedule, and an `open` or `restricted` policy.
 
-- Each vault has its own embedding manifest at a namespaced worker-state path.
+- Each vault has its own embedding manifest and optional HTTPS credential at a
+  namespaced runtime path.
 - Sync, embedding, rebuild, and doctor actions are scoped to one vault. Jobs
   for different vaults can run independently; a duplicate job for the same
   vault is rejected.

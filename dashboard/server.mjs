@@ -9,6 +9,7 @@ import { DockerClient } from "./docker-client.mjs";
 import { createJobManager } from "./jobs.mjs";
 import { redactSecretsObject, redactSecretsText } from "./redact.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
+import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
 import { createAnythingllmClient } from "./anythingllm.mjs";
 import { createVaultStorage } from "./vault-storage.mjs";
 
@@ -30,6 +31,9 @@ export function createDashboardServer({
     fetchImpl,
   }),
   vaultStorage = createVaultStorage({ registry }),
+  secrets = createVaultSecretStore({
+    rootPath: env.VAULT_SECRETS_PATH || "/workspace/.anything-obsidian-secrets",
+  }),
 } = {}) {
   return createServer(async (req, res) => {
     try {
@@ -40,28 +44,34 @@ export function createDashboardServer({
       if (req.method === "POST" && url.pathname === "/api/vaults") {
         const input = await readJsonBody(req);
         await vaultStorage.prepare(input);
+        const { gitAuth, ...vaultInput } = input;
         let workspace;
-        if (input.workspaceMode === "create") {
-          workspace = await anythingllm.createWorkspace({ name: input.name });
-        } else if (input.workspaceMode === "attach") {
+        if (vaultInput.workspaceMode === "create") {
+          workspace = await anythingllm.createWorkspace({ name: vaultInput.name });
+        } else if (vaultInput.workspaceMode === "attach") {
           workspace = (await anythingllm.listWorkspaces()).find(
-            (candidate) => candidate.slug === input.workspaceSlug,
+            (candidate) => candidate.slug === vaultInput.workspaceSlug,
           );
           if (!workspace) return sendJson(res, 400, { error: "Workspace was not found" });
         } else {
           return sendJson(res, 400, { error: "workspaceMode must be create or attach" });
         }
-        const vault = await registry.create({ ...input, workspaceSlug: workspace.slug });
+        const vault = await registry.create({ ...vaultInput, workspaceSlug: workspace.slug });
+        await secrets.save(vault.id, gitAuth);
         return sendJson(res, 201, vault);
       }
       if (req.method === "PATCH" && url.pathname.startsWith("/api/vaults/")) {
         const id = url.pathname.slice("/api/vaults/".length);
-        const vault = await registry.update(id, await readJsonBody(req));
+        const input = await readJsonBody(req);
+        const { gitAuth, ...changes } = input;
+        const vault = await registry.update(id, changes);
+        if (vault && gitAuth) await secrets.save(id, gitAuth);
         return vault ? sendJson(res, 200, vault) : sendJson(res, 404, { error: "Vault was not found" });
       }
       if (req.method === "DELETE" && url.pathname.startsWith("/api/vaults/")) {
         const id = url.pathname.slice("/api/vaults/".length);
         const vault = await registry.remove(id);
+        if (vault) await secrets.remove(id);
         return vault ? sendJson(res, 204, {}) : sendJson(res, 404, { error: "Vault was not found" });
       }
       if (req.method === "GET" && url.pathname === "/api/status") {

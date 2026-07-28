@@ -59,12 +59,9 @@ test("public config exposes only non-secret operational values", () => {
     HOST_DASHBOARD_PORT: "11300",
     HOST_ANYTHINGLLM_PORT: "11301",
     HOST_MCP_PORT: "11333",
-    ANYTHINGLLM_WORKSPACE_SLUG: "obsidian",
-    KB_SYNC_INTERVAL_SECONDS: "300",
-    KB_GIT_REMOTE: "origin",
-    KB_GIT_BRANCH: "main",
+    VAULT_STATE_ROOT: "/workspace/.anything-obsidian-state",
     ANYTHINGLLM_API_KEY: "sk-secret",
-    KB_GIT_AUTH_TOKEN: "ghp-secret",
+    GIT_PASSWORD: "token-secret",
   });
 
   assert.deepEqual(config, {

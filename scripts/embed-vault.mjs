@@ -5,7 +5,6 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { loadEnvFile, resolveConfig } from "./lib/env.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..");
@@ -147,7 +146,7 @@ async function assertWorkspaceExists({ baseUrl, apiKey, workspaceSlug }) {
   const available = slugs.length ? slugs.join(", ") : "none";
   throw new Error(
     `AnythingLLM workspace '${workspaceSlug}' was not found. Available workspaces: ${available}. ` +
-      "Set ANYTHINGLLM_WORKSPACE_SLUG to an existing slug or create that workspace in AnythingLLM.",
+      "Attach an existing workspace or create one from this vault's dashboard configuration.",
   );
 }
 
@@ -269,37 +268,4 @@ function stripTrailingSlash(value) {
 
 function toPosix(value) {
   return value.split(path.sep).join("/");
-}
-
-function extendConfig(config, env) {
-  return {
-    ...config,
-    documentFolder: env.ANYTHINGLLM_DOCUMENT_FOLDER ?? config.documentFolder,
-    stateDir: env.KB_STATE_DIR
-      ? path.resolve(repoRoot, env.KB_STATE_DIR)
-      : config.stateDir,
-    embedExtensions: env.KB_EMBED_EXTENSIONS ?? config.embedExtensions,
-    embedExcludeDirs: env.KB_EMBED_EXCLUDE_DIRS ?? config.embedExcludeDirs,
-    documentUploadPathTemplate:
-      env.ANYTHINGLLM_DOCUMENT_UPLOAD_PATH_TEMPLATE ?? config.documentUploadPathTemplate,
-    updateEmbeddingsPathTemplate:
-      env.ANYTHINGLLM_UPDATE_EMBEDDINGS_PATH_TEMPLATE ??
-      config.updateEmbeddingsPathTemplate,
-  };
-}
-
-async function runCli() {
-  const env = { ...(await loadEnvFile(path.join(repoRoot, ".env"))), ...process.env };
-  const config = extendConfig(resolveConfig(env), env);
-  const result = await embedVault({ config, all: process.argv.includes("--all") });
-  console.log(JSON.stringify(result, null, 2));
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  try {
-    await runCli();
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  }
 }

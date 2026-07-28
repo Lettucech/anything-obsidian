@@ -46,7 +46,7 @@ export async function doctor({
     if (!result.ok) {
       throw new Error(
         `git ls-remote failed (exit ${result.code}): ${result.stderr.trim() || "no output"}` +
-          (config.gitAuthToken ? "" : " — set KB_GIT_AUTH_TOKEN for private repos"),
+          (config.gitAuthToken ? "" : " — configure this vault's HTTPS credential in the dashboard for private repos"),
       );
     }
     return `git remote '${config.gitRemote}' is reachable`;
@@ -113,10 +113,7 @@ export async function doctor({
 }
 
 function manifestPath(config) {
-  const stateDir = config.kbStateDir
-    ? path.resolve(repoRoot, config.kbStateDir)
-    : path.resolve(repoRoot, ".anything-obsidian-state");
-  return path.join(stateDir, "embed-manifest.json");
+  return path.join(config.stateDir ?? path.resolve(repoRoot, ".anything-obsidian-state"), "embed-manifest.json");
 }
 
 async function runGitDefault({ args, cwd, env }) {
