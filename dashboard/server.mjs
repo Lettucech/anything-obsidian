@@ -37,12 +37,24 @@ export function createDashboardServer({
       }
       if (req.method === "POST" && url.pathname === "/api/vaults") {
         const input = await readJsonBody(req);
-        if (input.workspaceMode !== "create") {
-          return sendJson(res, 400, { error: "workspaceMode must be create" });
+        let workspace;
+        if (input.workspaceMode === "create") {
+          workspace = await anythingllm.createWorkspace({ name: input.name });
+        } else if (input.workspaceMode === "attach") {
+          workspace = (await anythingllm.listWorkspaces()).find(
+            (candidate) => candidate.slug === input.workspaceSlug,
+          );
+          if (!workspace) return sendJson(res, 400, { error: "Workspace was not found" });
+        } else {
+          return sendJson(res, 400, { error: "workspaceMode must be create or attach" });
         }
-        const workspace = await anythingllm.createWorkspace({ name: input.name });
         const vault = await registry.create({ ...input, workspaceSlug: workspace.slug });
         return sendJson(res, 201, vault);
+      }
+      if (req.method === "DELETE" && url.pathname.startsWith("/api/vaults/")) {
+        const id = url.pathname.slice("/api/vaults/".length);
+        const vault = await registry.remove(id);
+        return vault ? sendJson(res, 204, {}) : sendJson(res, 404, { error: "Vault was not found" });
       }
       if (req.method === "GET" && url.pathname === "/api/status") {
         return sendJson(res, 200, await statusPayload({ docker, jobs, env, fetchImpl }));

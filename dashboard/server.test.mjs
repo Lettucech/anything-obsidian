@@ -23,6 +23,22 @@ test("vault routes list and create dashboard-managed vaults", async () => {
   assert.equal((await request(app, "GET", "/api/vaults")).body.vaults.length, 1);
 });
 
+test("vault routes attach an existing workspace and remove only its registry record", async () => {
+  const registry = fakeRegistry();
+  const anythingllm = {
+    async listWorkspaces() { return [{ id: 2, name: "Personal", slug: "personal" }]; },
+  };
+  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, env: {} });
+
+  const created = await request(app, "POST", "/api/vaults", {
+    ...validVaultPayload(), id: "personal", name: "Personal", directory: "personal",
+    workspaceMode: "attach", workspaceSlug: "personal",
+  });
+  assert.equal(created.status, 201);
+  assert.equal((await request(app, "DELETE", "/api/vaults/personal")).status, 204);
+  assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
+});
+
 test("status returns classified system state and public config", async () => {
   const healthRequests = [];
   const app = createDashboardServer({
@@ -205,6 +221,10 @@ function fakeRegistry() {
   return {
     async list() { return vaults; },
     async create(vault) { vaults.push(vault); return vault; },
+    async remove(id) {
+      const index = vaults.findIndex((vault) => vault.id === id);
+      return index === -1 ? null : vaults.splice(index, 1)[0];
+    },
   };
 }
 
