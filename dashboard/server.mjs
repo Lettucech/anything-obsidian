@@ -8,6 +8,8 @@ import { CONTROLLED_SERVICES, LOG_SERVICES, classifySystemState, publicConfig } 
 import { DockerClient } from "./docker-client.mjs";
 import { createJobManager } from "./jobs.mjs";
 import { redactSecretsObject, redactSecretsText } from "./redact.mjs";
+import { createVaultRegistry } from "../lib/vault-registry.mjs";
+import { createAnythingllmClient } from "./anythingllm.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, "public");
@@ -17,10 +19,31 @@ export function createDashboardServer({
   jobs = createJobManager({ docker }),
   env = process.env,
   fetchImpl = fetch,
+  registry = createVaultRegistry({
+    rootPath: env.VAULTS_ROOT || "/vaults",
+    registryPath: env.VAULT_REGISTRY_PATH || "/workspace/.anything-obsidian-registry/vaults.json",
+  }),
+  anythingllm = createAnythingllmClient({
+    baseUrl: env.ANYTHINGLLM_BASE_URL || "http://anythingllm:3001",
+    apiKey: env.ANYTHINGLLM_API_KEY || "",
+    fetchImpl,
+  }),
 } = {}) {
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://localhost");
+      if (req.method === "GET" && url.pathname === "/api/vaults") {
+        return sendJson(res, 200, { vaults: await registry.list() });
+      }
+      if (req.method === "POST" && url.pathname === "/api/vaults") {
+        const input = await readJsonBody(req);
+        if (input.workspaceMode !== "create") {
+          return sendJson(res, 400, { error: "workspaceMode must be create" });
+        }
+        const workspace = await anythingllm.createWorkspace({ name: input.name });
+        const vault = await registry.create({ ...input, workspaceSlug: workspace.slug });
+        return sendJson(res, 201, vault);
+      }
       if (req.method === "GET" && url.pathname === "/api/status") {
         return sendJson(res, 200, await statusPayload({ docker, jobs, env, fetchImpl }));
       }
@@ -128,6 +151,19 @@ function contentType(file) {
 function sendJson(res, status, body) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
+}
+
+async function readJsonBody(req) {
+  let body = "";
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > 64 * 1024) throw new Error("Request body is too large");
+  }
+  try {
+    return JSON.parse(body || "{}");
+  } catch {
+    throw new Error("Request body must be JSON");
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
