@@ -1,99 +1,150 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="system">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f6f7ff" />
     <title>Anything Obsidian</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <h1>Anything Obsidian</h1>
-        <p id="system-state">Loading system state…</p>
+      <a class="brand" href="/" aria-label="Anything Obsidian dashboard">
+        <span class="brand-mark" aria-hidden="true">AO</span>
+        <span>
+          <strong>Anything Obsidian</strong>
+          <span class="brand-subtitle">Knowledge operations</span>
+        </span>
+      </a>
+      <div class="topbar-actions">
+        <span id="system-state" class="system-status" aria-live="polite">Loading system state…</span>
+        <button id="theme-toggle" class="button button-secondary theme-toggle" type="button" aria-label="Switch color theme">
+          <span id="theme-icon" class="theme-icon" aria-hidden="true">☼</span><span id="theme-label">Theme</span>
+        </button>
+        <button id="add-vault" class="button button-primary" type="button">Add vault</button>
+        <button id="power" class="button button-secondary power-button" type="button">Loading</button>
       </div>
-      <button id="power" type="button">Loading</button>
     </header>
     <main>
-      <section class="panel vault-heading">
-        <div>
-          <h2>Managed vaults</h2>
-          <p>Git repositories remain on your machine. Add or import them from the shared vault root.</p>
+      <section class="hero" aria-labelledby="dashboard-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Local-first knowledge workspace</p>
+          <h1 id="dashboard-title">Your knowledge, continuously in sync.</h1>
+          <p>Manage Git-backed Obsidian vaults, keep their indexes current, and see the health of every service in one place.</p>
         </div>
-        <button id="add-vault" type="button">Add vault</button>
+        <dl id="vault-summary" class="metric-grid" aria-label="Vault summary"></dl>
       </section>
-      <p id="vault-message" class="message" role="status"></p>
-      <section id="vault-form-panel" class="panel" hidden>
-        <h2 id="vault-form-title">Add vault</h2>
+
+      <section class="section-shell vault-section" aria-labelledby="vaults-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Vault management</p>
+            <h2 id="vaults-title">Managed vaults</h2>
+            <p>Repositories stay on your machine. The dashboard manages only their secure, shared vault root.</p>
+          </div>
+          <button id="add-vault-inline" class="button button-secondary" type="button">Add vault</button>
+        </div>
+        <p id="vault-message" class="message" role="status"></p>
+        <section id="vaults" class="vaults" aria-live="polite"></section>
+      </section>
+
+      <section class="dashboard-grid" aria-label="System overview">
+        <section class="section-shell service-section" aria-labelledby="services-title">
+          <div class="section-heading compact">
+            <div>
+              <p class="eyebrow">Infrastructure</p>
+              <h2 id="services-title">Service health</h2>
+            </div>
+            <span id="service-summary" class="section-status">Checking services</span>
+          </div>
+          <div id="services" class="services"></div>
+        </section>
+
+        <aside class="activity-card" aria-labelledby="activity-title">
+          <div class="activity-icon" aria-hidden="true">↻</div>
+          <div>
+            <p class="eyebrow">Latest activity</p>
+            <h2 id="activity-title">Worker activity</h2>
+            <p id="latest-job">No dashboard worker job yet</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="section-shell logs-section" aria-labelledby="logs-title">
+        <div class="section-heading compact">
+          <div>
+            <p class="eyebrow">Diagnostics</p>
+            <h2 id="logs-title">Recent sync logs</h2>
+          </div>
+          <span class="log-source">syncer</span>
+        </div>
+        <pre id="logs"></pre>
+      </section>
+
+      <dialog id="vault-dialog" aria-labelledby="vault-form-title">
         <form id="vault-form">
-          <section id="vault-source" class="form-section">
-            <h3>Repository</h3>
-            <div class="form-grid">
-              <label id="source-mode-field">Add from
-                <select name="sourceMode"><option value="clone">Clone a repository</option><option value="import">Import a local repository</option></select>
-              </label>
-              <label id="clone-url-field">Repository URL <input name="repositoryUrl" type="url" placeholder="https://github.com/org/notes.git" /></label>
-              <p id="import-help" class="note" hidden>Import a Git repository that is already a direct child of the configured vault root.</p>
-              <label>Git authentication
-                <select name="gitAuthMode"><option value="none">Public repository or no credential</option><option value="https-token">Private HTTPS repository</option></select>
-              </label>
-              <label class="clone-auth-field" hidden>HTTPS username <input name="gitAuthUsername" value="x-access-token" autocomplete="username" /></label>
-              <label class="clone-auth-field" hidden>HTTPS token <input name="gitAuthToken" type="password" autocomplete="new-password" /></label>
+          <div class="dialog-heading">
+            <div class="dialog-mark" aria-hidden="true">+</div>
+            <div>
+              <p class="eyebrow">Vault management</p>
+              <h2 id="vault-form-title">Add vault</h2>
+            </div>
+          </div>
+          <section id="vault-source" class="form-section add-vault-fields">
+            <p id="add-vault-note" class="note">Connect a repository first. You can refine workspace, sync, embedding, and access settings after it has been added.</p>
+            <div class="form-grid add-vault-grid">
+              <label id="clone-url-field" class="form-grid-wide">Repository URL <input name="repositoryUrl" type="url" placeholder="https://github.com/org/notes.git" required /></label>
+              <fieldset class="repository-visibility form-grid-wide">
+                <legend>Repository access</legend>
+                <label><input name="repositoryVisibility" type="radio" value="public" checked /> Public repository</label>
+                <label><input name="repositoryVisibility" type="radio" value="private" /> Private repository</label>
+              </fieldset>
+              <label>Git commit author <input name="gitUserName" required autocomplete="name" /></label>
+              <label>Git commit email <input name="gitUserEmail" type="email" required autocomplete="email" /></label>
+              <div id="private-auth-fields" class="form-grid form-grid-wide" hidden>
+                <label>HTTPS username <input name="gitAuthUsername" autocomplete="username" /></label>
+                <label>HTTPS token <input name="gitAuthToken" type="password" autocomplete="new-password" /></label>
+              </div>
             </div>
           </section>
-          <details class="advanced-settings">
-            <summary>Vault identity and workspace</summary>
-            <div class="form-grid">
-              <label>Name <input name="name" maxlength="80" placeholder="Derived from the repository" /></label>
-              <label>Vault ID <input name="id" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Derived from the repository" /></label>
-              <label>Directory <input name="directory" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Same as Vault ID" /></label>
-              <label>Workspace
-                <select name="workspaceMode"><option value="create">Create a workspace</option><option value="attach">Attach an existing workspace</option></select>
-              </label>
-              <label id="workspace-slug-field" hidden>Existing workspace slug <input name="workspaceSlug" pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
-            </div>
-          </details>
-          <details class="advanced-settings">
-            <summary>Sync and embedding policy</summary>
-            <div class="form-grid">
-            <label class="checkbox"><input name="gitAutoPull" type="checkbox" checked /> Pull before syncing</label>
-            <label class="checkbox"><input name="gitAutoPush" type="checkbox" checked /> Push after syncing</label>
-            <label>Git commit author <input name="gitUserName" value="anything-obsidian" /></label>
-            <label>Git commit email <input name="gitUserEmail" type="email" value="anything-obsidian@local" /></label>
-            <label>Git push URL (optional) <input name="gitPushUrl" /></label>
-            <label>Commit message prefix <input name="gitCommitMessagePrefix" value="Auto sync vault" /></label>
-            <label>Git authentication
-              <select name="gitAuthMode"><option value="none">None or public remote</option><option value="https-token">HTTPS username and token</option></select>
-            </label>
-            <label>HTTPS username <input name="gitAuthUsername" value="x-access-token" autocomplete="username" /></label>
-            <label>HTTPS token <input name="gitAuthToken" type="password" autocomplete="new-password" /></label>
-            <label>Sync interval (seconds) <input name="syncIntervalSeconds" type="number" min="30" value="300" /></label>
-            <label class="checkbox"><input name="embedAfterSync" type="checkbox" checked /> Embed after a successful sync</label>
-            <label>Embeddable extensions <input name="embedExtensions" placeholder=".md,.txt,.pdf,.docx (default)" /></label>
-            <label>Excluded directories <input name="embedExcludeDirs" placeholder=".git,.obsidian,node_modules (default)" /></label>
-            </div>
-          </details>
-          <details class="advanced-settings">
-            <summary>Access policy</summary>
-            <div class="form-grid">
-            <label>Access mode <select name="accessMode"><option value="open">Open</option><option value="restricted">Restricted</option></select></label>
-            <label class="checkbox"><input name="enabled" type="checkbox" checked /> Enable scheduled sync</label>
-              <label id="allowlist-field" class="allowlist" hidden>Allowlist (one identity per line)<textarea name="allowlist" rows="3"></textarea></label>
-            </div>
-          </details>
-          <p class="note">Clone uses the repository URL's default branch. Each vault can have a different HTTPS credential; its token is saved only in the local runtime secret volume and is never returned by the dashboard. Restricted access policy is stored now but is not enforced until MCP caller identity is available.</p>
-          <div class="form-actions"><button id="vault-submit" type="submit">Clone and add vault</button><button id="cancel-vault" type="button">Cancel</button></div>
+          <section id="edit-settings" hidden>
+            <details class="advanced-settings">
+              <summary>Vault identity and workspace</summary>
+              <div class="form-grid">
+                <label>Name <input name="name" maxlength="80" placeholder="Derived from the repository" /></label>
+                <label>Vault ID <input name="id" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Derived from the repository" /></label>
+                <label>Directory <input name="directory" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Same as Vault ID" /></label>
+                <label>Workspace
+                  <select name="workspaceMode"><option value="create">Create a workspace</option><option value="attach">Attach an existing workspace</option></select>
+                </label>
+                <label id="workspace-slug-field" hidden>Existing workspace slug <input name="workspaceSlug" pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
+              </div>
+            </details>
+            <details class="advanced-settings">
+              <summary>Sync and embedding policy</summary>
+              <div class="form-grid">
+                <label class="checkbox"><input name="gitAutoPull" type="checkbox" checked /> Pull before syncing</label>
+                <label class="checkbox"><input name="gitAutoPush" type="checkbox" checked /> Push after syncing</label>
+                <label>Git push URL (optional) <input name="gitPushUrl" /></label>
+                <label>Commit message prefix <input name="gitCommitMessagePrefix" value="Auto sync vault" /></label>
+                <label>Sync interval (seconds) <input name="syncIntervalSeconds" type="number" min="30" value="300" /></label>
+                <label class="checkbox"><input name="embedAfterSync" type="checkbox" checked /> Embed after a successful sync</label>
+                <label>Embeddable extensions <input name="embedExtensions" placeholder=".md,.txt,.pdf,.docx (default)" /></label>
+                <label>Excluded directories <input name="embedExcludeDirs" placeholder=".git,.obsidian,node_modules (default)" /></label>
+              </div>
+            </details>
+            <details class="advanced-settings">
+              <summary>Access policy</summary>
+              <div class="form-grid">
+                <label>Access mode <select name="accessMode"><option value="open">Open</option><option value="restricted">Restricted</option></select></label>
+                <label class="checkbox"><input name="enabled" type="checkbox" checked /> Enable scheduled sync</label>
+                <label id="allowlist-field" class="allowlist" hidden>Allowlist (one identity per line)<textarea name="allowlist" rows="3"></textarea></label>
+              </div>
+            </details>
+          </section>
+          <div class="form-actions"><button id="vault-submit" class="button button-primary" type="submit">Clone and add vault</button><button id="cancel-vault" class="button button-quiet" type="button">Cancel</button></div>
         </form>
-      </section>
-      <section id="vaults" class="vaults" aria-live="polite"></section>
-      <section class="services-section">
-        <h2>Service health</h2>
-        <div id="services" class="services"></div>
-      </section>
-      <section class="workspace">
-        <div class="panel"><h2>Activity</h2><p id="latest-job">No dashboard worker job yet</p></div>
-        <div class="panel"><h2>Recent logs</h2><pre id="logs"></pre></div>
-      </section>
+      </dialog>
     </main>
     <script type="module" src="/app.js"></script>
   </body>

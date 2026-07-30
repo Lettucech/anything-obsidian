@@ -40,12 +40,51 @@ test("vault routes import a local repository, attach a workspace, and remove onl
 
   const created = await request(app, "POST", "/api/vaults", {
     sourceMode: "import", id: "personal", name: "Personal", directory: "personal",
-    workspaceMode: "attach", workspaceSlug: "personal",
+    workspaceMode: "attach", workspaceSlug: "personal", repositoryVisibility: "public",
+    gitUserName: "Personal Bot", gitUserEmail: "personal@example.test",
   });
   assert.equal(created.status, 201);
   assert.equal((await request(app, "DELETE", "/api/vaults/personal")).status, 204);
   assert.deepEqual(secrets.removed, ["personal"]);
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
+});
+
+test("vault creation requires an explicit automatic-commit identity and private HTTPS credential", async () => {
+  const vaultStorage = fakeVaultStorage();
+  const secrets = fakeSecrets();
+  const app = createDashboardServer({
+    docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(),
+    anythingllm: { async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets, env: {},
+  });
+
+  const missingIdentity = await request(app, "POST", "/api/vaults", {
+    ...validVaultPayload(), gitUserName: "", gitUserEmail: "",
+  });
+  assert.equal(missingIdentity.status, 400);
+  assert.match(missingIdentity.body.error, /Git commit author name is required/);
+
+  const missingPrivateCredential = await request(app, "POST", "/api/vaults", {
+    ...validVaultPayload(), gitAuth: { mode: "https-token", username: "", token: "" },
+  });
+  assert.equal(missingPrivateCredential.status, 400);
+  assert.match(missingPrivateCredential.body.error, /Private repositories require an HTTPS username and token/);
+  assert.equal(vaultStorage.cloned.length, 0);
+  assert.deepEqual(secrets.saved, []);
+});
+
+test("private local imports also require an HTTPS credential for later sync", async () => {
+  const vaultStorage = fakeVaultStorage();
+  const app = createDashboardServer({
+    docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(),
+    anythingllm: { async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets: fakeSecrets(), env: {},
+  });
+
+  const response = await request(app, "POST", "/api/vaults", {
+    ...validVaultPayload(), sourceMode: "import", gitAuth: { mode: "https-token", username: "", token: "" },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(vaultStorage.imported.length, 0);
 });
 
 test("status returns classified system state and public config", async () => {
@@ -283,6 +322,9 @@ function validVaultPayload() {
     enabled: true,
     accessMode: "open",
     allowlist: [],
+    repositoryVisibility: "private",
+    gitUserName: "Work Bot",
+    gitUserEmail: "work@example.test",
     gitAuthMode: "https-token",
     gitAuth: { mode: "https-token", username: "oauth2", token: "work-secret" },
   };

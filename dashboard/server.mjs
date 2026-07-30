@@ -43,10 +43,15 @@ export function createDashboardServer({
       }
       if (req.method === "POST" && url.pathname === "/api/vaults") {
         const input = await readJsonBody(req);
-        const { gitAuth, sourceMode = "clone", workspaceMode = "create", ...request } = input;
+        const { gitAuth, repositoryVisibility, sourceMode = "clone", workspaceMode = "create", ...request } = input;
+        const validationError = validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, request });
+        if (validationError) return sendJson(res, 400, { error: validationError });
+        const effectiveGitAuth = repositoryVisibility === "public"
+          ? { mode: "none" }
+          : gitAuth;
         let discovered;
         if (sourceMode === "clone") {
-          discovered = await vaultStorage.clone({ ...request, gitAuth });
+          discovered = await vaultStorage.clone({ ...request, gitAuth: effectiveGitAuth });
         } else if (sourceMode === "import") {
           discovered = await vaultStorage.import(request);
         } else {
@@ -55,7 +60,7 @@ export function createDashboardServer({
         const vaultInput = {
           ...request,
           ...discovered,
-          gitAuthMode: gitAuth?.mode === "https-token" ? "https-token" : "none",
+          gitAuthMode: effectiveGitAuth?.mode === "https-token" ? "https-token" : "none",
         };
         let workspace;
         if (workspaceMode === "create") {
@@ -69,7 +74,7 @@ export function createDashboardServer({
           return sendJson(res, 400, { error: "workspaceMode must be create or attach" });
         }
         const vault = await registry.create({ ...vaultInput, workspaceSlug: workspace.slug });
-        await secrets.save(vault.id, gitAuth);
+        await secrets.save(vault.id, effectiveGitAuth);
         return sendJson(res, 201, vault);
       }
       if (req.method === "PATCH" && url.pathname.startsWith("/api/vaults/")) {
@@ -134,6 +139,18 @@ export function createDashboardServer({
       return sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
     }
   });
+}
+
+function validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, request }) {
+  if (!String(request.gitUserName ?? "").trim()) return "Git commit author name is required";
+  if (!String(request.gitUserEmail ?? "").trim()) return "Git commit email is required";
+  if (!['public', 'private'].includes(repositoryVisibility)) {
+    return "repositoryVisibility must be public or private";
+  }
+  if (repositoryVisibility === "private" && (!String(gitAuth?.username ?? "").trim() || !String(gitAuth?.token ?? "").trim())) {
+    return "Private repositories require an HTTPS username and token";
+  }
+  return "";
 }
 
 async function statusPayload({ docker, jobs, env, fetchImpl }) {

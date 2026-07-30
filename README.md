@@ -58,21 +58,21 @@ docker compose up -d --force-recreate dashboard mcp
 
 4. In the dashboard, select **Add vault**.
 
-Paste the repository's HTTP(S) clone URL. The dashboard clones it beneath
-`HOST_VAULTS_ROOT`, derives the vault name/id/directory, discovers `origin` and
-the checked-out default branch, and creates a matching AnythingLLM workspace.
-The normal Git sync and embedding policy is enabled with its safe defaults.
+The dialog asks for the repository's HTTP(S) clone URL, whether it is public or
+private, and the Git commit author name and email used for automatic sync
+commits. The dashboard clones it beneath `HOST_VAULTS_ROOT`, derives the vault
+name/id/directory, discovers `origin` and the checked-out default branch, and
+creates a matching AnythingLLM workspace. Git author details are required: the
+dashboard never invents an identity for commits made on your behalf.
 
-For a private HTTPS repository, select **Private HTTPS repository** and enter
-the provider-appropriate username and token (for example, a GitHub PAT with
+For a private HTTPS repository, select **Private repository** and enter the
+provider-appropriate username and token (for example, a GitHub PAT with
 `x-access-token`, or a GitLab token with its matching username). Each vault has
 an isolated credential record; no `.env` token is shared across vaults.
 
-Use the expanded settings only to override the derived identity, attach an
-existing workspace, or change sync, embedding, or access policy. **Import a
-local repository** remains available for an existing Git repository that is
-already a direct child of `HOST_VAULTS_ROOT`; it must have `origin` and a
-checked-out branch.
+New vaults use the normal workspace, sync, embedding, and access defaults.
+After adding a vault, use its **Edit** action to override its derived identity
+or change workspace, sync, embedding, or access policy.
 
 ## How vault management works
 
