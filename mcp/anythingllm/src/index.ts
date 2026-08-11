@@ -10,6 +10,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { z } from "zod";
 import { mcpHttpOptions } from "./http-config.js";
 import { loadVaults, resolveVault } from "./vault-registry.js";
+import { createVaultFileService } from "./vault-files.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +24,10 @@ const baseUrl = stripTrailingSlash(
 );
 const apiKey = process.env.ANYTHINGLLM_API_KEY;
 const vaultRegistryPath = process.env.VAULT_REGISTRY_PATH ?? "/workspace/.anything-obsidian-registry/vaults.json";
+const vaultsRoot = process.env.VAULTS_ROOT ?? "/vaults";
+const dashboardBaseUrl = stripTrailingSlash(
+  process.env.DASHBOARD_BASE_URL ?? `http://localhost:${process.env.HOST_DASHBOARD_PORT ?? "11300"}`,
+);
 const workspacesPath =
   process.env.ANYTHINGLLM_WORKSPACES_PATH ?? "/api/v1/workspaces";
 const chatPathTemplate =
@@ -33,6 +38,11 @@ const vectorSearchPathTemplate =
 const mcpPort = Number(process.env.MCP_PORT ?? process.env.HOST_MCP_PORT ?? 11333);
 const useHttp =
   process.argv.includes("--http") || process.env.MCP_TRANSPORT === "http";
+const vaultFiles = createVaultFileService({
+  vaultsRoot,
+  registryPath: vaultRegistryPath,
+  reindex: enqueueReindex,
+});
 
 function createServer() {
   const server = new McpServer({
@@ -46,6 +56,96 @@ function createServer() {
     {},
     async () => {
       return asJsonContent({ vaults: await loadVaults(vaultRegistryPath) });
+    },
+  );
+
+  server.tool(
+    "obsidian_list_files",
+    "List Markdown and Canvas files from one managed Obsidian vault. Paths are always vault-relative.",
+    {
+      vaultId: z.string().min(1).optional(),
+      path: z.string().optional(),
+      maxEntries: z.number().int().positive().max(1_000).optional(),
+    },
+    async (input) => asJsonContent(await vaultFiles.listFiles(input)),
+  );
+
+  server.tool(
+    "obsidian_read_file",
+    "Read a bounded line range from the source-of-truth Obsidian file and return its SHA-256 revision. Use the revision when writing a replacement or patch.",
+    {
+      vaultId: z.string().min(1).optional(),
+      path: z.string().min(1),
+      startLine: z.number().int().positive().optional(),
+      maxLines: z.number().int().positive().max(1_000).optional(),
+      maxBytes: z.number().int().positive().max(256 * 1024).optional(),
+    },
+    async (input) => asJsonContent(await vaultFiles.readFile(input)),
+  );
+
+  server.tool(
+    "obsidian_write_file",
+    "Create a small Markdown or Canvas file, or replace one only when expectedSha256 matches the current source file. Successful writes queue an incremental RAG reindex.",
+    {
+      vaultId: z.string().min(1).optional(),
+      path: z.string().min(1),
+      content: z.string(),
+      expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    },
+    async (input) => asJsonContent(await vaultFiles.writeFile(input)),
+  );
+
+  server.tool(
+    "obsidian_apply_patch",
+    "Replace one unique text fragment in a source-of-truth Obsidian file. This is the preferred update path for large files and requires the current SHA-256 revision.",
+    {
+      vaultId: z.string().min(1).optional(),
+      path: z.string().min(1),
+      expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
+      oldText: z.string().min(1),
+      newText: z.string(),
+    },
+    async (input) => asJsonContent(await vaultFiles.applyPatch(input)),
+  );
+
+  server.tool(
+    "obsidian_begin_upload",
+    "Begin a resumable upload for a new large Markdown or Canvas file. Append bounded base64 chunks, then finish the upload to atomically publish and reindex it.",
+    {
+      vaultId: z.string().min(1).optional(),
+      path: z.string().min(1),
+      expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    },
+    async (input) => asJsonContent(await vaultFiles.beginUpload(input)),
+  );
+
+  server.tool(
+    "obsidian_append_upload",
+    "Append one bounded, padded-base64 chunk to an Obsidian filesystem upload. This does not modify the vault or index until finish_upload succeeds.",
+    {
+      uploadId: z.string().uuid(),
+      contentBase64: z.string().min(1),
+    },
+    async (input) => asJsonContent(await vaultFiles.appendUpload(input)),
+  );
+
+  server.tool(
+    "obsidian_finish_upload",
+    "Atomically publish a completed Obsidian upload and queue one incremental RAG reindex.",
+    {
+      uploadId: z.string().uuid(),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    },
+    async (input) => asJsonContent(await vaultFiles.finishUpload(input)),
+  );
+
+  server.tool(
+    "obsidian_reindex",
+    "Queue an incremental RAG reindex for a managed vault after an out-of-band source-file change.",
+    { vaultId: z.string().min(1).optional() },
+    async ({ vaultId }) => {
+      const selected = resolveVault(await loadVaults(vaultRegistryPath), vaultId);
+      return asJsonContent({ vaultId: selected.id, reindex: await enqueueReindex(selected.id) });
     },
   );
 
@@ -123,6 +223,20 @@ async function requestJson(pathOrUrl: string, init: RequestInit) {
   }
 
   return data;
+}
+
+async function enqueueReindex(vaultId: string) {
+  const response = await fetch(
+    `${dashboardBaseUrl}/api/vaults/${encodeURIComponent(vaultId)}/actions/embed`,
+    { method: "POST", headers: { Accept: "application/json" } },
+  );
+  const text = await response.text();
+  const data = text ? parseJson(text) : null;
+  if (!response.ok) {
+    const detail = typeof data === "string" ? data : JSON.stringify(data);
+    throw new Error(`Dashboard reindex API ${response.status}: ${detail}`);
+  }
+  return { jobId: typeof data === "object" && data && "id" in data ? String(data.id) : undefined };
 }
 
 function parseJson(text: string) {

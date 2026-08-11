@@ -55,9 +55,6 @@ services:
       context: ./mcp/anythingllm
     container_name: anything-obsidian-mcp
     restart: unless-stopped
-    depends_on:
-      anythingllm:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3333/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -66,6 +63,8 @@ services:
     environment:
       ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
+      DASHBOARD_BASE_URL: http://dashboard:3000
+      VAULTS_ROOT: /vaults
       VAULT_REGISTRY_PATH: /workspace/.anything-obsidian-registry/vaults.json
       MCP_TRANSPORT: http
       MCP_PORT: "3333"
@@ -73,6 +72,7 @@ services:
       - "127.0.0.1:${HOST_MCP_PORT:-11333}:3333"
     volumes:
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry:ro
+      - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env to your vault parent directory}:/vaults
 
   syncer:
     build:

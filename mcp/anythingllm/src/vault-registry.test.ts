@@ -3,8 +3,8 @@ import test from "node:test";
 import { resolveVault, type VaultRecord } from "./vault-registry.js";
 
 const vaults: VaultRecord[] = [
-  { id: "work", name: "Work", workspaceSlug: "work", enabled: true, accessMode: "open", allowlist: [] },
-  { id: "personal", name: "Personal", workspaceSlug: "personal", enabled: true, accessMode: "open", allowlist: [] },
+  { id: "work", name: "Work", directory: "work", workspaceSlug: "work", enabled: true, accessMode: "open", allowlist: [] },
+  { id: "personal", name: "Personal", directory: "personal", workspaceSlug: "personal", enabled: true, accessMode: "open", allowlist: [] },
 ];
 
 test("requires a selector when multiple vaults are accessible", () => {

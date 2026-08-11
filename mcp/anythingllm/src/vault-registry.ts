@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 export type VaultRecord = {
   id: string;
   name: string;
+  directory: string;
   workspaceSlug: string;
   enabled: boolean;
   accessMode: "open" | "restricted";
@@ -43,7 +44,7 @@ function assertAccessible(vault: VaultRecord) {
 function isVaultRecord(value: unknown): value is VaultRecord {
   if (!value || typeof value !== "object") return false;
   const vault = value as Partial<VaultRecord>;
-  return typeof vault.id === "string" && typeof vault.name === "string" &&
+  return typeof vault.id === "string" && typeof vault.name === "string" && typeof vault.directory === "string" &&
     typeof vault.workspaceSlug === "string" && typeof vault.enabled === "boolean" &&
     (vault.accessMode === "open" || vault.accessMode === "restricted") && Array.isArray(vault.allowlist);
 }

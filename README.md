@@ -106,6 +106,33 @@ take an optional `vaultId`; it is inferred only when exactly one open vault is
 available. With several accessible vaults, callers must specify a vault id, so
 MCP never silently searches across vaults.
 
+### Source-of-truth Obsidian tools
+
+The same MCP endpoint also reads and writes the managed vault source files,
+independently of the derived AnythingLLM index:
+
+- `obsidian_list_files` lists vault-relative `.md` and `.canvas` files.
+- `obsidian_read_file` reads a bounded line range and returns its SHA-256
+  revision.
+- `obsidian_write_file` creates a small file or replaces one only when its
+  `expectedSha256` matches. For existing large notes, use
+  `obsidian_apply_patch` with one unique `oldText` fragment instead of sending
+  the full file through MCP.
+- `obsidian_begin_upload`, `obsidian_append_upload`, and
+  `obsidian_finish_upload` provide resumable, 128 KiB base64 chunks for a new
+  large source file. The upload is invisible until it finishes atomically.
+- `obsidian_reindex` queues an incremental index update after an out-of-band
+  change. Successful writes and finished uploads queue the same update
+  automatically.
+
+The filesystem tools accept a vault id and a vault-relative path only; they do
+not accept host paths, `..`, symlinks, or `.git` access. They currently support
+UTF-8 Markdown and Canvas files, not binary attachments. A source write can
+succeed while its asynchronous reindex cannot be queued (for example while
+AnythingLLM is down); the tool reports that state explicitly, and
+`obsidian_reindex` can be retried later. These tools do not commit or push Git
+changes.
+
 ## Operations
 
 The dashboard is the normal interface for vault creation, import, vault-scoped
