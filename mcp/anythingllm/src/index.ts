@@ -51,7 +51,7 @@ function createServer() {
   });
 
   server.tool(
-    "anythingllm_vaults",
+    "obsidian_vault_list",
     "List managed vaults visible to MCP. Restricted vault policies are shown but are not enforced until caller identity exists.",
     {},
     async () => {
@@ -60,7 +60,7 @@ function createServer() {
   );
 
   server.tool(
-    "obsidian_list_files",
+    "obsidian_file_list",
     "List Markdown and Canvas files from one managed Obsidian vault. Paths are always vault-relative.",
     {
       vaultId: z.string().min(1).optional(),
@@ -71,7 +71,7 @@ function createServer() {
   );
 
   server.tool(
-    "obsidian_read_file",
+    "obsidian_file_read",
     "Read a bounded line range from the source-of-truth Obsidian file and return its SHA-256 revision. Use the revision when writing a replacement or patch.",
     {
       vaultId: z.string().min(1).optional(),
@@ -84,7 +84,7 @@ function createServer() {
   );
 
   server.tool(
-    "obsidian_write_file",
+    "obsidian_file_write",
     "Create a small Markdown or Canvas file, or replace one only when expectedSha256 matches the current source file. Successful writes queue an incremental RAG reindex.",
     {
       vaultId: z.string().min(1).optional(),
@@ -96,7 +96,7 @@ function createServer() {
   );
 
   server.tool(
-    "obsidian_apply_patch",
+    "obsidian_file_patch",
     "Replace one unique text fragment in a source-of-truth Obsidian file. This is the preferred update path for large files and requires the current SHA-256 revision.",
     {
       vaultId: z.string().min(1).optional(),
@@ -109,8 +109,8 @@ function createServer() {
   );
 
   server.tool(
-    "obsidian_begin_upload",
-    "Begin a resumable upload for a new large Markdown or Canvas file. Append bounded base64 chunks, then finish the upload to atomically publish and reindex it.",
+    "obsidian_file_upload_begin",
+    "Begin a resumable upload for a new large Markdown or Canvas file. Append bounded base64 chunks, then complete the upload to atomically publish and reindex it.",
     {
       vaultId: z.string().min(1).optional(),
       path: z.string().min(1),
@@ -120,8 +120,8 @@ function createServer() {
   );
 
   server.tool(
-    "obsidian_append_upload",
-    "Append one bounded, padded-base64 chunk to an Obsidian filesystem upload. This does not modify the vault or index until finish_upload succeeds.",
+    "obsidian_file_upload_append",
+    "Append one bounded, padded-base64 chunk to an Obsidian file upload. This does not modify the vault or index until obsidian_file_upload_complete succeeds.",
     {
       uploadId: z.string().uuid(),
       contentBase64: z.string().min(1),
@@ -130,7 +130,7 @@ function createServer() {
   );
 
   server.tool(
-    "obsidian_finish_upload",
+    "obsidian_file_upload_complete",
     "Atomically publish a completed Obsidian upload and queue one incremental RAG reindex.",
     {
       uploadId: z.string().uuid(),
@@ -140,7 +140,7 @@ function createServer() {
   );
 
   server.tool(
-    "obsidian_reindex",
+    "anythingllm_reindex",
     "Queue an incremental RAG reindex for a managed vault after an out-of-band source-file change.",
     { vaultId: z.string().min(1).optional() },
     async ({ vaultId }) => {
@@ -150,8 +150,8 @@ function createServer() {
   );
 
   server.tool(
-    "anythingllm_query",
-    "Ask AnythingLLM to answer from one managed vault. Prefer anythingllm_vector_search when an agent needs source chunks.",
+    "anythingllm_answer",
+    "Ask AnythingLLM to answer from one managed vault. Prefer anythingllm_search_chunks when an agent needs source chunks.",
     {
       question: z.string().min(1),
       vaultId: z.string().min(1).optional(),
@@ -170,7 +170,7 @@ function createServer() {
   );
 
   server.tool(
-    "anythingllm_vector_search",
+    "anythingllm_search_chunks",
     "Search one managed vault vector index and return matching source chunks. Prefer this for agent RAG.",
     {
       query: z.string().min(1),

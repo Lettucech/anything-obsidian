@@ -64,11 +64,11 @@ workers always resolve those policies from the selected vault id.
 
 ## Tools
 
-- `anythingllm_vaults`: list managed vaults.
-- `anythingllm_vector_search`: search one vault's vector index directly.
-- `anythingllm_query`: ask AnythingLLM about one vault.
+- `obsidian_vault_list`: list managed Obsidian vaults.
+- `anythingllm_search_chunks`: search one vault's derived index and return source chunks.
+- `anythingllm_answer`: ask AnythingLLM to answer from one vault.
 
 The tools accept an optional `vaultId`; omit it only when there is exactly one
-accessible vault, otherwise callers must specify it. Use `anythingllm_vector_search` when the
-agent should inspect source chunks and reason itself. Use `anythingllm_query`
+accessible vault, otherwise callers must specify it. Use `anythingllm_search_chunks` when the
+agent should inspect source chunks and reason itself. Use `anythingllm_answer`
 only when you want AnythingLLM to produce the answer itself.
