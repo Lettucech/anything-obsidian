@@ -43,27 +43,35 @@ vaults. Open the dashboard at `http://localhost:11300`.
 
 3. Finish the one-time AnythingLLM setup at `http://localhost:11301`.
 
-Configure the model and embedder, then create an AnythingLLM API key. Save it
-locally in `.env`:
+Configure the model and embedder, then create a developer API key in
+**Settings → Developer API**. Copy it into your local `.env` (never commit this
+file):
 
 ```text
 ANYTHINGLLM_API_KEY=your-api-key-here
 ```
 
-Recreate the dashboard and MCP so they receive the key:
+Recreate the dashboard and MCP so they receive the key. Repeat this whenever
+you replace or revoke the key:
 
 ```bash
 docker compose up -d --force-recreate dashboard mcp
 ```
 
+Until the dashboard can verify this key, it shows only this setup guidance and
+a link back to AnythingLLM; vault management does not open.
+
 4. In the dashboard, select **Add vault**.
 
 The dialog asks for the repository's HTTP(S) clone URL, whether it is public or
 private, and the Git commit author name and email used for automatic sync
-commits. The dashboard clones it beneath `HOST_VAULTS_ROOT`, derives the vault
-name/id/directory, discovers `origin` and the checked-out default branch, and
-creates a matching AnythingLLM workspace. Git author details are required: the
-dashboard never invents an identity for commits made on your behalf.
+commits. Use **Test connection** to check both Git access and the configured
+AnythingLLM API key before any repository or dashboard state is created. On
+add, the dashboard checks the AnythingLLM connection before cloning beneath
+`HOST_VAULTS_ROOT`, derives the vault name/id/directory, discovers `origin` and
+the checked-out default branch, and creates a matching AnythingLLM workspace.
+Git author details are required: the dashboard never invents an identity for
+commits made on your behalf.
 
 For a private HTTPS repository, select **Private repository** and enter the
 provider-appropriate username and token (for example, a GitHub PAT with

@@ -11,6 +11,14 @@ export function createVaultStorage({ registry, runGit = runGitDefault } = {}) {
   if (!registry) throw new Error("registry is required");
 
   return {
+    async testConnection(input) {
+      const repositoryUrl = requiredRepositoryUrl(input.repositoryUrl);
+      try {
+        await runGit(["ls-remote", "--heads", repositoryUrl], dashboardRoot, gitEnv(input.gitAuth));
+      } catch (error) {
+        throw new Error(`Could not access '${repositoryUrl}': ${message(error)}`);
+      }
+    },
     async clone(input) {
       const repositoryUrl = requiredRepositoryUrl(input.repositoryUrl);
       const identity = vaultIdentity(input, repositoryUrl);

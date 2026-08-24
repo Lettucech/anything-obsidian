@@ -45,3 +45,26 @@ test("clones an HTTPS repository and discovers its origin and default branch", a
     /HTTP\(S\) Git URL/,
   );
 });
+
+test("tests HTTPS repository access without creating a vault directory", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vaults-"));
+  const registry = createVaultRegistry({ rootPath: root, registryPath: path.join(root, "registry.json") });
+  const commands = [];
+  const storage = createVaultStorage({
+    registry,
+    runGit: async (args, cwd, env) => {
+      commands.push({ args, cwd, env });
+      return "abc\tHEAD\n";
+    },
+  });
+
+  await storage.testConnection({
+    repositoryUrl: "https://github.com/acme/work-notes.git",
+    gitAuth: { mode: "https-token", username: "x-access-token", token: "secret" },
+  });
+
+  assert.deepEqual(commands.map(({ args }) => args), [
+    ["ls-remote", "--heads", "https://github.com/acme/work-notes.git"],
+  ]);
+  assert.equal(commands[0].env.GIT_PASSWORD, "secret");
+});

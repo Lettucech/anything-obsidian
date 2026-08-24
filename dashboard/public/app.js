@@ -49,11 +49,11 @@ export function actionDisabledReason(actionId, status, vaultId) {
 }
 
 if (typeof document !== "undefined") {
-  const state = { status: null, vaults: [], editingId: null };
+  const state = { status: null, vaults: [], editingId: null, createdVaultId: null };
   const els = Object.fromEntries([
     "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
-    "clone-url-field", "workspace-slug-field", "allowlist-field", "vault-submit", "private-auth-fields", "edit-settings", "add-vault-note",
+    "clone-url-field", "workspace-slug-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
     "add-vault-inline", "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
   ].map((id) => [id.replaceAll("-", ""), document.querySelector(`#${id}`)]));
 
@@ -75,8 +75,9 @@ if (typeof document !== "undefined") {
   els.cancelvault.addEventListener("click", hideForm);
   els.vaults.addEventListener("click", handleVaultAction);
   els.vaultform.addEventListener("submit", saveVault);
+  els.testvaultconnection.addEventListener("click", testVaultConnection);
   els.vaultform.addEventListener("change", syncFormControls);
-  els.vaultdialog.addEventListener("close", () => { state.editingId = null; });
+  els.vaultdialog.addEventListener("close", () => { state.editingId = null; state.createdVaultId = null; });
 
   async function handleVaultAction(event) {
     const button = event.target.closest("button[data-vault-id], button[data-dashboard-action]");
@@ -97,10 +98,13 @@ if (typeof document !== "undefined") {
 
   async function saveVault(event) {
     event.preventDefault();
+    const editing = Boolean(state.editingId);
     const form = new FormData(els.vaultform);
     const input = formInput(form);
+    setDialogMessage(editing ? "Saving vault…" : "Checking connection and adding vault…");
+    setVaultFormBusy(true);
     try {
-      if (state.editingId) {
+      if (editing) {
         delete input.id; delete input.directory; delete input.sourceMode; delete input.repositoryUrl;
         delete input.repositoryVisibility; delete input.workspaceMode; delete input.workspaceSlug;
         if (!input.gitAuth.token) delete input.gitAuth;
@@ -109,12 +113,41 @@ if (typeof document !== "undefined") {
         message(`Vault '${saved.id}' saved.`);
       } else {
         const saved = await request("/api/vaults", { method: "POST", body: JSON.stringify(input) });
-        hideForm();
-        message(`Vault '${saved.id}' added.`);
+        state.createdVaultId = saved.id;
+        setDialogMessage(`Vault '${saved.id}' added.`);
       }
       await refresh();
+      if (!editing) syncFormControls();
     } catch (error) {
-      message(error.message, true);
+      setDialogMessage(error.message, true);
+    } finally {
+      setVaultFormBusy(false);
+    }
+  }
+
+  async function testVaultConnection() {
+    const form = els.vaultform;
+    const repositoryUrl = form.elements.repositoryUrl;
+    const privateRepository = form.elements.repositoryVisibility.value === "private";
+    const credentialFields = [form.elements.gitAuthUsername, form.elements.gitAuthToken];
+    if (!repositoryUrl.reportValidity() || (privateRepository && credentialFields.some((field) => !field.reportValidity()))) return;
+    const input = formInput(new FormData(form));
+    setDialogMessage("Testing Git and AnythingLLM connection…");
+    setVaultFormBusy(true);
+    try {
+      await request("/api/vaults/test-connection", {
+        method: "POST",
+        body: JSON.stringify({
+          repositoryUrl: input.repositoryUrl,
+          repositoryVisibility: input.repositoryVisibility,
+          gitAuth: input.gitAuth,
+        }),
+      });
+      setDialogMessage("Connection verified. Ready to add this vault.");
+    } catch (error) {
+      setDialogMessage(error.message, true);
+    } finally {
+      setVaultFormBusy(false);
     }
   }
 
@@ -137,6 +170,7 @@ if (typeof document !== "undefined") {
 
   function showForm(vault) {
     state.editingId = vault?.id || null;
+    state.createdVaultId = null;
     els.vaultform.reset();
     if (vault) Object.entries(vault).forEach(([key, value]) => {
       const field = els.vaultform.elements.namedItem(key);
@@ -149,6 +183,7 @@ if (typeof document !== "undefined") {
       const field = els.vaultform.elements.namedItem(name); if (field) field.disabled = Boolean(vault);
     }
     els.vaultformtitle.textContent = vault ? `Edit ${vault.name}` : "Add vault";
+    setDialogMessage("");
     syncFormControls();
     els.vaultdialog.showModal();
   }
@@ -156,6 +191,7 @@ if (typeof document !== "undefined") {
   function syncFormControls() {
     const form = els.vaultform;
     const editing = Boolean(state.editingId);
+    const completed = Boolean(state.createdVaultId);
     const privateRepository = form.elements.repositoryVisibility.value === "private";
     const attachWorkspace = form.elements.workspaceMode.value === "attach";
     const restricted = form.elements.accessMode.value === "restricted";
@@ -171,6 +207,9 @@ if (typeof document !== "undefined") {
     form.elements.workspaceSlug.required = attachWorkspace && !editing;
     els.allowlistfield.hidden = !restricted;
     els.vaultsubmit.textContent = editing ? "Save vault" : "Clone and add vault";
+    els.vaultsubmit.hidden = completed;
+    els.testvaultconnection.hidden = editing || completed;
+    els.cancelvault.textContent = completed ? "Done" : "Cancel";
   }
 
   function applyTheme(next) {
@@ -183,8 +222,14 @@ if (typeof document !== "undefined") {
     els.themetoggle.title = `Switch to ${switchingTo} theme`;
   }
 
-  function hideForm() { state.editingId = null; els.vaultdialog.close(); }
+  function hideForm() { state.editingId = null; state.createdVaultId = null; els.vaultdialog.close(); }
   function message(text, error = false) { els.vaultmessage.textContent = text; els.vaultmessage.className = error ? "message error" : "message"; }
+  function setDialogMessage(text, error = false) { els.vaultdialogmessage.textContent = text; els.vaultdialogmessage.className = error ? "message dialog-message error" : "message dialog-message"; }
+  function setVaultFormBusy(busy) {
+    const completed = Boolean(state.createdVaultId);
+    els.vaultsubmit.disabled = busy || completed;
+    els.testvaultconnection.disabled = busy || completed;
+  }
 
   async function refresh() {
     try {

@@ -22,6 +22,13 @@ The registry therefore stops manufacturing default Git author values for new
 records. Per-vault credentials remain in the secret store and never appear in
 API responses or registry metadata.
 
+The dialog owns the full onboarding status: connection checks, clone progress,
+and creation errors appear inside it, retaining entered values for correction.
+**Test connection** verifies the repository with the selected HTTPS credential
+and the AnythingLLM API key without cloning, creating a workspace, or saving a
+vault record. Vault creation checks AnythingLLM before it clones so an invalid
+API key does not leave a newly cloned but unmanaged repository.
+
 ## Non-goals
 
 This does not add SSH authentication, alter existing stored credentials during

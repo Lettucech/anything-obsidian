@@ -7,6 +7,7 @@ import { createDashboardServer } from "./server.mjs";
 test("vault routes clone a repository and create its managed workspace", async () => {
   const registry = fakeRegistry();
   const anythingllm = {
+    async listWorkspaces() { return []; },
     async createWorkspace({ name }) {
       assert.equal(name, "Work");
       return { id: 1, name, slug: "work" };
@@ -54,7 +55,7 @@ test("vault creation requires an explicit automatic-commit identity and private 
   const secrets = fakeSecrets();
   const app = createDashboardServer({
     docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(),
-    anythingllm: { async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets, env: {},
+    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets, env: {},
   });
 
   const missingIdentity = await request(app, "POST", "/api/vaults", {
@@ -76,7 +77,7 @@ test("private local imports also require an HTTPS credential for later sync", as
   const vaultStorage = fakeVaultStorage();
   const app = createDashboardServer({
     docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(),
-    anythingllm: { async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets: fakeSecrets(), env: {},
+    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets: fakeSecrets(), env: {},
   });
 
   const response = await request(app, "POST", "/api/vaults", {
@@ -85,6 +86,40 @@ test("private local imports also require an HTTPS credential for later sync", as
 
   assert.equal(response.status, 400);
   assert.equal(vaultStorage.imported.length, 0);
+});
+
+test("vault creation checks AnythingLLM before cloning", async () => {
+  const vaultStorage = fakeVaultStorage();
+  const app = createDashboardServer({
+    docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(), vaultStorage, secrets: fakeSecrets(), env: {},
+    anythingllm: {
+      async listWorkspaces() { throw new Error("AnythingLLM API 403"); },
+      async createWorkspace() { throw new Error("should not create a workspace"); },
+    },
+  });
+
+  const response = await request(app, "POST", "/api/vaults", validVaultPayload());
+
+  assert.equal(response.status, 500);
+  assert.match(response.body.error, /rejected the dashboard API key/);
+  assert.deepEqual(vaultStorage.cloned, []);
+});
+
+test("test connection validates Git and AnythingLLM without cloning or saving a vault", async () => {
+  const vaultStorage = fakeVaultStorage();
+  const registry = fakeRegistry();
+  const anythingllm = { async listWorkspaces() { return []; } };
+  const app = createDashboardServer({
+    docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage, secrets: fakeSecrets(), env: {},
+  });
+
+  const response = await request(app, "POST", "/api/vaults/test-connection", validVaultPayload());
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { git: { ok: true }, anythingllm: { ok: true } });
+  assert.equal(vaultStorage.connectionTests.length, 1);
+  assert.deepEqual(vaultStorage.cloned, []);
+  assert.deepEqual(await registry.list(), []);
 });
 
 test("status returns classified system state and public config", async () => {
@@ -110,6 +145,32 @@ test("status returns classified system state and public config", async () => {
   assert.equal(response.body.services.find((service) => service.id === "syncer").health.ok, true);
   assert.equal(healthRequests.some((request) => request.url === "http://mcp:3333/health"), true);
   assert.equal(response.body.config.dashboardUrl, "http://localhost:11300");
+});
+
+test("dashboard root serves the management UI only after the AnythingLLM key is verified", async () => {
+  const app = createDashboardServer({
+    docker: fakeDocker(), jobs: fakeJobs(), env: {},
+    anythingllm: { async listWorkspaces() { return []; } },
+  });
+
+  const response = await requestText(app, "/");
+
+  assert.equal(response.status, 200);
+  assert.match(response.body, /id="vault-dialog"/);
+});
+
+test("dashboard root serves a setup guide when the AnythingLLM key is invalid", async () => {
+  const app = createDashboardServer({
+    docker: fakeDocker(), jobs: fakeJobs(), env: { HOST_ANYTHINGLLM_PORT: "11401" },
+    anythingllm: { async listWorkspaces() { throw new Error("AnythingLLM API 403"); } },
+  });
+
+  const response = await requestText(app, "/");
+
+  assert.equal(response.status, 200);
+  assert.match(response.body, /AnythingLLM setup required/);
+  assert.match(response.body, /http:\/\/localhost:11401/);
+  assert.doesNotMatch(response.body, /id="vault-dialog"/);
 });
 
 test("system off stops all services concurrently", async () => {
@@ -292,6 +353,10 @@ function fakeVaultStorage() {
   return {
     cloned: [],
     imported: [],
+    connectionTests: [],
+    async testConnection(input) {
+      this.connectionTests.push(input);
+    },
     async clone(input) {
       this.cloned.push(input);
       return {
@@ -362,6 +427,32 @@ async function request(server, method, path, body) {
       return res;
     };
 
+    server.emit("request", req, res);
+  });
+}
+
+async function requestText(server, path) {
+  return await new Promise((resolve) => {
+    const chunks = [];
+    const req = new Readable({ read() { this.push(null); } });
+    req.method = "GET";
+    req.url = path;
+    const res = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    });
+    res.writeHead = (status, headers) => {
+      res.statusCode = status;
+      res.headers = headers;
+      return res;
+    };
+    res.end = (chunk) => {
+      if (chunk) chunks.push(Buffer.from(chunk));
+      resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString("utf8") });
+      return res;
+    };
     server.emit("request", req, res);
   });
 }

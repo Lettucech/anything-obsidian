@@ -38,19 +38,31 @@ export function createDashboardServer({
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://localhost");
+      if (req.method === "GET" && url.pathname === "/") {
+        if (await dashboardReady(anythingllm)) return await serveStatic(res, url.pathname);
+        return sendHtml(res, 200, dashboardSetupPage(publicConfig(env).anythingllmUrl));
+      }
       if (req.method === "GET" && url.pathname === "/api/vaults") {
         return sendJson(res, 200, { vaults: await registry.list() });
+      }
+      if (req.method === "POST" && url.pathname === "/api/vaults/test-connection") {
+        const input = await readJsonBody(req);
+        const { gitAuth, repositoryVisibility, repositoryUrl } = input;
+        const validationError = validateRepositoryConnection({ repositoryVisibility, gitAuth });
+        if (validationError) return sendJson(res, 400, { error: validationError });
+        await testVaultConnection({ vaultStorage, anythingllm, repositoryUrl, gitAuth: gitAuthForVisibility(repositoryVisibility, gitAuth) });
+        return sendJson(res, 200, { git: { ok: true }, anythingllm: { ok: true } });
       }
       if (req.method === "POST" && url.pathname === "/api/vaults") {
         const input = await readJsonBody(req);
         const { gitAuth, repositoryVisibility, sourceMode = "clone", workspaceMode = "create", ...request } = input;
         const validationError = validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, request });
         if (validationError) return sendJson(res, 400, { error: validationError });
-        const effectiveGitAuth = repositoryVisibility === "public"
-          ? { mode: "none" }
-          : gitAuth;
+        const effectiveGitAuth = gitAuthForVisibility(repositoryVisibility, gitAuth);
+        await verifyAnythingllmConnection(anythingllm);
         let discovered;
         if (sourceMode === "clone") {
+          await vaultStorage.testConnection({ repositoryUrl: request.repositoryUrl, gitAuth: effectiveGitAuth });
           discovered = await vaultStorage.clone({ ...request, gitAuth: effectiveGitAuth });
         } else if (sourceMode === "import") {
           discovered = await vaultStorage.import(request);
@@ -144,6 +156,10 @@ export function createDashboardServer({
 function validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, request }) {
   if (!String(request.gitUserName ?? "").trim()) return "Git commit author name is required";
   if (!String(request.gitUserEmail ?? "").trim()) return "Git commit email is required";
+  return validateRepositoryConnection({ repositoryVisibility, gitAuth });
+}
+
+function validateRepositoryConnection({ repositoryVisibility, gitAuth }) {
   if (!['public', 'private'].includes(repositoryVisibility)) {
     return "repositoryVisibility must be public or private";
   }
@@ -151,6 +167,36 @@ function validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, requ
     return "Private repositories require an HTTPS username and token";
   }
   return "";
+}
+
+function gitAuthForVisibility(repositoryVisibility, gitAuth) {
+  return repositoryVisibility === "public" ? { mode: "none" } : gitAuth;
+}
+
+async function testVaultConnection({ vaultStorage, anythingllm, repositoryUrl, gitAuth }) {
+  await vaultStorage.testConnection({ repositoryUrl, gitAuth });
+  await verifyAnythingllmConnection(anythingllm);
+}
+
+async function verifyAnythingllmConnection(anythingllm) {
+  try {
+    await anythingllm.listWorkspaces();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/AnythingLLM API (401|403)/.test(detail)) {
+      throw new Error("AnythingLLM rejected the dashboard API key. Add a valid ANYTHINGLLM_API_KEY to .env, then recreate the dashboard.");
+    }
+    throw error;
+  }
+}
+
+async function dashboardReady(anythingllm) {
+  try {
+    await verifyAnythingllmConnection(anythingllm);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function statusPayload({ docker, jobs, env, fetchImpl }) {
@@ -213,6 +259,50 @@ function contentType(file) {
 function sendJson(res, status, body) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
+}
+
+function sendHtml(res, status, body) {
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8" });
+  res.end(body);
+}
+
+function dashboardSetupPage(anythingllmUrl) {
+  const anythingllm = escapeHtml(anythingllmUrl);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111a2b" />
+    <title>Anything Obsidian setup</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #111a2b; color: #f6f8ff; }
+      body { display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 24px; box-sizing: border-box; }
+      main { width: min(620px, 100%); padding: clamp(28px, 6vw, 52px); border: 1px solid #314260; border-radius: 20px; background: #18243a; box-shadow: 0 28px 80px rgb(0 0 0 / 28%); }
+      p { color: #b8c4d9; line-height: 1.6; } ol { padding-left: 1.3rem; color: #dce5f5; line-height: 1.8; } code { padding: .15rem .35rem; border-radius: 5px; background: #0e1728; } a { display: inline-block; margin-top: 12px; border-radius: 9px; padding: 10px 14px; color: #07111e; background: #92d8ff; font-weight: 700; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p>Anything Obsidian</p>
+      <h1>AnythingLLM setup required</h1>
+      <p>The dashboard could not verify a valid <code>ANYTHINGLLM_API_KEY</code>, so vault management is unavailable until setup is complete.</p>
+      <ol>
+        <li>Open AnythingLLM and finish its initial setup.</li>
+        <li>Go to <strong>Settings → Developer API</strong> and create an API key.</li>
+        <li>Save it in this project's <code>.env</code> as <code>ANYTHINGLLM_API_KEY=...</code>.</li>
+        <li>Run <code>docker compose up -d --force-recreate dashboard mcp</code>, then refresh this page.</li>
+      </ol>
+      <a href="${anythingllm}" target="_blank" rel="noreferrer">Open AnythingLLM</a>
+    </main>
+  </body>
+</html>`;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
+  })[character]);
 }
 
 async function readJsonBody(req) {

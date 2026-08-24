@@ -274,6 +274,7 @@ dialog form { padding: clamp(22px, 4vw, 34px); }
 .advanced-settings summary { color: var(--blue); cursor: pointer; font-size: 0.87rem; font-weight: 720; }
 .advanced-settings[open] summary { margin-bottom: 15px; }
 .form-actions { display: flex; justify-content: end; gap: 8px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
+.dialog-message { margin: 0; }
 
 @media (max-width: 900px) {
   .hero, .dashboard-grid { grid-template-columns: 1fr; }
