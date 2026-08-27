@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { timingSafeEqual } from "node:crypto";
 import process from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,49 +20,42 @@ const repoRoot = path.resolve(__dirname, "../../..");
 loadEnv({ path: path.join(repoRoot, ".env") });
 
 const baseUrl = stripTrailingSlash(
-  process.env.ANYTHINGLLM_BASE_URL ??
-    `http://localhost:${process.env.HOST_ANYTHINGLLM_PORT ?? "11301"}`,
+  process.env.ANYTHINGLLM_BASE_URL ?? `http://localhost:${process.env.HOST_ANYTHINGLLM_PORT ?? "11301"}`,
 );
 const apiKey = process.env.ANYTHINGLLM_API_KEY;
 const vaultRegistryPath = process.env.VAULT_REGISTRY_PATH ?? "/workspace/.anything-obsidian-registry/vaults.json";
 const vaultsRoot = process.env.VAULTS_ROOT ?? "/vaults";
-const dashboardBaseUrl = stripTrailingSlash(
-  process.env.DASHBOARD_BASE_URL ?? `http://localhost:${process.env.HOST_DASHBOARD_PORT ?? "11300"}`,
-);
-const workspacesPath =
-  process.env.ANYTHINGLLM_WORKSPACES_PATH ?? "/api/v1/workspaces";
-const chatPathTemplate =
-  process.env.ANYTHINGLLM_CHAT_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/chat";
-const vectorSearchPathTemplate =
-  process.env.ANYTHINGLLM_VECTOR_SEARCH_PATH_TEMPLATE ??
-  "/api/v1/workspace/{slug}/vector-search";
+const workspacesPath = process.env.ANYTHINGLLM_WORKSPACES_PATH ?? "/api/v1/workspaces";
+const chatPathTemplate = process.env.ANYTHINGLLM_CHAT_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/chat";
+const vectorSearchPathTemplate = process.env.ANYTHINGLLM_VECTOR_SEARCH_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/vector-search";
 const mcpPort = Number(process.env.MCP_PORT ?? process.env.HOST_MCP_PORT ?? 11333);
-const useHttp =
-  process.argv.includes("--http") || process.env.MCP_TRANSPORT === "http";
 const vaultFiles = createVaultFileService({
   vaultsRoot,
   registryPath: vaultRegistryPath,
-  reindex: enqueueReindex,
+  hostVaultsRoot: process.env.HOST_VAULTS_ROOT,
 });
 
-function createServer() {
-  const server = new McpServer({
-    name: "anything-obsidian",
-    version: "0.1.0",
-  });
+export type McpProfile = "local" | "lan";
+
+export function createServer(profile: McpProfile = "local") {
+  const server = new McpServer({ name: "anything-obsidian", version: "0.2.0" });
 
   server.tool(
     "obsidian_vault_list",
-    "List managed vaults visible to MCP. Restricted vault policies are shown but are not enforced until caller identity exists.",
+    "List managed vault ids and names for MCP selection. No repository, Git, or filesystem details are returned.",
     {},
-    async () => {
-      return asJsonContent({ vaults: await loadVaults(vaultRegistryPath) });
-    },
+    async () => asJsonContent({ vaults: await safeVaultList() }),
   );
 
+  if (profile === "local") registerLocalVaultTools(server);
+  registerRagTools(server);
+  return server;
+}
+
+function registerLocalVaultTools(server: McpServer) {
   server.tool(
     "obsidian_file_list",
-    "List Markdown and Canvas files from one managed Obsidian vault. Paths are always vault-relative.",
+    "List Markdown and Canvas files from one managed Obsidian vault. Paths are vault-relative and this tool is read-only.",
     {
       vaultId: z.string().min(1).optional(),
       path: z.string().optional(),
@@ -72,7 +66,7 @@ function createServer() {
 
   server.tool(
     "obsidian_file_read",
-    "Read a bounded line range from the source-of-truth Obsidian file and return its SHA-256 revision. Use the revision when writing a replacement or patch.",
+    "Read a bounded line range from a source-of-truth Obsidian file. This tool is read-only.",
     {
       vaultId: z.string().min(1).optional(),
       path: z.string().min(1),
@@ -84,71 +78,14 @@ function createServer() {
   );
 
   server.tool(
-    "obsidian_file_write",
-    "Create a small Markdown or Canvas file, or replace one only when expectedSha256 matches the current source file. Successful writes queue an incremental RAG reindex.",
-    {
-      vaultId: z.string().min(1).optional(),
-      path: z.string().min(1),
-      content: z.string(),
-      expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-    },
-    async (input) => asJsonContent(await vaultFiles.writeFile(input)),
-  );
-
-  server.tool(
-    "obsidian_file_patch",
-    "Replace one unique text fragment in a source-of-truth Obsidian file. This is the preferred update path for large files and requires the current SHA-256 revision.",
-    {
-      vaultId: z.string().min(1).optional(),
-      path: z.string().min(1),
-      expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
-      oldText: z.string().min(1),
-      newText: z.string(),
-    },
-    async (input) => asJsonContent(await vaultFiles.applyPatch(input)),
-  );
-
-  server.tool(
-    "obsidian_file_upload_begin",
-    "Begin a resumable upload for a new large Markdown or Canvas file. Append bounded base64 chunks, then complete the upload to atomically publish and reindex it.",
-    {
-      vaultId: z.string().min(1).optional(),
-      path: z.string().min(1),
-      expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-    },
-    async (input) => asJsonContent(await vaultFiles.beginUpload(input)),
-  );
-
-  server.tool(
-    "obsidian_file_upload_append",
-    "Append one bounded, padded-base64 chunk to an Obsidian file upload. This does not modify the vault or index until obsidian_file_upload_complete succeeds.",
-    {
-      uploadId: z.string().uuid(),
-      contentBase64: z.string().min(1),
-    },
-    async (input) => asJsonContent(await vaultFiles.appendUpload(input)),
-  );
-
-  server.tool(
-    "obsidian_file_upload_complete",
-    "Atomically publish a completed Obsidian upload and queue one incremental RAG reindex.",
-    {
-      uploadId: z.string().uuid(),
-      sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-    },
-    async (input) => asJsonContent(await vaultFiles.finishUpload(input)),
-  );
-
-  server.tool(
-    "anythingllm_reindex",
-    "Queue an incremental RAG reindex for a managed vault after an out-of-band source-file change.",
+    "obsidian_vault_directory",
+    "Return the configured host directory for one managed vault. This tool is local-only so an agent can open the vault directly when it has local filesystem authority.",
     { vaultId: z.string().min(1).optional() },
-    async ({ vaultId }) => {
-      const selected = resolveVault(await loadVaults(vaultRegistryPath), vaultId);
-      return asJsonContent({ vaultId: selected.id, reindex: await enqueueReindex(selected.id) });
-    },
+    async (input) => asJsonContent(await vaultFiles.directory(input)),
   );
+}
 
+function registerRagTools(server: McpServer) {
   server.tool(
     "anythingllm_answer",
     "Ask AnythingLLM to answer from one managed vault. Prefer anythingllm_search_chunks when an agent needs source chunks.",
@@ -159,9 +96,7 @@ function createServer() {
     },
     async ({ question, vaultId, mode }) => {
       const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId);
-      const slug = encodeURIComponent(vault.workspaceSlug);
-      const apiPath = chatPathTemplate.replace("{slug}", slug);
-      const data = await requestJson(apiPath, {
+      const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(vault.workspaceSlug)), {
         method: "POST",
         body: JSON.stringify({ message: question, mode }),
       });
@@ -180,30 +115,24 @@ function createServer() {
     },
     async ({ query, vaultId, topN, scoreThreshold }) => {
       const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId);
-      const slug = encodeURIComponent(vault.workspaceSlug);
-      const apiPath = vectorSearchPathTemplate.replace("{slug}", slug);
-      const data = await requestJson(apiPath, {
+      const data = await requestJson(vectorSearchPathTemplate.replace("{slug}", encodeURIComponent(vault.workspaceSlug)), {
         method: "POST",
         body: JSON.stringify({ query, topN, scoreThreshold }),
       });
       return asJsonContent(data);
     },
   );
+}
 
-  return server;
+async function safeVaultList() {
+  return (await loadVaults(vaultRegistryPath)).map(({ id, name }) => ({ id, name }));
 }
 
 async function requestJson(pathOrUrl: string, init: RequestInit) {
   if (!apiKey) {
-    throw new Error(
-      "Missing ANYTHINGLLM_API_KEY. Finish AnythingLLM setup, add the key to .env, then recreate the MCP service.",
-    );
+    throw new Error("Missing ANYTHINGLLM_API_KEY. Finish AnythingLLM setup, add the key to .env, then recreate the MCP service.");
   }
-
-  const url = pathOrUrl.startsWith("http")
-    ? pathOrUrl
-    : `${baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
-
+  const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
   const response = await fetch(url, {
     ...init,
     headers: {
@@ -213,30 +142,10 @@ async function requestJson(pathOrUrl: string, init: RequestInit) {
       ...(init.headers ?? {}),
     },
   });
-
   const text = await response.text();
   const data = text ? parseJson(text) : null;
-
-  if (!response.ok) {
-    const detail = typeof data === "string" ? data : JSON.stringify(data);
-    throw new Error(`AnythingLLM API ${response.status}: ${detail}`);
-  }
-
+  if (!response.ok) throw new Error(`AnythingLLM API ${response.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
   return data;
-}
-
-async function enqueueReindex(vaultId: string) {
-  const response = await fetch(
-    `${dashboardBaseUrl}/api/vaults/${encodeURIComponent(vaultId)}/actions/embed`,
-    { method: "POST", headers: { Accept: "application/json" } },
-  );
-  const text = await response.text();
-  const data = text ? parseJson(text) : null;
-  if (!response.ok) {
-    const detail = typeof data === "string" ? data : JSON.stringify(data);
-    throw new Error(`Dashboard reindex API ${response.status}: ${detail}`);
-  }
-  return { jobId: typeof data === "object" && data && "id" in data ? String(data.id) : undefined };
 }
 
 function parseJson(text: string) {
@@ -248,37 +157,37 @@ function parseJson(text: string) {
 }
 
 function asJsonContent(data: unknown) {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify(data, null, 2),
-      },
-    ],
-  };
+  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
 function stripTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-if (useHttp) {
-  const app = createMcpExpressApp(mcpHttpOptions());
+export function hasBearerToken(authorization: string | undefined, token: string) {
+  if (!token || authorization !== `Bearer ${token}`) return false;
+  return timingSafeEqual(Buffer.from(authorization), Buffer.from(`Bearer ${token}`));
+}
+
+function startHttpServer(profile: McpProfile) {
+  const token = process.env.MCP_AUTH_TOKEN ?? "";
+  if (profile === "lan" && !token) throw new Error("MCP_AUTH_TOKEN is required for the LAN MCP profile");
+  const app = createMcpExpressApp(mcpHttpOptions(process.env.MCP_ALLOWED_HOSTS));
+
+  if (profile === "lan") {
+    app.use((req: any, res: any, next: () => void) => {
+      if (hasBearerToken(req.get("authorization"), token)) return next();
+      return res.status(401).json({ error: "Bearer token required" });
+    });
+  }
 
   app.get("/health", (_: any, res: any) => {
-    res.status(200).json({
-      ok: true,
-      name: "anything-obsidian-mcp",
-      apiKeyConfigured: Boolean(apiKey),
-    });
+    res.status(200).json({ ok: true, name: "anything-obsidian-mcp", profile, apiKeyConfigured: Boolean(apiKey) });
   });
 
   app.post("/mcp", async (req: any, res: any) => {
-    const server = createServer();
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-
+    const server = createServer(profile);
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
@@ -288,22 +197,12 @@ if (useHttp) {
       });
     } catch (error) {
       console.error("Error handling MCP request:", error);
-      if (!res.headersSent) {
-        res.status(500).json({
-          jsonrpc: "2.0",
-          error: { code: -32603, message: "Internal server error" },
-          id: null,
-        });
-      }
+      if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null });
     }
   });
 
-  app.get("/mcp", async (_: any, res: any) => {
-    res.status(405).json({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Method not allowed." },
-      id: null,
-    });
+  app.get("/mcp", (_: any, res: any) => {
+    res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null });
   });
 
   app.listen(mcpPort, (error?: Error) => {
@@ -311,10 +210,20 @@ if (useHttp) {
       console.error("Failed to start MCP HTTP server:", error);
       process.exit(1);
     }
-    console.error(`anything-obsidian MCP HTTP server listening on ${mcpPort}`);
+    console.error(`anything-obsidian ${profile} MCP HTTP server listening on ${mcpPort}`);
   });
-} else {
-  const server = createServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+}
+
+function isEntryPoint() {
+  return Boolean(process.argv[1]) && path.resolve(process.argv[1]) === __filename;
+}
+
+if (isEntryPoint()) {
+  const profile: McpProfile = process.env.MCP_PROFILE === "lan" ? "lan" : "local";
+  if (process.argv.includes("--http") || process.env.MCP_TRANSPORT === "http") {
+    startHttpServer(profile);
+  } else {
+    const server = createServer(profile);
+    await server.connect(new StdioServerTransport());
+  }
 }

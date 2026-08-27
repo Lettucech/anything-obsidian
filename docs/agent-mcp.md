@@ -1,74 +1,56 @@
-# Code Agent MCP Setup
+# Agent MCP setup
 
-Anything Obsidian exposes AnythingLLM through the MCP server in Docker.
+Anything Obsidian provides two read-only MCP profiles. Use the endpoint that
+matches where the agent runs; neither profile writes vault source files.
 
-Start the stack from the tooling repo root:
+## Local agent
 
-```bash
-docker compose up -d
-```
-
-This starts AnythingLLM, MCP, the dashboard, and the multi-vault scheduler. It
-is healthy even before the dashboard has managed its first vault.
-
-After you create an AnythingLLM API key and save it in `.env`, recreate MCP:
-
-```bash
-docker compose up -d --force-recreate mcp
-```
-
-Connect MCP clients to:
+Start the default stack and connect to:
 
 ```text
 http://localhost:11333/mcp
 ```
 
-If you changed `HOST_MCP_PORT` in `.env`, use that port instead.
+The local profile provides RAG plus raw-vault discovery and bounded source
+reads. `obsidian_vault_directory` is local-only and returns the configured
+host path of a selected vault, allowing an agent that already has local
+filesystem authority to make edits outside this project's MCP scope.
 
-The health endpoint is:
+Available tools:
 
-```text
-http://localhost:11333/health
-```
+- `obsidian_vault_list`
+- `obsidian_vault_directory`
+- `obsidian_file_list`
+- `obsidian_file_read`
+- `anythingllm_search_chunks`
+- `anythingllm_answer`
 
-If `ANYTHINGLLM_API_KEY` changes, recreate MCP again with the same command.
+## LAN agent
 
-## Worker Commands
-
-Use the worker service for manual, vault-scoped index maintenance:
+Set `HOST_MCP_LAN_PORT`, `MCP_LAN_TOKEN`, and `MCP_LAN_ALLOWED_HOSTS` in the
+host's `.env`, then start the optional profile:
 
 ```bash
-docker compose logs -f syncer
-docker compose run --rm worker sync --vault work
-docker compose run --rm worker embed --vault work --all
-docker compose run --rm worker doctor --vault work
+docker compose --profile lan up -d mcp-lan
 ```
 
-The scheduler handles normal updates. `sync` runs one vault sync immediately,
-`embed --all` rebuilds that vault index, and `doctor` checks its Docker-visible
-config and service reachability.
+Connect to `http://<host>:<HOST_MCP_LAN_PORT>/mcp` and configure the MCP client
+to send `Authorization: Bearer <MCP_LAN_TOKEN>`. The URL hostname or IP must
+also appear in `MCP_LAN_ALLOWED_HOSTS`.
 
-Syncer logs use the `anything-obsidian-worker` prefix and show vault-specific
-Git sync results, embedding progress, failures, and the next scheduled run.
+The LAN profile deliberately exposes only:
 
-For a private HTTPS remote, configure its username and token in that vault's
-clone form. The dashboard uses it to clone that vault, then the worker reads
-only that vault's local runtime secret and
-uses Git askpass without putting the token in the remote URL. Different vaults
-may use different GitHub, GitLab, or other HTTPS credentials.
+- `obsidian_vault_list`
+- `anythingllm_search_chunks`
+- `anythingllm_answer`
 
-The registry is also the source of each vault's Git pull/push behavior, commit
-identity and message prefix, sync interval, post-sync embedding choice, and
-embedding include/exclude filters. Do not supply a `KB_*` environment setting:
-workers always resolve those policies from the selected vault id.
+It does not mount the vault root and cannot return vault directories or raw
+source files. Keep the bearer token private: RAG results may contain source
+content.
 
-## Tools
+## Maintenance boundary
 
-- `obsidian_vault_list`: list managed Obsidian vaults.
-- `anythingllm_search_chunks`: search one vault's derived index and return source chunks.
-- `anythingllm_answer`: ask AnythingLLM to answer from one vault.
-
-The tools accept an optional `vaultId`; omit it only when there is exactly one
-accessible vault, otherwise callers must specify it. Use `anythingllm_search_chunks` when the
-agent should inspect source chunks and reason itself. Use `anythingllm_answer`
-only when you want AnythingLLM to produce the answer itself.
+MCP does not run Git sync or RAG indexing. Configure optional Git sync in the
+dashboard, and use the dashboard or worker commands for explicit reindexing
+and recovery. The vault Git repository remains the source of truth; AnythingLLM
+remains a derived index.
