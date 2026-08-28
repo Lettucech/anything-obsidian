@@ -23,6 +23,7 @@ test("local MCP exposes only read-only vault discovery and RAG tools", async () 
     "anythingllm_search_chunks",
     "obsidian_file_list",
     "obsidian_file_read",
+    "obsidian_vault_context",
     "obsidian_vault_directory",
     "obsidian_vault_list",
   ]);

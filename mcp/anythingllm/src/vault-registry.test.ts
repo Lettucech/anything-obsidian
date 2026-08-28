@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { resolveVault, type VaultRecord } from "./vault-registry.js";
+import { loadVaults, resolveVault, type VaultRecord } from "./vault-registry.js";
 
 const vaults: VaultRecord[] = [
   { id: "work", name: "Work", directory: "work", workspaceSlug: "work", enabled: true, accessMode: "open", allowlist: [] },
@@ -17,4 +20,14 @@ test("reports restricted vaults as not yet enforced", () => {
     () => resolveVault([{ ...vaults[0], accessMode: "restricted" }], "work"),
     /identity enforcement is not available yet/,
   );
+});
+
+test("rejects registry records with invalid context metadata", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-vault-registry-"));
+  const registryPath = path.join(root, "vaults.json");
+  await writeFile(registryPath, JSON.stringify({
+    vaults: [{ ...vaults[0], gitAutoPush: "yes" }],
+  }));
+
+  assert.deepEqual(await loadVaults(registryPath), []);
 });

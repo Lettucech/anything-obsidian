@@ -78,16 +78,46 @@ export function createVaultFileService({
     },
 
     async directory(input: { vaultId?: string }) {
-      if (!hostVaultsRoot) throw new Error("HOST_VAULTS_ROOT is required to reveal a local vault directory");
       const selected = await vault(input.vaultId);
-      const root = path.resolve(hostVaultsRoot);
-      const directory = path.resolve(root, normalizedRelativePath(selected.directory, { allowEmpty: false }));
-      if (directory !== root && !directory.startsWith(`${root}${path.sep}`)) {
-        throw new Error("vault directory escaped HOST_VAULTS_ROOT");
+      return { vaultId: selected.id, directory: hostVaultDirectory(selected.directory) };
+    },
+
+    async context(input: { vaultId?: string }) {
+      const selected = await vault(input.vaultId);
+      const root = await vaultRoot(vaultsRoot, selected.directory);
+      const policyFiles: string[] = [];
+      for (const candidate of ["AGENTS.md", "README.md"]) {
+        if (await isRegularFile(path.join(root, candidate))) policyFiles.push(candidate);
       }
-      return { vaultId: selected.id, directory };
+
+      return {
+        vaultId: selected.id,
+        name: selected.name,
+        directory: hostVaultDirectory(selected.directory),
+        sourceOfTruth: "local-vault-files",
+        policyFiles,
+        editMode: "local-filesystem",
+        mcpWriteEnabled: false,
+        sync: {
+          gitAutoPull: selected.gitAutoPull ?? null,
+          gitAutoPush: selected.gitAutoPush ?? null,
+          syncIntervalSeconds: selected.syncIntervalSeconds ?? null,
+          embedAfterSync: selected.embedAfterSync ?? null,
+        },
+        rag: { role: "derived-index", freshness: "not-guaranteed" },
+      };
     },
   };
+
+  function hostVaultDirectory(directory: string) {
+    if (!hostVaultsRoot) throw new Error("HOST_VAULTS_ROOT is required to reveal a local vault directory");
+    const root = path.resolve(hostVaultsRoot);
+    const resolved = path.resolve(root, normalizedRelativePath(directory, { allowEmpty: false }));
+    if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+      throw new Error("vault directory escaped HOST_VAULTS_ROOT");
+    }
+    return resolved;
+  }
 }
 
 async function vaultRoot(vaultsRoot: string, directory: string) {
@@ -128,6 +158,16 @@ async function existingFile(root: string, relativePath: string) {
   const details = await lstat(target);
   if (!details.isFile() || details.isSymbolicLink()) throw new Error("path is not a regular file");
   return target;
+}
+
+async function isRegularFile(target: string) {
+  try {
+    const details = await lstat(target);
+    return details.isFile() && !details.isSymbolicLink();
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function safeTarget(root: string, relativePath: string) {

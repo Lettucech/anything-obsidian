@@ -78,6 +78,13 @@ function registerLocalVaultTools(server: McpServer) {
   );
 
   server.tool(
+    "obsidian_vault_context",
+    "Return local edit context for one managed vault: its host directory, policy files, non-secret sync settings, and source-of-truth boundaries. This tool is read-only and local-only.",
+    { vaultId: z.string().min(1).optional() },
+    async (input) => asJsonContent(await vaultFiles.context(input)),
+  );
+
+  server.tool(
     "obsidian_vault_directory",
     "Return the configured host directory for one managed vault. This tool is local-only so an agent can open the vault directly when it has local filesystem authority.",
     { vaultId: z.string().min(1).optional() },

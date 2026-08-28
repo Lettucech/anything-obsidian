@@ -20,6 +20,10 @@ async function fixture() {
         enabled: true,
         accessMode: "open",
         allowlist: [],
+        gitAutoPull: true,
+        gitAutoPush: true,
+        syncIntervalSeconds: 10_800,
+        embedAfterSync: true,
       }],
     }),
   );
@@ -70,6 +74,29 @@ test("rejects a source file reached through an intermediate symlink", async () =
 test("returns the configured host directory for a selected local vault", async () => {
   const { service, vaultPath } = await fixture();
   assert.deepEqual(await service.directory({ vaultId: "work" }), { vaultId: "work", directory: vaultPath });
+});
+
+test("returns local edit context without repository or credential metadata", async () => {
+  const { service, vaultPath } = await fixture();
+  await writeFile(path.join(vaultPath, "AGENTS.md"), "# Agent rules\n");
+  await writeFile(path.join(vaultPath, "README.md"), "# Vault\n");
+
+  assert.deepEqual(await service.context({ vaultId: "work" }), {
+    vaultId: "work",
+    name: "Work",
+    directory: vaultPath,
+    sourceOfTruth: "local-vault-files",
+    policyFiles: ["AGENTS.md", "README.md"],
+    editMode: "local-filesystem",
+    mcpWriteEnabled: false,
+    sync: {
+      gitAutoPull: true,
+      gitAutoPush: true,
+      syncIntervalSeconds: 10_800,
+      embedAfterSync: true,
+    },
+    rag: { role: "derived-index", freshness: "not-guaranteed" },
+  });
 });
 
 test("does not provide direct vault-write operations", async () => {

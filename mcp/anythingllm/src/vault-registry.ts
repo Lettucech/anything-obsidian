@@ -8,6 +8,10 @@ export type VaultRecord = {
   enabled: boolean;
   accessMode: "open" | "restricted";
   allowlist: string[];
+  gitAutoPull?: boolean;
+  gitAutoPush?: boolean;
+  syncIntervalSeconds?: number;
+  embedAfterSync?: boolean;
 };
 
 export async function loadVaults(registryPath: string): Promise<VaultRecord[]> {
@@ -46,5 +50,15 @@ function isVaultRecord(value: unknown): value is VaultRecord {
   const vault = value as Partial<VaultRecord>;
   return typeof vault.id === "string" && typeof vault.name === "string" && typeof vault.directory === "string" &&
     typeof vault.workspaceSlug === "string" && typeof vault.enabled === "boolean" &&
-    (vault.accessMode === "open" || vault.accessMode === "restricted") && Array.isArray(vault.allowlist);
+    (vault.accessMode === "open" || vault.accessMode === "restricted") && Array.isArray(vault.allowlist) &&
+    optionalBoolean(vault.gitAutoPull) && optionalBoolean(vault.gitAutoPush) &&
+    optionalNumber(vault.syncIntervalSeconds) && optionalBoolean(vault.embedAfterSync);
+}
+
+function optionalBoolean(value: unknown) {
+  return value === undefined || typeof value === "boolean";
+}
+
+function optionalNumber(value: unknown) {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
 }

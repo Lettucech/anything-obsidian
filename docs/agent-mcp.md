@@ -15,15 +15,37 @@ The local profile provides RAG plus raw-vault discovery and bounded source
 reads. `obsidian_vault_directory` is local-only and returns the configured
 host path of a selected vault, allowing an agent that already has local
 filesystem authority to make edits outside this project's MCP scope.
+`obsidian_vault_context` adds the selected vault's root policy files,
+non-secret sync settings, source-of-truth status, and RAG freshness boundary so
+the agent can assess the edit surface before opening that directory.
 
 Available tools:
 
 - `obsidian_vault_list`
+- `obsidian_vault_context`
 - `obsidian_vault_directory`
 - `obsidian_file_list`
 - `obsidian_file_read`
 - `anythingllm_search_chunks`
 - `anythingllm_answer`
+
+For a reusable retrieval and edit workflow, install the repository skill:
+
+```bash
+npx skills add Lettucech/anything-obsidian --skill anything-obsidian-vault-workflow --agent codex
+```
+
+Its context-first flow is:
+
+1. Select one explicit vault with `obsidian_vault_list`.
+2. Call `obsidian_vault_context` and read the returned policy files.
+3. Use RAG to discover candidates and raw file reads to verify source truth.
+4. For an approved edit, open the returned local directory and use normal
+   filesystem and Git checks under the vault's own rules.
+
+The skill never treats an MCP write tool as authorized. If a stale MCP runtime
+advertises write, patch, upload, sync, or reindex tools, do not call them;
+report deployment drift and align the running service with the current source.
 
 ## LAN agent
 

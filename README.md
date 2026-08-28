@@ -58,6 +58,8 @@ http://localhost:11333/mcp
 It exposes RAG plus read-only local vault discovery:
 
 - `obsidian_vault_list` returns only vault id and name.
+- `obsidian_vault_context` is local-only and returns the selected vault's host
+  directory, root policy files, non-secret sync settings, and edit boundaries.
 - `obsidian_vault_directory` returns the configured host directory for one
   vault, so a local agent with filesystem authority can edit it directly.
 - `obsidian_file_list` and `obsidian_file_read` inspect raw Markdown and
@@ -67,6 +69,21 @@ It exposes RAG plus read-only local vault discovery:
 
 There are no MCP tools for writing, patching, uploading, Git sync, or RAG
 reindexing.
+
+### Agent workflow skill
+
+Install the repository's workflow skill when an agent should search, verify,
+assess, or locally edit managed vault knowledge:
+
+```bash
+npx skills add Lettucech/anything-obsidian --skill anything-obsidian-vault-workflow --agent codex
+```
+
+Add `--global` to install it for every Codex project. The skill keeps RAG as a
+discovery layer, verifies important information against source notes, reads the
+selected vault's own `AGENTS.md`, and requires local filesystem authority for
+edits. It does not add MCP write capability or grant permission to commit,
+sync, or push.
 
 ### Optional LAN RAG MCP
 
