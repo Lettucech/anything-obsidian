@@ -228,6 +228,14 @@ main { width: min(1440px, 100%); margin: 0 auto; padding: clamp(28px, 5vw, 72px)
 .empty-state h3 { font-size: 1.2rem; }
 .empty-state p { max-width: 630px; margin-top: 6px; color: var(--muted); }
 
+.agents-section { margin-top: 16px; }
+.agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.agents .note { margin: 0; color: var(--muted); }
+.agent-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 13px; padding: 15px 17px; background: var(--service-surface); }
+.agent-card h3 { font-size: 0.95rem; }
+.agent-created { margin-top: 2px; color: var(--muted); font-size: 0.74rem; }
+.agent-token { min-height: 0; margin: 10px 0 0; padding: 14px 16px; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 13px; }
+
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 0.38fr); gap: 16px; margin-top: 16px; }
 .service-section { min-width: 0; }
 .services { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }

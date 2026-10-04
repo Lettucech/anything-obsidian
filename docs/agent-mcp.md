@@ -47,6 +47,25 @@ The skill never treats an MCP write tool as authorized. If a stale MCP runtime
 advertises write, patch, upload, sync, or reindex tools, do not call them;
 report deployment drift and align the running service with the current source.
 
+## Agent tokens
+
+By default every MCP caller sees all open vaults. To scope a client to specific
+vaults, create a named agent token in the dashboard's **Agent access** section,
+then add that agent name to the allowlist of each vault it should reach
+(vault → Edit → Access policy). The MCP client sends:
+
+```text
+Authorization: Bearer <agent-token>
+```
+
+With a valid agent token, `obsidian_vault_list` returns only open vaults plus
+the restricted vaults whose allowlist names that agent, and every tool enforces
+the same boundary. A tokenless local connection keeps its current access to
+open vaults only. The LAN profile's `MCP_LAN_TOKEN` stays an administrator
+token with full access including restricted vaults; agent tokens are also
+accepted on the LAN profile. Tokens are shown once at creation and stored only
+as SHA-256 hashes; revoking a token cuts that agent's MCP access immediately.
+
 ## LAN agent
 
 Set `HOST_MCP_LAN_PORT`, `MCP_LAN_TOKEN`, and `MCP_LAN_ALLOWED_HOSTS` in the
@@ -57,7 +76,8 @@ docker compose --profile lan up -d mcp-lan
 ```
 
 Connect to `http://<host>:<HOST_MCP_LAN_PORT>/mcp` and configure the MCP client
-to send `Authorization: Bearer <MCP_LAN_TOKEN>`. The URL hostname or IP must
+to send `Authorization: Bearer <MCP_LAN_TOKEN>` for administrator access, or a
+scoped agent token as described under Agent tokens. The URL hostname or IP must
 also appear in `MCP_LAN_ALLOWED_HOSTS`.
 
 The LAN profile deliberately exposes only:

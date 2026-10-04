@@ -13,6 +13,9 @@ vault source files, commit Git changes, or trigger indexing through MCP.
 - **Vault management:** the dashboard clones or imports a vault beneath the
   user-selected `HOST_VAULTS_ROOT`, creates its AnythingLLM workspace, and
   stores only validated registry metadata.
+- **Agent-scoped MCP access:** dashboard-issued agent tokens limit a client's
+  MCP visibility to the vaults whose allowlist names it. Tokenless local
+  connections keep their existing access to open vaults.
 - **Optional Git sync:** the scheduler may pull, commit, and push according to
   a vault's dashboard configuration. This is an explicitly configured
   background operation, not an MCP capability.
@@ -69,6 +72,16 @@ It exposes RAG plus read-only local vault discovery:
 
 There are no MCP tools for writing, patching, uploading, Git sync, or RAG
 reindexing.
+
+### Agent tokens
+
+To scope an MCP client to specific vaults, create a named agent token in the
+dashboard's **Agent access** section, then add that agent name to the
+allowlist of each vault it should reach under vault **Edit → Access policy**.
+Clients send `Authorization: Bearer <agent-token>`; such a caller sees only
+open vaults plus the restricted vaults that allowlist it. Tokenless local
+connections keep their current access to open vaults. Tokens are shown once
+and stored only as SHA-256 hashes. See `docs/agent-mcp.md` for details.
 
 ### Agent workflow skill
 

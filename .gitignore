@@ -26,3 +26,6 @@ mcp/anythingllm/dist/
 Thumbs.db
 *.swp
 .worktrees/
+
+# Agent tooling session state
+.zcode/

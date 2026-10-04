@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { timingSafeEqual } from "node:crypto";
 import process from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,8 +9,9 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { z } from "zod";
 import { mcpHttpOptions } from "./http-config.js";
-import { loadVaults, resolveVault } from "./vault-registry.js";
-import { createVaultFileService } from "./vault-files.js";
+import { ANONYMOUS_IDENTITY, ADMIN_IDENTITY, loadVaults, resolveVault, visibleVaults, type CallerIdentity } from "./vault-registry.js";
+import { loadAgentIdentities, resolveIdentity } from "./agent-identity.js";
+import { createVaultFileService, type VaultFileService } from "./vault-files.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,40 +19,44 @@ const repoRoot = path.resolve(__dirname, "../../..");
 
 loadEnv({ path: path.join(repoRoot, ".env") });
 
-const baseUrl = stripTrailingSlash(
-  process.env.ANYTHINGLLM_BASE_URL ?? `http://localhost:${process.env.HOST_ANYTHINGLLM_PORT ?? "11301"}`,
-);
-const apiKey = process.env.ANYTHINGLLM_API_KEY;
-const vaultRegistryPath = process.env.VAULT_REGISTRY_PATH ?? "/workspace/.anything-obsidian-registry/vaults.json";
-const vaultsRoot = process.env.VAULTS_ROOT ?? "/vaults";
+const agentTokensPath = process.env.MCP_AGENT_TOKENS_PATH ?? "/workspace/.anything-obsidian-agent-tokens/agents.json";
 const workspacesPath = process.env.ANYTHINGLLM_WORKSPACES_PATH ?? "/api/v1/workspaces";
 const chatPathTemplate = process.env.ANYTHINGLLM_CHAT_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/chat";
 const vectorSearchPathTemplate = process.env.ANYTHINGLLM_VECTOR_SEARCH_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/vector-search";
-const mcpPort = Number(process.env.MCP_PORT ?? process.env.HOST_MCP_PORT ?? 11333);
-const vaultFiles = createVaultFileService({
-  vaultsRoot,
-  registryPath: vaultRegistryPath,
-  hostVaultsRoot: process.env.HOST_VAULTS_ROOT,
-});
 
 export type McpProfile = "local" | "lan";
 
-export function createServer(profile: McpProfile = "local") {
-  const server = new McpServer({ name: "anything-obsidian", version: "0.2.0" });
+export function createServer(profile: McpProfile = "local", identity: CallerIdentity = ANONYMOUS_IDENTITY) {
+  const baseUrl = stripTrailingSlash(
+    process.env.ANYTHINGLLM_BASE_URL ?? `http://localhost:${process.env.HOST_ANYTHINGLLM_PORT ?? "11301"}`,
+  );
+  const apiKey = process.env.ANYTHINGLLM_API_KEY;
+  const vaultRegistryPath = process.env.VAULT_REGISTRY_PATH ?? "/workspace/.anything-obsidian-registry/vaults.json";
+  const vaultsRoot = process.env.VAULTS_ROOT ?? "/vaults";
+  const vaultFiles = createVaultFileService({
+    vaultsRoot,
+    registryPath: vaultRegistryPath,
+    hostVaultsRoot: process.env.HOST_VAULTS_ROOT,
+    identity,
+  });
+
+  const server = new McpServer({ name: "anything-obsidian", version: "0.3.0" });
 
   server.tool(
     "obsidian_vault_list",
-    "List managed vault ids and names for MCP selection. No repository, Git, or filesystem details are returned.",
+    "List managed vault ids and names the caller can access for MCP selection. No repository, Git, or filesystem details are returned.",
     {},
-    async () => asJsonContent({ vaults: await safeVaultList() }),
+    async () => asJsonContent({
+      vaults: visibleVaults(await loadVaults(vaultRegistryPath), identity).map(({ id, name }) => ({ id, name })),
+    }),
   );
 
-  if (profile === "local") registerLocalVaultTools(server);
-  registerRagTools(server);
+  if (profile === "local") registerLocalVaultTools(server, vaultFiles);
+  registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identity);
   return server;
 }
 
-function registerLocalVaultTools(server: McpServer) {
+function registerLocalVaultTools(server: McpServer, vaultFiles: VaultFileService) {
   server.tool(
     "obsidian_file_list",
     "List Markdown and Canvas files from one managed Obsidian vault. Paths are vault-relative and this tool is read-only.",
@@ -92,7 +96,11 @@ function registerLocalVaultTools(server: McpServer) {
   );
 }
 
-function registerRagTools(server: McpServer) {
+function registerRagTools(
+  server: McpServer,
+  { baseUrl, apiKey, vaultRegistryPath }: { baseUrl: string; apiKey?: string; vaultRegistryPath: string },
+  identity: CallerIdentity,
+) {
   server.tool(
     "anythingllm_answer",
     "Ask AnythingLLM to answer from one managed vault. Prefer anythingllm_search_chunks when an agent needs source chunks.",
@@ -102,11 +110,11 @@ function registerRagTools(server: McpServer) {
       mode: z.enum(["query", "chat"]).default("query"),
     },
     async ({ question, vaultId, mode }) => {
-      const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId);
+      const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId, identity);
       const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(vault.workspaceSlug)), {
         method: "POST",
         body: JSON.stringify({ message: question, mode }),
-      });
+      }, { baseUrl, apiKey });
       return asJsonContent(data);
     },
   );
@@ -121,21 +129,17 @@ function registerRagTools(server: McpServer) {
       scoreThreshold: z.number().min(0).max(1).optional(),
     },
     async ({ query, vaultId, topN, scoreThreshold }) => {
-      const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId);
+      const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId, identity);
       const data = await requestJson(vectorSearchPathTemplate.replace("{slug}", encodeURIComponent(vault.workspaceSlug)), {
         method: "POST",
         body: JSON.stringify({ query, topN, scoreThreshold }),
-      });
+      }, { baseUrl, apiKey });
       return asJsonContent(data);
     },
   );
 }
 
-async function safeVaultList() {
-  return (await loadVaults(vaultRegistryPath)).map(({ id, name }) => ({ id, name }));
-}
-
-async function requestJson(pathOrUrl: string, init: RequestInit) {
+async function requestJson(pathOrUrl: string, init: RequestInit, { baseUrl, apiKey }: { baseUrl: string; apiKey?: string }) {
   if (!apiKey) {
     throw new Error("Missing ANYTHINGLLM_API_KEY. Finish AnythingLLM setup, add the key to .env, then recreate the MCP service.");
   }
@@ -171,29 +175,24 @@ function stripTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-export function hasBearerToken(authorization: string | undefined, token: string) {
-  if (!token || authorization !== `Bearer ${token}`) return false;
-  return timingSafeEqual(Buffer.from(authorization), Buffer.from(`Bearer ${token}`));
-}
-
 function startHttpServer(profile: McpProfile) {
-  const token = process.env.MCP_AUTH_TOKEN ?? "";
-  if (profile === "lan" && !token) throw new Error("MCP_AUTH_TOKEN is required for the LAN MCP profile");
+  const adminToken = process.env.MCP_AUTH_TOKEN ?? "";
+  if (profile === "lan" && !adminToken) throw new Error("MCP_AUTH_TOKEN is required for the LAN MCP profile");
   const app = createMcpExpressApp(mcpHttpOptions(process.env.MCP_ALLOWED_HOSTS));
 
-  if (profile === "lan") {
-    app.use((req: any, res: any, next: () => void) => {
-      if (hasBearerToken(req.get("authorization"), token)) return next();
-      return res.status(401).json({ error: "Bearer token required" });
-    });
-  }
-
   app.get("/health", (_: any, res: any) => {
-    res.status(200).json({ ok: true, name: "anything-obsidian-mcp", profile, apiKeyConfigured: Boolean(apiKey) });
+    res.status(200).json({ ok: true, name: "anything-obsidian-mcp", profile, apiKeyConfigured: Boolean(process.env.ANYTHINGLLM_API_KEY) });
   });
 
   app.post("/mcp", async (req: any, res: any) => {
-    const server = createServer(profile);
+    const identity = resolveIdentity(req.get("authorization"), {
+      adminToken,
+      agents: await loadAgentIdentities(agentTokensPath),
+    });
+    if (profile === "lan" && identity.kind === "anonymous") {
+      return res.status(401).json({ error: "Bearer token required" });
+    }
+    const server = createServer(profile, identity);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {
       await server.connect(transport);
@@ -212,13 +211,17 @@ function startHttpServer(profile: McpProfile) {
     res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null });
   });
 
-  app.listen(mcpPort, (error?: Error) => {
+  app.listen(mcpPort(), (error?: Error) => {
     if (error) {
       console.error("Failed to start MCP HTTP server:", error);
       process.exit(1);
     }
-    console.error(`anything-obsidian ${profile} MCP HTTP server listening on ${mcpPort}`);
+    console.error(`anything-obsidian ${profile} MCP HTTP server listening on ${mcpPort()}`);
   });
+}
+
+function mcpPort() {
+  return Number(process.env.MCP_PORT ?? process.env.HOST_MCP_PORT ?? 11333);
 }
 
 function isEntryPoint() {
@@ -230,7 +233,7 @@ if (isEntryPoint()) {
   if (process.argv.includes("--http") || process.env.MCP_TRANSPORT === "http") {
     startHttpServer(profile);
   } else {
-    const server = createServer(profile);
+    const server = createServer(profile, ADMIN_IDENTITY);
     await server.connect(new StdioServerTransport());
   }
 }

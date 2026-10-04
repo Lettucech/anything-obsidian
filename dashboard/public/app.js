@@ -48,13 +48,32 @@ export function actionDisabledReason(actionId, status, vaultId) {
   return "";
 }
 
+export function restrictedAccessNote(allowlist = []) {
+  const names = (allowlist ?? []).filter(Boolean);
+  return names.length
+    ? `Restricted: only allowlisted MCP agents (${names.join(", ")}) can read this vault.`
+    : "Restricted: no agent is allowlisted, so MCP callers cannot read this vault.";
+}
+
+export function agentCreatedLabel(iso) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
+}
+
+export function agentRevokeMessage(name, referencedBy = []) {
+  if (!referencedBy.length) return `Agent '${name}' revoked.`;
+  return `Agent '${name}' revoked. These vault allowlists still name it: ${referencedBy.join(", ")}`;
+}
+
 if (typeof document !== "undefined") {
-  const state = { status: null, vaults: [], editingId: null, createdVaultId: null };
+  const state = { status: null, vaults: [], agents: [], editingId: null, createdVaultId: null, createdAgentName: null };
   const els = Object.fromEntries([
     "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
     "clone-url-field", "workspace-slug-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
     "add-vault-inline", "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
+    "agents", "agent-message", "add-agent", "agent-dialog", "agent-form", "agent-form-title",
+    "agent-create-fields", "agent-token-reveal", "agent-token-value", "agent-submit", "cancel-agent", "agent-dialog-message",
   ].map((id) => [id.replaceAll("-", ""), document.querySelector(`#${id}`)]));
 
   const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
@@ -78,6 +97,11 @@ if (typeof document !== "undefined") {
   els.testvaultconnection.addEventListener("click", testVaultConnection);
   els.vaultform.addEventListener("change", syncFormControls);
   els.vaultdialog.addEventListener("close", () => { state.editingId = null; state.createdVaultId = null; });
+  els.addagent.addEventListener("click", showAgentForm);
+  els.cancelagent.addEventListener("click", hideAgentForm);
+  els.agents.addEventListener("click", handleAgentAction);
+  els.agentform.addEventListener("submit", createAgent);
+  els.agentdialog.addEventListener("close", () => { state.createdAgentName = null; });
 
   async function handleVaultAction(event) {
     const button = event.target.closest("button[data-vault-id], button[data-dashboard-action]");
@@ -233,7 +257,9 @@ if (typeof document !== "undefined") {
 
   async function refresh() {
     try {
-      [state.status, { vaults: state.vaults }] = await Promise.all([fetchJson("/api/status"), fetchJson("/api/vaults")]);
+      [state.status, { vaults: state.vaults }, { agents: state.agents }] = await Promise.all([
+        fetchJson("/api/status"), fetchJson("/api/vaults"), fetchJson("/api/agents"),
+      ]);
       render();
       const logs = await fetchJson("/api/logs?service=syncer");
       els.logs.textContent = logs.logs || "";
@@ -247,6 +273,7 @@ if (typeof document !== "undefined") {
     els.power.classList.toggle("is-on", state.status.systemState === "on");
     els.services.replaceChildren(...state.status.services.map(renderService));
     els.vaults.replaceChildren(...(state.vaults.length ? state.vaults.map(renderVault) : [emptyState()]));
+    els.agents.replaceChildren(...(state.agents.length ? state.agents.map(renderAgent) : [element("p", "note", "No agent tokens yet. Create one, then name it in a vault's access policy allowlist.")]));
     els.vaultsummary.replaceChildren(...dashboardMetrics(state.status, state.vaults).map(renderMetric));
     const healthy = state.status.services.filter((service) => service.running && service.health?.ok).length;
     const total = state.status.services.length;
@@ -282,7 +309,7 @@ if (typeof document !== "undefined") {
     const details = element("dl", "vault-details");
     details.append(vaultDetail("Repository", `${vault.gitRemote}/${vault.gitBranch}`), vaultDetail("Workspace", vault.workspaceSlug), vaultDetail("Sync", `Every ${vault.syncIntervalSeconds}s`));
     card.append(header, details);
-    if (vault.accessMode === "restricted") card.append(element("p", "note", "Restricted policy is not enforced yet."));
+    if (vault.accessMode === "restricted") card.append(element("p", "note", restrictedAccessNote(vault.allowlist)));
     const actions = element("div", "vault-actions");
     ["sync", "embed", "embed-all", "doctor", "edit", "remove"].forEach((action) => {
       const button = element("button", action === "sync" ? "button button-primary" : action === "remove" ? "button button-quiet button-danger" : "button button-quiet", actionLabel(action));
@@ -300,6 +327,73 @@ if (typeof document !== "undefined") {
     item.append(element("dt", "", label), element("dd", "", value));
     return item;
   }
+
+  function renderAgent(agent) {
+    const card = element("article", "agent-card");
+    const identity = element("div", "agent-identity");
+    identity.append(element("h3", "", agent.name), element("p", "agent-created", agentCreatedLabel(agent.createdAt)));
+    const actions = element("div", "agent-actions");
+    const revoke = element("button", "button button-quiet button-danger", "Revoke");
+    revoke.dataset.agentName = agent.name;
+    revoke.dataset.agentAction = "revoke";
+    actions.append(revoke);
+    card.append(identity, actions);
+    return card;
+  }
+
+  async function handleAgentAction(event) {
+    const button = event.target.closest("button[data-agent-name]");
+    if (!button) return;
+    const { agentName } = button.dataset;
+    if (!window.confirm(`Revoke agent token '${agentName}'? Clients using it lose MCP access immediately.`)) return;
+    try {
+      const result = await request(`/api/agents/${encodeURIComponent(agentName)}`, { method: "DELETE" });
+      agentMessage(agentRevokeMessage(agentName, result.referencedBy));
+    } catch (error) {
+      agentMessage(error.message, true);
+    }
+    await refresh();
+  }
+
+  async function createAgent(event) {
+    event.preventDefault();
+    const form = new FormData(els.agentform);
+    setAgentDialogMessage("Creating agent token…");
+    els.agentsubmit.disabled = true;
+    try {
+      const created = await request("/api/agents", { method: "POST", body: JSON.stringify({ name: form.get("name") }) });
+      state.createdAgentName = created.agent.name;
+      els.agentformtitle.textContent = `Agent '${created.agent.name}' created`;
+      els.agentcreatefields.hidden = true;
+      els.agenttokenreveal.hidden = false;
+      els.agenttokenvalue.textContent = created.token;
+      els.agentsubmit.hidden = true;
+      els.cancelagent.textContent = "Done";
+      setAgentDialogMessage("");
+      await refresh();
+    } catch (error) {
+      setAgentDialogMessage(error.message, true);
+    } finally {
+      els.agentsubmit.disabled = false;
+    }
+  }
+
+  function showAgentForm() {
+    state.createdAgentName = null;
+    els.agentform.reset();
+    els.agentformtitle.textContent = "Add agent";
+    els.agentcreatefields.hidden = false;
+    els.agenttokenreveal.hidden = true;
+    els.agenttokenvalue.textContent = "";
+    els.agentsubmit.hidden = false;
+    els.cancelagent.textContent = "Cancel";
+    setAgentDialogMessage("");
+    els.agentdialog.showModal();
+  }
+
+  function hideAgentForm() { state.createdAgentName = null; els.agentdialog.close(); }
+  function agentMessage(text, error = false) { els.agentmessage.textContent = text; els.agentmessage.className = error ? "message error" : "message"; }
+  function setAgentDialogMessage(text, error = false) { els.agentdialogmessage.textContent = text; els.agentdialogmessage.className = error ? "message dialog-message error" : "message dialog-message"; }
 
   function emptyState() {
     const card = element("article", "empty-state");

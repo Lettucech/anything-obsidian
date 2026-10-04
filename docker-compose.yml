@@ -18,11 +18,13 @@ services:
       VAULTS_ROOT: /vaults
       VAULT_REGISTRY_PATH: /workspace/.anything-obsidian-registry/vaults.json
       VAULT_SECRETS_PATH: /workspace/.anything-obsidian-secrets
+      AGENT_TOKENS_PATH: /workspace/.anything-obsidian-agent-tokens/agents.json
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env to your vault parent directory}:/vaults
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry
       - anything-obsidian-vault-secrets:/workspace/.anything-obsidian-secrets
+      - anything-obsidian-agent-tokens:/workspace/.anything-obsidian-agent-tokens
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -69,10 +71,12 @@ services:
       MCP_TRANSPORT: http
       MCP_PROFILE: local
       MCP_PORT: "3333"
+      MCP_AGENT_TOKENS_PATH: /workspace/.anything-obsidian-agent-tokens/agents.json
     ports:
       - "127.0.0.1:${HOST_MCP_PORT:-11333}:3333"
     volumes:
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry:ro
+      - anything-obsidian-agent-tokens:/workspace/.anything-obsidian-agent-tokens:ro
       - ${HOST_VAULTS_ROOT:?Set HOST_VAULTS_ROOT in .env to your vault parent directory}:/vaults
 
   mcp-lan:
@@ -99,10 +103,12 @@ services:
       MCP_PORT: "3333"
       MCP_AUTH_TOKEN: ${MCP_LAN_TOKEN:-}
       MCP_ALLOWED_HOSTS: ${MCP_LAN_ALLOWED_HOSTS:-}
+      MCP_AGENT_TOKENS_PATH: /workspace/.anything-obsidian-agent-tokens/agents.json
     ports:
       - "0.0.0.0:${HOST_MCP_LAN_PORT:-11334}:3333"
     volumes:
       - anything-obsidian-vault-registry:/workspace/.anything-obsidian-registry:ro
+      - anything-obsidian-agent-tokens:/workspace/.anything-obsidian-agent-tokens:ro
 
   syncer:
     build:
@@ -160,3 +166,5 @@ volumes:
     name: anything-obsidian-vault-registry
   anything-obsidian-vault-secrets:
     name: anything-obsidian-vault-secrets
+  anything-obsidian-agent-tokens:
+    name: anything-obsidian-agent-tokens

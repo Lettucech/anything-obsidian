@@ -1,21 +1,25 @@
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { loadVaults, resolveVault } from "./vault-registry.js";
+import { ANONYMOUS_IDENTITY, loadVaults, resolveVault, type CallerIdentity } from "./vault-registry.js";
 
 const TEXT_EXTENSIONS = new Set([".md", ".canvas"]);
 const MAX_LIST_FILES = 1_000;
+
+export type VaultFileService = ReturnType<typeof createVaultFileService>;
 
 export function createVaultFileService({
   vaultsRoot,
   registryPath,
   hostVaultsRoot,
+  identity = ANONYMOUS_IDENTITY,
 }: {
   vaultsRoot: string;
   registryPath: string;
   hostVaultsRoot?: string;
+  identity?: CallerIdentity;
 }) {
   async function vault(vaultId?: string) {
-    return resolveVault(await loadVaults(registryPath), vaultId);
+    return resolveVault(await loadVaults(registryPath), vaultId, identity);
   }
 
   return {

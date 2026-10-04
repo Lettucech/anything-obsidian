@@ -10,6 +10,7 @@ import { createJobManager } from "./jobs.mjs";
 import { redactSecretsObject, redactSecretsText } from "./redact.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
+import { createAgentTokenStore } from "../lib/agent-tokens.mjs";
 import { createAnythingllmClient } from "./anythingllm.mjs";
 import { createVaultStorage } from "./vault-storage.mjs";
 
@@ -33,6 +34,9 @@ export function createDashboardServer({
   vaultStorage = createVaultStorage({ registry }),
   secrets = createVaultSecretStore({
     rootPath: env.VAULT_SECRETS_PATH || "/workspace/.anything-obsidian-secrets",
+  }),
+  agentTokens = createAgentTokenStore({
+    rootPath: env.AGENT_TOKENS_PATH || "/workspace/.anything-obsidian-agent-tokens",
   }),
 } = {}) {
   return createServer(async (req, res) => {
@@ -102,6 +106,28 @@ export function createDashboardServer({
         const vault = await registry.remove(id);
         if (vault) await secrets.remove(id);
         return vault ? sendJson(res, 204, {}) : sendJson(res, 404, { error: "Vault was not found" });
+      }
+      if (req.method === "GET" && url.pathname === "/api/agents") {
+        return sendJson(res, 200, { agents: await agentTokens.list() });
+      }
+      if (req.method === "POST" && url.pathname === "/api/agents") {
+        const input = await readJsonBody(req);
+        const name = String(input?.name ?? "").trim();
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+          return sendJson(res, 400, { error: "Agent name must be lowercase dash-separated text" });
+        }
+        const { agent, token } = await agentTokens.create(name);
+        return sendJson(res, 201, { agent, token });
+      }
+      if (req.method === "DELETE" && url.pathname.startsWith("/api/agents/")) {
+        const name = url.pathname.slice("/api/agents/".length);
+        const removed = await agentTokens.remove(name);
+        if (!removed) return sendJson(res, 404, { error: "Agent was not found" });
+        const vaults = await registry.list();
+        const referencedBy = vaults
+          .filter((vault) => Array.isArray(vault.allowlist) && vault.allowlist.includes(name))
+          .map((vault) => vault.id);
+        return sendJson(res, 200, { removed: true, referencedBy });
       }
       if (req.method === "GET" && url.pathname === "/api/status") {
         return sendJson(res, 200, await statusPayload({ docker, jobs, env, fetchImpl }));

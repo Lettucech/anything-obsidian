@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import test from "node:test";
 
 import { createDashboardServer } from "./server.mjs";
+import { createAgentTokenStore } from "../lib/agent-tokens.mjs";
 
 test("vault routes clone a repository and create its managed workspace", async () => {
   const registry = fakeRegistry();
@@ -48,6 +52,38 @@ test("vault routes import a local repository, attach a workspace, and remove onl
   assert.equal((await request(app, "DELETE", "/api/vaults/personal")).status, 204);
   assert.deepEqual(secrets.removed, ["personal"]);
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
+});
+
+test("agent token routes create, list, and revoke MCP agent identities", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-dashboard-agents-"));
+  const registry = fakeRegistry();
+  await registry.create({ id: "secret-vault", allowlist: ["scout"] });
+  const app = createDashboardServer({
+    docker: fakeDocker(), jobs: fakeJobs(), registry,
+    anythingllm: { async listWorkspaces() { return []; } },
+    vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(),
+    agentTokens: createAgentTokenStore({ rootPath: root }),
+    env: {},
+  });
+
+  assert.deepEqual((await request(app, "GET", "/api/agents")).body, { agents: [] });
+  const created = await request(app, "POST", "/api/agents", { name: "scout" });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.agent.name, "scout");
+  assert.ok(created.body.token.length > 0);
+
+  const duplicate = await request(app, "POST", "/api/agents", { name: "scout" });
+  assert.equal(duplicate.status, 500);
+  assert.match(duplicate.body.error, /Agent already exists/);
+
+  const invalid = await request(app, "POST", "/api/agents", { name: "Bad Name" });
+  assert.equal(invalid.status, 400);
+  assert.match(invalid.body.error, /lowercase dash-separated/);
+
+  const removed = await request(app, "DELETE", "/api/agents/scout");
+  assert.equal(removed.status, 200);
+  assert.deepEqual(removed.body, { removed: true, referencedBy: ["secret-vault"] });
+  assert.equal((await request(app, "DELETE", "/api/agents/scout")).status, 404);
 });
 
 test("vault creation requires an explicit automatic-commit identity and private HTTPS credential", async () => {

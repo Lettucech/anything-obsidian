@@ -48,6 +48,19 @@
         <section id="vaults" class="vaults" aria-live="polite"></section>
       </section>
 
+      <section class="section-shell agents-section" aria-labelledby="agents-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">MCP access</p>
+            <h2 id="agents-title">Agent access</h2>
+            <p>Named agent tokens scope MCP clients to the vaults whose allowlist names them. Connections without a token keep their current local access.</p>
+          </div>
+          <button id="add-agent" class="button button-secondary" type="button">Add agent</button>
+        </div>
+        <p id="agent-message" class="message" role="status"></p>
+        <section id="agents" class="agents" aria-live="polite"></section>
+      </section>
+
       <section class="dashboard-grid" aria-label="System overview">
         <section class="section-shell service-section" aria-labelledby="services-title">
           <div class="section-heading compact">
@@ -138,12 +151,36 @@
               <div class="form-grid">
                 <label>Access mode <select name="accessMode"><option value="open">Open</option><option value="restricted">Restricted</option></select></label>
                 <label class="checkbox"><input name="enabled" type="checkbox" checked /> Enable scheduled sync</label>
-                <label id="allowlist-field" class="allowlist" hidden>Allowlist (one identity per line)<textarea name="allowlist" rows="3"></textarea></label>
+                <label id="allowlist-field" class="allowlist" hidden>Allowlist (one agent name per line)<textarea name="allowlist" rows="3" placeholder="work-agent&#10;research-agent"></textarea></label>
               </div>
             </details>
           </section>
           <p id="vault-dialog-message" class="message dialog-message" role="status"></p>
           <div class="form-actions"><button id="test-vault-connection" class="button button-secondary" type="button">Test connection</button><button id="vault-submit" class="button button-primary" type="submit">Clone and add vault</button><button id="cancel-vault" class="button button-quiet" type="button">Cancel</button></div>
+        </form>
+      </dialog>
+
+      <dialog id="agent-dialog" aria-labelledby="agent-form-title">
+        <form id="agent-form">
+          <div class="dialog-heading">
+            <div class="dialog-mark" aria-hidden="true">◇</div>
+            <div>
+              <p class="eyebrow">MCP access</p>
+              <h2 id="agent-form-title">Add agent</h2>
+            </div>
+          </div>
+          <section id="agent-create-fields" class="form-section">
+            <p class="note">Create a named token for one agent or a group of agents. Agents send it as an Authorization: Bearer header and can only reach vaults whose allowlist names them.</p>
+            <div class="form-grid">
+              <label class="form-grid-wide">Agent name <input name="name" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="e.g. claude-work" required /></label>
+            </div>
+          </section>
+          <section id="agent-token-reveal" hidden>
+            <p class="note">Copy this token now — it is shown only once and stored only as a hash.</p>
+            <pre id="agent-token-value" class="agent-token"></pre>
+          </section>
+          <p id="agent-dialog-message" class="message dialog-message" role="status"></p>
+          <div class="form-actions"><button id="agent-submit" class="button button-primary" type="submit">Create agent</button><button id="cancel-agent" class="button button-quiet" type="button">Cancel</button></div>
         </form>
       </dialog>
     </main>

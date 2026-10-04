@@ -14,6 +14,14 @@ export type VaultRecord = {
   embedAfterSync?: boolean;
 };
 
+export type CallerIdentity =
+  | { kind: "anonymous" }
+  | { kind: "agent"; name: string }
+  | { kind: "admin" };
+
+export const ANONYMOUS_IDENTITY: CallerIdentity = { kind: "anonymous" };
+export const ADMIN_IDENTITY: CallerIdentity = { kind: "admin" };
+
 export async function loadVaults(registryPath: string): Promise<VaultRecord[]> {
   try {
     const raw = JSON.parse(await readFile(registryPath, "utf8")) as { vaults?: unknown };
@@ -25,23 +33,34 @@ export async function loadVaults(registryPath: string): Promise<VaultRecord[]> {
   }
 }
 
-export function resolveVault(vaults: VaultRecord[], vaultId?: string): VaultRecord {
+export function resolveVault(vaults: VaultRecord[], vaultId?: string, identity: CallerIdentity = ANONYMOUS_IDENTITY): VaultRecord {
   const enabled = vaults.filter((vault) => vault.enabled);
   if (vaultId) {
     const vault = enabled.find((candidate) => candidate.id === vaultId);
     if (!vault) throw new Error(`Unknown or disabled vault: ${vaultId}`);
-    assertAccessible(vault);
+    assertAccessible(vault, identity);
     return vault;
   }
-  const accessible = enabled.filter((vault) => vault.accessMode === "open");
+  const accessible = enabled.filter((vault) => isAccessible(vault, identity));
   if (accessible.length === 1) return accessible[0];
   if (accessible.length === 0) throw new Error("No accessible managed vaults are available");
   throw new Error("vaultId is required when more than one vault is accessible");
 }
 
-function assertAccessible(vault: VaultRecord) {
-  if (vault.accessMode === "restricted") {
-    throw new Error(`Vault '${vault.id}' is restricted; caller identity enforcement is not available yet`);
+export function visibleVaults(vaults: VaultRecord[], identity: CallerIdentity): VaultRecord[] {
+  return vaults.filter((vault) => vault.enabled && isAccessible(vault, identity));
+}
+
+function isAccessible(vault: VaultRecord, identity: CallerIdentity): boolean {
+  if (vault.accessMode !== "restricted") return true;
+  if (identity.kind === "admin") return true;
+  if (identity.kind === "agent") return vault.allowlist.includes(identity.name);
+  return false;
+}
+
+function assertAccessible(vault: VaultRecord, identity: CallerIdentity) {
+  if (!isAccessible(vault, identity)) {
+    throw new Error(`Vault '${vault.id}' is restricted and this caller has no access`);
   }
 }
 
