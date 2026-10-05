@@ -20,6 +20,16 @@ export function gitAuthForRepository(repositoryVisibility, username, token) {
   return { mode: "https-token", username: String(username ?? "").trim(), token: String(token ?? "") };
 }
 
+export function vaultSourcePayload(form, sourceMode) {
+  const importing = sourceMode === "import";
+  return {
+    sourceMode: importing ? "import" : "clone",
+    repositoryUrl: importing ? "" : form.get("repositoryUrl"),
+    id: importing ? form.get("importId") : form.get("id"),
+    directory: importing ? form.get("importDirectory") : form.get("directory"),
+  };
+}
+
 export function activeTheme(savedTheme, prefersDark = false) {
   if (["light", "dark"].includes(savedTheme)) return savedTheme;
   return prefersDark ? "dark" : "light";
@@ -70,6 +80,7 @@ if (typeof document !== "undefined") {
   const els = Object.fromEntries([
     "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
+    "source-mode-field", "import-help", "import-id-field", "import-directory-field",
     "clone-url-field", "workspace-slug-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
     "add-vault-inline", "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
     "agents", "agent-message", "add-agent", "agent-dialog", "agent-form", "agent-form-title",
@@ -177,9 +188,9 @@ if (typeof document !== "undefined") {
 
   function formInput(form) {
     return {
-      sourceMode: "clone", repositoryUrl: form.get("repositoryUrl"),
+      ...vaultSourcePayload(form, form.get("sourceMode")),
       repositoryVisibility: form.get("repositoryVisibility"),
-      id: form.get("id"), name: form.get("name"), directory: form.get("directory"),
+      name: form.get("name"),
       workspaceMode: form.get("workspaceMode"), workspaceSlug: form.get("workspaceSlug"),
       gitAutoPull: form.get("gitAutoPull") === "on", gitAutoPush: form.get("gitAutoPush") === "on",
       gitUserName: form.get("gitUserName"), gitUserEmail: form.get("gitUserEmail"),
@@ -216,6 +227,7 @@ if (typeof document !== "undefined") {
     const form = els.vaultform;
     const editing = Boolean(state.editingId);
     const completed = Boolean(state.createdVaultId);
+    const importMode = !editing && form.elements.sourceMode.value === "import";
     const privateRepository = form.elements.repositoryVisibility.value === "private";
     const attachWorkspace = form.elements.workspaceMode.value === "attach";
     const restricted = form.elements.accessMode.value === "restricted";
@@ -223,16 +235,23 @@ if (typeof document !== "undefined") {
     els.vaultsource.hidden = false;
     els.editsettings.hidden = !editing;
     els.addvaultnote.hidden = editing;
-    els.cloneurlfield.hidden = editing;
-    form.elements.repositoryUrl.required = !editing;
+    els.sourcemodefield.hidden = editing;
+    form.elements.sourceMode.disabled = editing;
+    els.importhelp.hidden = !importMode;
+    els.importidfield.hidden = !importMode;
+    els.importdirectoryfield.hidden = !importMode;
+    form.elements.importId.required = importMode;
+    form.elements.importDirectory.required = importMode;
+    els.cloneurlfield.hidden = editing || importMode;
+    form.elements.repositoryUrl.required = !editing && !importMode;
     els.privateauthfields.hidden = !privateRepository;
     for (const name of ["gitAuthUsername", "gitAuthToken"]) form.elements[name].required = !editing && privateRepository;
     els.workspaceslugfield.hidden = !attachWorkspace || editing;
     form.elements.workspaceSlug.required = attachWorkspace && !editing;
     els.allowlistfield.hidden = !restricted;
-    els.vaultsubmit.textContent = editing ? "Save vault" : "Clone and add vault";
+    els.vaultsubmit.textContent = editing ? "Save vault" : importMode ? "Import and add vault" : "Clone and add vault";
     els.vaultsubmit.hidden = completed;
-    els.testvaultconnection.hidden = editing || completed;
+    els.testvaultconnection.hidden = editing || completed || importMode;
     els.cancelvault.textContent = completed ? "Done" : "Cancel";
   }
 
@@ -398,7 +417,7 @@ if (typeof document !== "undefined") {
   function emptyState() {
     const card = element("article", "empty-state");
     const copy = element("div", "");
-    copy.append(element("h3", "", "Bring your first vault online"), element("p", "", "Connect a Git repository and let the dashboard clone, synchronize, and index it beneath the configured vault root."));
+    copy.append(element("h3", "", "Bring your first vault online"), element("p", "", "Clone or import a Git repository beneath the configured vault root and let the dashboard synchronize and index it."));
     const button = element("button", "button button-primary", "Add your first vault");
     button.dataset.dashboardAction = "add-vault";
     card.append(copy, button);

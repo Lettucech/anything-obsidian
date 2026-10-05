@@ -104,9 +104,15 @@
             </div>
           </div>
           <section id="vault-source" class="form-section add-vault-fields">
-            <p id="add-vault-note" class="note">Connect a repository first. You can refine workspace, sync, embedding, and access settings after it has been added.</p>
+            <p id="add-vault-note" class="note">Add a repository by cloning it, or import one that already sits beneath the vault root. You can refine workspace, sync, embedding, and access settings after it has been added.</p>
             <div class="form-grid add-vault-grid">
+              <label id="source-mode-field" class="form-grid-wide">Add from
+                <select name="sourceMode"><option value="clone">Clone a repository</option><option value="import">Import a local repository</option></select>
+              </label>
+              <p id="import-help" class="note form-grid-wide" hidden>Import an existing Git repository that is already a direct child of the configured vault root, with an origin remote and a checked-out branch. Its URL, remote, and branch are discovered from the repository itself.</p>
               <label id="clone-url-field" class="form-grid-wide">Repository URL <input name="repositoryUrl" type="url" placeholder="https://github.com/org/notes.git" required /></label>
+              <label id="import-id-field" hidden>Vault ID <input name="importId" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="e.g. personal-notes" /></label>
+              <label id="import-directory-field" hidden>Directory <input name="importDirectory" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Same as Vault ID" /></label>
               <fieldset class="repository-visibility form-grid-wide">
                 <legend>Repository access</legend>
                 <label><input name="repositoryVisibility" type="radio" value="public" checked /> Public repository</label>

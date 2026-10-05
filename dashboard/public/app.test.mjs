@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   actionDisabledReason, activeTheme, agentCreatedLabel, agentRevokeMessage, dashboardMetrics,
   gitAuthForRepository, nextTheme, restrictedAccessNote, serviceTone, systemPowerLabel, vaultActionUrl,
+  vaultSourcePayload,
 } from "./app.js";
 
 test("system power label follows state", () => {
@@ -45,6 +46,21 @@ test("repository visibility controls the credential payload", () => {
   assert.deepEqual(gitAuthForRepository("public", "ignored", "ignored"), { mode: "none" });
   assert.deepEqual(gitAuthForRepository("private", "oauth2", "secret"), {
     mode: "https-token", username: "oauth2", token: "secret",
+  });
+});
+
+test("vault source payload switches between cloning and importing", () => {
+  const form = new Map([
+    ["repositoryUrl", "https://github.com/acme/work.git"],
+    ["id", null], ["directory", null],
+    ["importId", "personal"], ["importDirectory", "personal"],
+  ]);
+
+  assert.deepEqual(vaultSourcePayload(form, "clone"), {
+    sourceMode: "clone", repositoryUrl: "https://github.com/acme/work.git", id: null, directory: null,
+  });
+  assert.deepEqual(vaultSourcePayload(form, "import"), {
+    sourceMode: "import", repositoryUrl: "", id: "personal", directory: "personal",
   });
 });
 
