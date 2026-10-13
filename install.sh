@@ -36,7 +36,12 @@ Interactive (default):
   install.sh
 
 Non-interactive (agent) mode — provide all three, nothing is prompted:
-  install.sh --vaults-root <path> --url <anythingllm-url> --api-key <key> [--port <n>] [--no-browser]
+  install.sh --vaults-root <path> --url <anythingllm-url> --api-key <key> [--port <n>]
+
+Options:
+  --no-browser    do not open the browser when done
+  --no-skills     skip installing agent skills into detected skill directories
+  --no-autostart  do not register login auto-start / crash auto-restart
 
 Environment overrides:
   ANYTHING_OBSIDIAN_APP_HOME     where the app lives (default ~/.anything-obsidian)
@@ -64,7 +69,7 @@ if [ ! -t 0 ] && [ -z "${AO_INSTALLER_EXECED:-}" ]; then
 fi
 
 # ---------- flags ----------
-VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; WANT_HELP=0
+VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; NO_SKILLS=0; NO_AUTOSTART=0; WANT_HELP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --vaults-root) VAULTS_ROOT="${2:?}"; shift 2 ;;
@@ -72,6 +77,8 @@ while [ $# -gt 0 ]; do
     --api-key) API_KEY="${2:?}"; shift 2 ;;
     --port) PORT="${2:?}"; shift 2 ;;
     --no-browser) NO_BROWSER=1; shift ;;
+    --no-skills) NO_SKILLS=1; shift ;;
+    --no-autostart) NO_AUTOSTART=1; shift ;;
     --help|-h) WANT_HELP=1; shift ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -183,6 +190,30 @@ case ":$PATH:" in
 esac
 say "  ✓ CLI ready: $LAUNCHER"
 
+# ---------- agent skills ----------
+SKILL_TARGETS=""
+for skills_dir in "$HOME/.zcode/skills" "$HOME/.agents/skills" "$HOME/.claude/skills"; do
+  if [ -d "$skills_dir" ]; then SKILL_TARGETS="$SKILL_TARGETS $skills_dir"; fi
+done
+if [ "$NO_SKILLS" -eq 0 ] && [ -n "$SKILL_TARGETS" ]; then
+  INSTALL_SKILLS=1
+  if [ "$NON_INTERACTIVE" -ne 1 ]; then
+    printf 'Install the agent skills (setup + vault workflow) into:%s? [Y/n] ' "$SKILL_TARGETS"
+    answer=""
+    read answer < /dev/tty 2>/dev/null || answer=""
+    case "$answer" in n|N|no|No|NO) INSTALL_SKILLS=0 ;; esac
+  fi
+  if [ "$INSTALL_SKILLS" -eq 1 ]; then
+    for skills_dir in $SKILL_TARGETS; do
+      for skill in anything-obsidian-setup anything-obsidian-vault-workflow; do
+        rm -rf "$skills_dir/$skill"
+        cp -R "$APP_DIR/skills/$skill" "$skills_dir/$skill"
+      done
+    done
+    say "  ✓ agent skills installed into:$SKILL_TARGETS"
+  fi
+fi
+
 # ---------- init ----------
 if [ "$NON_INTERACTIVE" -eq 1 ]; then
   INIT_ARGS="--vaults-root $VAULTS_ROOT --url $URL --api-key $API_KEY"
@@ -198,23 +229,54 @@ fi
 
 # ---------- start ----------
 say ""
-START_ARGS="start --bg"
-if [ "$NO_BROWSER" -eq 1 ]; then START_ARGS="$START_ARGS --no-browser"; fi
-if "$LAUNCHER" $START_ARGS; then
-  DASH_PORT="$PORT"
-  if [ -z "$DASH_PORT" ]; then DASH_PORT=11400; fi
-  say ""
-  say "Installed. The dashboard is at http://localhost:$DASH_PORT"
-  say "Useful commands:"
-  say "  anything-obsidian status    health + setup check"
-  say "  anything-obsidian stop      stop dashboard and scheduler"
-  say "  anything-obsidian start-bg  keep vault sync running in the background"
-  say "Uninstall any time:"
-  say "  curl -fsSL https://raw.githubusercontent.com/$REPO/$BRANCH/uninstall.sh | sh"
+DASH_PORT="$PORT"
+if [ -z "$DASH_PORT" ]; then DASH_PORT=11400; fi
+open_dashboard_in_browser() {
+  if [ "$NO_BROWSER" -eq 1 ]; then return 0; fi
+  if command -v open >/dev/null 2>&1; then open "http://localhost:$DASH_PORT" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "http://localhost:$DASH_PORT" >/dev/null 2>&1 || true
+  fi
+}
+
+AUTOSTART=1
+if [ "$NO_AUTOSTART" -eq 1 ]; then AUTOSTART=0; fi
+if [ "$AUTOSTART" -eq 1 ] && [ "$NON_INTERACTIVE" -ne 1 ]; then
+  printf 'Keep the dashboard and sync running at login (auto-restart on crash)? [Y/n] '
+  answer=""
+  read answer < /dev/tty 2>/dev/null || answer=""
+  case "$answer" in n|N|no|No|NO) AUTOSTART=0 ;; esac
+fi
+
+if [ "$AUTOSTART" -eq 1 ]; then
+  if "$LAUNCHER" autostart on; then
+    open_dashboard_in_browser
+    say ""
+    say "Installed. The dashboard is at http://localhost:$DASH_PORT and stays running:"
+    say "it starts at every login and restarts automatically if it crashes."
+    say "Useful commands:"
+    say "  anything-obsidian status        health + setup check"
+    say "  anything-obsidian stop          stop now (comes back at next login)"
+    say "  anything-obsidian autostart off stop permanently"
+    say "Uninstall any time:"
+    say "  curl -fsSL https://raw.githubusercontent.com/$REPO/$BRANCH/uninstall.sh | sh"
+  else
+    warn "Autostart failed; falling back to a plain background start."
+    "$LAUNCHER" start --bg || { warn "The dashboard did not start. Re-run: anything-obsidian start"; exit 1; }
+    open_dashboard_in_browser
+    say "Installed. The dashboard is at http://localhost:$DASH_PORT"
+  fi
 else
-  CONFIG_HINT="${ANYTHING_OBSIDIAN_HOME:-$HOME/Library/Application Support/anything-obsidian}"
-  if [ "$OS" != "Darwin" ]; then CONFIG_HINT="${ANYTHING_OBSIDIAN_HOME:-$HOME/.config/anything-obsidian}"; fi
-  warn "The dashboard did not start. Check: $CONFIG_HINT/logs/dashboard.log"
-  warn "Re-run: anything-obsidian start"
-  exit 1
+  if "$LAUNCHER" start --bg; then
+    open_dashboard_in_browser
+    say ""
+    say "Installed. The dashboard is at http://localhost:$DASH_PORT"
+    say "Keep vault sync running in the background with: anything-obsidian start-bg"
+    say "Turn on auto-restart any time with: anything-obsidian autostart on"
+  else
+    CONFIG_HINT="${ANYTHING_OBSIDIAN_HOME:-$HOME/Library/Application Support/anything-obsidian}"
+    if [ "$OS" != "Darwin" ]; then CONFIG_HINT="${ANYTHING_OBSIDIAN_HOME:-$HOME/.config/anything-obsidian}"; fi
+    warn "The dashboard did not start. Check: $CONFIG_HINT/logs/dashboard.log"
+    warn "Re-run: anything-obsidian start"
+    exit 1
+  fi
 fi

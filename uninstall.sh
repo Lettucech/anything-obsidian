@@ -65,6 +65,17 @@ fi
 
 say "Anything Obsidian uninstaller"
 
+# ---------- stop launchd services (they may own the processes) ----------
+UID_NUM="$(id -u)"
+for label in app.anything-obsidian.dashboard app.anything-obsidian.scheduler; do
+  plist="$HOME/Library/LaunchAgents/$label.plist"
+  if [ -f "$plist" ]; then
+    launchctl bootout "gui/$UID_NUM/$label" >/dev/null 2>&1 || true
+    rm -f "$plist"
+    say "  removed LaunchAgent $label"
+  fi
+done
+
 # ---------- stop processes ----------
 stop_pid_file() {
   pid_file="$1"
@@ -129,6 +140,11 @@ fi
 
 say ""
 say "Uninstalled."
+for skills_dir in "$HOME/.zcode/skills" "$HOME/.agents/skills" "$HOME/.claude/skills"; do
+  if [ -d "$skills_dir/anything-obsidian-setup" ] || [ -d "$skills_dir/anything-obsidian-vault-workflow" ]; then
+    say "Agent skill copies were kept at $skills_dir — remove them with rm -rf if unwanted."
+  fi
+done
 if [ -n "$VAULTS_ROOT" ] && [ -d "$VAULTS_ROOT" ]; then
   say ""
   say "Your vault folders were NOT touched. They live in:"
