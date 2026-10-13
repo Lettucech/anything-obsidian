@@ -48,6 +48,75 @@ vault source files, commit Git changes, or trigger indexing through MCP.
    Git credentials and a commit identity are required only when that vault's
    optional automatic Git sync needs them.
 
+## Native install (one command, no Docker)
+
+The same control plane also runs as a plain Node app. The installer bootstraps
+everything — if the machine has no Node.js >= 18 it downloads a portable
+runtime automatically (no Homebrew, no sudo). It talks to an existing
+AnythingLLM instance (mini shared instance, AnythingLLM Desktop, or a remote
+server) and never hosts AnythingLLM itself.
+
+1. Install and set up in one command:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh
+   ```
+
+   The installer checks prerequisites, installs the app under
+   `~/.anything-obsidian/`, puts `anything-obsidian` on your PATH, then asks
+   a few setup questions: a vault root (default `~/ObsidianVaults` — a
+   self-created folder avoids macOS permission prompts around Documents and
+   Desktop), the AnythingLLM base URL and Developer API key, and it tests the
+   connection before saving a 0600 config under
+   `~/Library/Application Support/anything-obsidian/`. When it finishes, the
+   dashboard is running and your browser opens at `http://localhost:11400`.
+
+   Prefer no prompts? Pass everything up front (also how agents install it):
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
+     --vaults-root ~/ObsidianVaults --url http://localhost:11301 --api-key <key> --no-browser
+   ```
+
+   Or let your AI agent do it: agents can load the
+   `anything-obsidian-setup` skill from this repo
+   (`npx skills add Lettucech/anything-obsidian --skill anything-obsidian-setup`)
+   and handle the whole flow — install, setup, and health checks.
+
+2. Manage everything in the browser at `http://localhost:11400`. The
+   dashboard can be stopped and restarted:
+
+   ```bash
+   anything-obsidian status       # health + setup check (--json for agents)
+   anything-obsidian start        # foreground, opens the browser
+   anything-obsidian start --bg --no-browser   # background, agent friendly
+   anything-obsidian stop         # stops the dashboard and the scheduler
+   ```
+
+3. Keep vault sync running after the browser is closed:
+
+   ```bash
+   anything-obsidian start-bg
+   ```
+
+   The same scheduler can be toggled from the dashboard's power button.
+
+Configuration, registry, secrets, agent tokens, state, and logs all live under
+one directory (`~/Library/Application Support/anything-obsidian/` on macOS;
+override with `ANYTHING_OBSIDIAN_HOME`). The Docker stack described above can
+be used at the same time: the native dashboard listens on 11400 and never
+touches Docker's 11300 deployment.
+
+Uninstall in one command — it stops everything, removes the app and CLI, and
+keeps your data and vault folders by default:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/uninstall.sh | sh
+```
+
+Auto-start on login is planned as the next phase; see
+`docs/superpowers/specs/2026-10-07-native-app.md`.
+
 ## MCP access
 
 ### Local MCP
