@@ -267,6 +267,18 @@ dialog form { padding: clamp(22px, 4vw, 34px); }
 .dialog-heading h2 { font-size: 1.45rem; }
 .form-section, .advanced-settings { margin-bottom: 18px; }
 .add-vault-fields > .note { margin-bottom: 20px; }
+.import-tree { display: grid; gap: 10px; margin-top: 10px; padding: 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--field-surface); }
+.breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.breadcrumb .crumb { border: none; background: transparent; color: var(--blue); font: inherit; font-size: 0.82rem; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
+.breadcrumb .crumb:hover { background: var(--surface-muted); }
+.breadcrumb .crumb.current { color: var(--text); font-weight: 700; cursor: default; }
+.breadcrumb .crumb + .crumb::before { content: "/"; margin-right: 4px; color: var(--muted); }
+.tree-list { display: grid; gap: 4px; max-height: 220px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.tree-item { width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-strong); color: var(--text); font: inherit; font-size: 0.88rem; text-align: left; cursor: pointer; }
+.tree-item:hover { border-color: var(--accent); color: var(--accent-strong); }
+.tree-empty { padding: 4px 2px; color: var(--muted); font-size: 0.85rem; }
+.browse-note { margin: 0; color: var(--muted); font-size: 0.78rem; }
+.browse-note.error { color: var(--danger); }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .form-grid-wide, .allowlist { grid-column: 1 / -1; }
 .form-grid label { display: grid; gap: 6px; color: var(--text-soft); font-size: 0.8rem; font-weight: 650; }

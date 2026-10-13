@@ -75,8 +75,28 @@ export function agentRevokeMessage(name, referencedBy = []) {
   return `Agent '${name}' revoked. These vault allowlists still name it: ${referencedBy.join(", ")}`;
 }
 
+export function breadcrumbSegments(rootPath, currentPath, rootLabel = "Vault root") {
+  const crumbs = [{ name: rootLabel, path: rootPath }];
+  if (!currentPath || currentPath === rootPath) return crumbs;
+  const relative = currentPath.startsWith(`${rootPath}/`) ? currentPath.slice(rootPath.length + 1) : currentPath;
+  let accumulated = rootPath;
+  for (const segment of relative.split("/")) {
+    accumulated = `${accumulated}/${segment}`;
+    crumbs.push({ name: segment, path: accumulated });
+  }
+  return crumbs;
+}
+
+export function useFolderBlockedReason(tree) {
+  if (!tree) return "Open a folder inside the vault root to import it";
+  if (tree.canUseHere) return "";
+  return tree.path === tree.root
+    ? "Open a folder inside the vault root to import it"
+    : "Only folders directly inside the vault root can be imported";
+}
+
 if (typeof document !== "undefined") {
-  const state = { status: null, vaults: [], agents: [], editingId: null, createdVaultId: null, createdAgentName: null };
+  const state = { status: null, vaults: [], agents: [], editingId: null, createdVaultId: null, createdAgentName: null, browse: { open: false, path: "", tree: null } };
   const els = Object.fromEntries([
     "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
@@ -85,6 +105,7 @@ if (typeof document !== "undefined") {
     "add-vault-inline", "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
     "agents", "agent-message", "add-agent", "agent-dialog", "agent-form", "agent-form-title",
     "agent-create-fields", "agent-token-reveal", "agent-token-value", "agent-submit", "cancel-agent", "agent-dialog-message",
+    "import-browse", "import-browse-toggle", "import-tree-panel", "import-breadcrumb", "import-tree", "import-tree-note", "import-use-folder", "import-refresh-tree",
   ].map((id) => [id.replaceAll("-", ""), document.querySelector(`#${id}`)]));
 
   const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
@@ -113,6 +134,11 @@ if (typeof document !== "undefined") {
   els.agents.addEventListener("click", handleAgentAction);
   els.agentform.addEventListener("submit", createAgent);
   els.agentdialog.addEventListener("close", () => { state.createdAgentName = null; });
+  els.importbrowsetoggle.addEventListener("click", toggleImportBrowse);
+  els.importrefreshtree.addEventListener("click", () => loadImportTree(state.browse.path));
+  els.importtree.addEventListener("click", handleBrowseNavigation);
+  els.importbreadcrumb.addEventListener("click", handleBrowseNavigation);
+  els.importusefolder.addEventListener("click", useSelectedFolder);
 
   async function handleVaultAction(event) {
     const button = event.target.closest("button[data-vault-id], button[data-dashboard-action]");
@@ -206,6 +232,7 @@ if (typeof document !== "undefined") {
   function showForm(vault) {
     state.editingId = vault?.id || null;
     state.createdVaultId = null;
+    state.browse = { open: false, path: "", tree: null };
     els.vaultform.reset();
     if (vault) Object.entries(vault).forEach(([key, value]) => {
       const field = els.vaultform.elements.namedItem(key);
@@ -242,6 +269,8 @@ if (typeof document !== "undefined") {
     els.importdirectoryfield.hidden = !importMode;
     form.elements.importId.required = importMode;
     form.elements.importDirectory.required = importMode;
+    els.importbrowse.hidden = editing || !importMode;
+    if (els.importbrowse.hidden) closeImportBrowse();
     els.cloneurlfield.hidden = editing || importMode;
     form.elements.repositoryUrl.required = !editing && !importMode;
     els.privateauthfields.hidden = !privateRepository;
@@ -272,6 +301,77 @@ if (typeof document !== "undefined") {
     const completed = Boolean(state.createdVaultId);
     els.vaultsubmit.disabled = busy || completed;
     els.testvaultconnection.disabled = busy || completed;
+  }
+
+  async function toggleImportBrowse() {
+    if (state.browse.open) {
+      closeImportBrowse();
+      return;
+    }
+    state.browse.open = true;
+    els.importtreepanel.hidden = false;
+    els.importbrowsetoggle.textContent = "Hide browser";
+    await loadImportTree(state.browse.path);
+  }
+
+  function closeImportBrowse() {
+    state.browse.open = false;
+    if (els.importtreepanel) els.importtreepanel.hidden = true;
+    if (els.importbrowsetoggle) els.importbrowsetoggle.textContent = "Browse vault root…";
+  }
+
+  async function loadImportTree(browsePath) {
+    setBrowseNote("Loading folders…");
+    try {
+      const tree = await fetchJson(`/api/import-tree${browsePath ? `?path=${encodeURIComponent(browsePath)}` : ""}`);
+      state.browse.path = tree.path;
+      state.browse.tree = tree;
+      renderImportTree(tree);
+    } catch (error) {
+      setBrowseNote(error.message, true);
+    }
+  }
+
+  function renderImportTree(tree) {
+    els.importbreadcrumb.replaceChildren(...breadcrumbSegments(tree.root, tree.path).map((crumb) => {
+      const crumbButton = element("button", "crumb", crumb.name);
+      crumbButton.type = "button";
+      crumbButton.dataset.browsePath = crumb.path;
+      if (crumb.path === tree.path) crumbButton.classList.add("current");
+      return crumbButton;
+    }));
+    const items = tree.directories.map((entry) => {
+      const item = element("li", "");
+      const button = element("button", "tree-item", entry.name);
+      button.type = "button";
+      button.dataset.browsePath = entry.path;
+      item.append(button);
+      return item;
+    });
+    els.importtree.replaceChildren(...(items.length ? items : [element("li", "tree-empty", "No subdirectories here.")]));
+    els.importusefolder.disabled = Boolean(useFolderBlockedReason(tree));
+    els.importusefolder.title = useFolderBlockedReason(tree);
+    setBrowseNote(useFolderBlockedReason(tree) || `Importing '${tree.name}' as a vault directly beneath the vault root.`);
+  }
+
+  function setBrowseNote(text, error = false) {
+    els.importtreenote.textContent = text;
+    els.importtreenote.className = error ? "browse-note error" : "browse-note";
+  }
+
+  async function handleBrowseNavigation(event) {
+    const button = event.target.closest("button[data-browse-path]");
+    if (!button) return;
+    await loadImportTree(button.dataset.browsePath);
+  }
+
+  function useSelectedFolder() {
+    const tree = state.browse.tree;
+    if (!tree || useFolderBlockedReason(tree)) return;
+    els.vaultform.elements.importDirectory.value = tree.name;
+    if (!els.vaultform.elements.importId.value) els.vaultform.elements.importId.value = tree.name;
+    closeImportBrowse();
+    setDialogMessage(`Directory set to '${tree.name}'.`);
   }
 
   async function refresh() {

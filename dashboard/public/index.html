@@ -113,6 +113,18 @@
               <label id="clone-url-field" class="form-grid-wide">Repository URL <input name="repositoryUrl" type="url" placeholder="https://github.com/org/notes.git" required /></label>
               <label id="import-id-field" hidden>Vault ID <input name="importId" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="e.g. personal-notes" /></label>
               <label id="import-directory-field" hidden>Directory <input name="importDirectory" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Same as Vault ID" /></label>
+              <div id="import-browse" class="form-grid-wide" hidden>
+                <button id="import-browse-toggle" class="button button-secondary" type="button">Browse vault root…</button>
+                <div id="import-tree-panel" class="import-tree" hidden>
+                  <nav id="import-breadcrumb" class="breadcrumb" aria-label="Vault root path"></nav>
+                  <ul id="import-tree" class="tree-list"></ul>
+                  <p id="import-tree-note" class="browse-note"></p>
+                  <div class="form-actions">
+                    <button id="import-use-folder" class="button button-primary" type="button" disabled>Use this folder</button>
+                    <button id="import-refresh-tree" class="button button-quiet" type="button">Refresh</button>
+                  </div>
+                </div>
+              </div>
               <fieldset class="repository-visibility form-grid-wide">
                 <legend>Repository access</legend>
                 <label><input name="repositoryVisibility" type="radio" value="public" checked /> Public repository</label>

@@ -1,27 +1,34 @@
 #!/usr/bin/env node
+import { execFile as nodeExecFile } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { CONTROLLED_SERVICES, LOG_SERVICES, classifySystemState, publicConfig } from "./config.mjs";
 import { DockerClient } from "./docker-client.mjs";
 import { createJobManager } from "./jobs.mjs";
+import { createLocalJobManager, readSchedulerStatus, startSchedulerProcess, stopSchedulerProcess, tailLogFile } from "./local-jobs.mjs";
 import { redactSecretsObject, redactSecretsText } from "./redact.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
 import { createAgentTokenStore } from "../lib/agent-tokens.mjs";
 import { createAnythingllmClient } from "./anythingllm.mjs";
 import { createVaultStorage } from "./vault-storage.mjs";
+import { importTree } from "./import-tree.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, "public");
+const NATIVE_LOG_IDS = new Set(["syncer", "scheduler"]);
 
 export function createDashboardServer({
+  mode = "docker",
   docker = new DockerClient(),
-  jobs = createJobManager({ docker }),
   env = process.env,
+  jobs,
   fetchImpl = fetch,
+  native = null,
   registry = createVaultRegistry({
     rootPath: env.VAULTS_ROOT || "/vaults",
     registryPath: env.VAULT_REGISTRY_PATH || "/workspace/.anything-obsidian-registry/vaults.json",
@@ -39,12 +46,17 @@ export function createDashboardServer({
     rootPath: env.AGENT_TOKENS_PATH || "/workspace/.anything-obsidian-agent-tokens",
   }),
 } = {}) {
+  if (mode === "native" && !native?.schedulerPidPath) {
+    throw new Error("native mode requires native paths (schedulerPidPath, schedulerLogPath)");
+  }
+  const jobManager = jobs ?? (mode === "native" ? createLocalJobManager({ env }) : createJobManager({ docker }));
+  const context = { mode, docker, env, fetchImpl, native: native || {}, anythingllm, jobs: jobManager };
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://localhost");
       if (req.method === "GET" && url.pathname === "/") {
         if (await dashboardReady(anythingllm)) return await serveStatic(res, url.pathname);
-        return sendHtml(res, 200, dashboardSetupPage(publicConfig(env).anythingllmUrl));
+        return sendHtml(res, 200, dashboardSetupPage(publicConfig(env, mode).anythingllmUrl, mode));
       }
       if (req.method === "GET" && url.pathname === "/api/vaults") {
         return sendJson(res, 200, { vaults: await registry.list() });
@@ -80,7 +92,7 @@ export function createDashboardServer({
         };
         let workspace;
         if (workspaceMode === "create") {
-          workspace = await anythingllm.createWorkspace({ name: vaultInput.name });
+          workspace = await anythingllm.createWorkspace({ name: vaultInput.name || vaultInput.id });
         } else if (workspaceMode === "attach") {
           workspace = (await anythingllm.listWorkspaces()).find(
             (candidate) => candidate.slug === vaultInput.workspaceSlug,
@@ -130,24 +142,54 @@ export function createDashboardServer({
         return sendJson(res, 200, { removed: true, referencedBy });
       }
       if (req.method === "GET" && url.pathname === "/api/status") {
-        return sendJson(res, 200, await statusPayload({ docker, jobs, env, fetchImpl }));
+        return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "POST" && url.pathname === "/api/system/on") {
-        for (const service of Object.values(CONTROLLED_SERVICES)) await docker.startContainer(service.name);
-        return sendJson(res, 200, await statusPayload({ docker, jobs, env, fetchImpl }));
+        if (mode === "native") {
+          startSchedulerProcess({
+            env: { ...env },
+            pidPath: native.schedulerPidPath,
+            logPath: native.schedulerLogPath,
+            spawnImpl: native.spawnImpl,
+            killImpl: native.killImpl,
+          });
+        } else {
+          for (const service of Object.values(CONTROLLED_SERVICES)) await docker.startContainer(service.name);
+        }
+        return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "POST" && url.pathname === "/api/system/off") {
-        await Promise.all(
-          Object.values(CONTROLLED_SERVICES).map((service) => docker.stopContainer(service.name)),
-        );
-        return sendJson(res, 200, await statusPayload({ docker, jobs, env, fetchImpl }));
+        if (mode === "native") {
+          await stopSchedulerProcess({ pidPath: native.schedulerPidPath, killImpl: native.killImpl });
+        } else {
+          await Promise.all(
+            Object.values(CONTROLLED_SERVICES).map((service) => docker.stopContainer(service.name)),
+          );
+        }
+        return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "GET" && url.pathname === "/api/logs") {
         const id = url.searchParams.get("service") || "";
+        if (mode === "native") {
+          if (!NATIVE_LOG_IDS.has(id)) return sendJson(res, 400, { error: `Unknown log service: ${id}` });
+          const logs = redactSecretsText(tailLogFile(native.schedulerLogPath));
+          return sendJson(res, 200, { service: id, logs });
+        }
         const service = LOG_SERVICES[id];
         if (!service) return sendJson(res, 400, { error: `Unknown log service: ${id}` });
         const logs = redactSecretsText(await docker.containerLogs(service.name, { tail: 300 }));
         return sendJson(res, 200, { service: id, logs });
+      }
+      if (req.method === "GET" && url.pathname === "/api/import-tree") {
+        try {
+          const tree = await importTree({
+            vaultsRoot: env.VAULTS_ROOT || "/vaults",
+            requestedPath: url.searchParams.get("path") || "",
+          });
+          return sendJson(res, 200, tree);
+        } catch (error) {
+          return sendJson(res, error?.statusCode || 500, { error: error instanceof Error ? error.message : String(error) });
+        }
       }
       const vaultActionMatch = url.pathname.match(/^\/api\/vaults\/([a-z0-9-]+)\/actions\/([a-z-]+)$/);
       if (req.method === "POST" && vaultActionMatch) {
@@ -156,9 +198,9 @@ export function createDashboardServer({
           return sendJson(res, 404, { error: `Unknown action: ${actionId}` });
         }
         if (!(await registry.get(vaultId))) return sendJson(res, 404, { error: "Vault was not found" });
-        const snapshot = await serviceSnapshot({ docker, fetchImpl });
+        const snapshot = await serviceSnapshotFor(context);
         try {
-          const job = await jobs.start(vaultId, actionId, snapshot);
+          const job = await jobManager.start(vaultId, actionId, snapshot);
           return sendJson(res, 202, job);
         } catch (error) {
           return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
@@ -166,7 +208,7 @@ export function createDashboardServer({
       }
       if (req.method === "GET" && url.pathname.startsWith("/api/jobs/")) {
         const id = url.pathname.slice("/api/jobs/".length);
-        const job = jobs.get(id);
+        const job = jobManager.get(id);
         return job ? sendJson(res, 200, job) : sendJson(res, 404, { error: `Unknown job: ${id}` });
       }
       if (req.method === "GET" && !url.pathname.startsWith("/api/")) {
@@ -225,16 +267,72 @@ async function dashboardReady(anythingllm) {
   }
 }
 
-async function statusPayload({ docker, jobs, env, fetchImpl }) {
-  const services = await serviceSnapshot({ docker, fetchImpl });
+async function statusPayload({ mode, docker, jobs, env, fetchImpl, native, anythingllm }) {
+  const services = await serviceSnapshotFor({ mode, docker, fetchImpl, native, anythingllm });
   return redactSecretsObject({
     ok: true,
     systemState: classifySystemState(services),
     services,
     latestJob: jobs.latest(),
     jobs: jobs.list?.() ?? [],
-    config: publicConfig(env),
+    config: publicConfig(env, mode),
   });
+}
+
+function serviceSnapshotFor({ mode, docker, fetchImpl, native, anythingllm }) {
+  return mode === "native" ? nativeServiceSnapshot({ anythingllm, native }) : serviceSnapshot({ docker, fetchImpl });
+}
+
+async function nativeServiceSnapshot({ anythingllm, native }) {
+  const [anythingllmHealth, schedulerStatus, gitHealth] = await Promise.all([
+    probeAnythingllm(anythingllm),
+    Promise.resolve(readSchedulerStatus({ pidPath: native.schedulerPidPath, killImpl: native.killImpl })),
+    probeGit(native.execFileImpl || promisify(nodeExecFile)),
+  ]);
+  return [
+    {
+      id: "anythingllm",
+      label: "AnythingLLM",
+      found: true,
+      running: anythingllmHealth.ok,
+      state: anythingllmHealth.ok ? "connected" : "unreachable",
+      health: anythingllmHealth,
+    },
+    {
+      id: "scheduler",
+      label: "Scheduler",
+      found: true,
+      running: schedulerStatus.running,
+      state: schedulerStatus.running ? `running (pid ${schedulerStatus.pid})` : "stopped",
+      health: { ok: schedulerStatus.running, status: schedulerStatus.running ? "running" : "stopped" },
+    },
+    {
+      id: "git",
+      label: "Git",
+      found: true,
+      running: gitHealth.ok,
+      state: gitHealth.ok ? "available" : "missing",
+      health: gitHealth,
+    },
+  ];
+}
+
+async function probeAnythingllm(anythingllm) {
+  try {
+    await anythingllm.listWorkspaces();
+    return { ok: true, status: "ok" };
+  } catch (error) {
+    return { ok: false, status: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function probeGit(execFileImpl) {
+  try {
+    const { stdout } = await execFileImpl("git", ["--version"]);
+    return { ok: true, status: String(stdout).trim() || "available" };
+  } catch {
+    return { ok: false, status: "git command not found" };
+  }
 }
 
 async function serviceSnapshot({ docker, fetchImpl }) {
@@ -292,8 +390,21 @@ function sendHtml(res, status, body) {
   res.end(body);
 }
 
-function dashboardSetupPage(anythingllmUrl) {
+function dashboardSetupPage(anythingllmUrl, mode = "docker") {
   const anythingllm = escapeHtml(anythingllmUrl);
+  const steps = mode === "native"
+    ? `<ol>
+        <li>Open AnythingLLM and finish its initial setup.</li>
+        <li>Go to <strong>Settings → Developer API</strong> and create an API key.</li>
+        <li>Run <code>anything-obsidian init</code> and enter the URL and API key.</li>
+        <li>Restart with <code>anything-obsidian start</code>, then refresh this page.</li>
+      </ol>`
+    : `<ol>
+        <li>Open AnythingLLM and finish its initial setup.</li>
+        <li>Go to <strong>Settings → Developer API</strong> and create an API key.</li>
+        <li>Save it in this project's <code>.env</code> as <code>ANYTHINGLLM_API_KEY=...</code>.</li>
+        <li>Run <code>docker compose up -d --force-recreate dashboard mcp</code>, then refresh this page.</li>
+      </ol>`;
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -313,12 +424,7 @@ function dashboardSetupPage(anythingllmUrl) {
       <p>Anything Obsidian</p>
       <h1>AnythingLLM setup required</h1>
       <p>The dashboard could not verify a valid <code>ANYTHINGLLM_API_KEY</code>, so vault management is unavailable until setup is complete.</p>
-      <ol>
-        <li>Open AnythingLLM and finish its initial setup.</li>
-        <li>Go to <strong>Settings → Developer API</strong> and create an API key.</li>
-        <li>Save it in this project's <code>.env</code> as <code>ANYTHINGLLM_API_KEY=...</code>.</li>
-        <li>Run <code>docker compose up -d --force-recreate dashboard mcp</code>, then refresh this page.</li>
-      </ol>
+      ${steps}
       <a href="${anythingllm}" target="_blank" rel="noreferrer">Open AnythingLLM</a>
     </main>
   </body>
@@ -345,8 +451,18 @@ async function readJsonBody(req) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.env.DASHBOARD_PORT || 3000);
-  createDashboardServer().listen(port, "0.0.0.0", () => {
-    console.error(`[anything-obsidian-dashboard] listening on ${port}`);
+  const mode = process.env.AO_MODE === "native" ? "native" : "docker";
+  const port = Number(process.env.DASHBOARD_PORT || (mode === "native" ? 11400 : 3000));
+  const host = mode === "native" ? "127.0.0.1" : "0.0.0.0";
+  createDashboardServer({
+    mode,
+    native: mode === "native"
+      ? {
+          schedulerPidPath: process.env.AO_SCHEDULER_PID_PATH,
+          schedulerLogPath: process.env.AO_SCHEDULER_LOG_PATH,
+        }
+      : null,
+  }).listen(port, host, () => {
+    console.error(`[anything-obsidian-dashboard] listening on ${host}:${port}`);
   });
 }

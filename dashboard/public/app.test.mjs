@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  actionDisabledReason, activeTheme, agentCreatedLabel, agentRevokeMessage, dashboardMetrics,
-  gitAuthForRepository, nextTheme, restrictedAccessNote, serviceTone, systemPowerLabel, vaultActionUrl,
+  actionDisabledReason, activeTheme, agentCreatedLabel, agentRevokeMessage, breadcrumbSegments, dashboardMetrics,
+  gitAuthForRepository, nextTheme, restrictedAccessNote, serviceTone, systemPowerLabel, useFolderBlockedReason, vaultActionUrl,
   vaultSourcePayload,
 } from "./app.js";
 
@@ -98,4 +98,21 @@ test("agent labels and revoke messages report dangling allowlists", () => {
   assert.equal(agentCreatedLabel("not-a-date"), "");
   assert.equal(agentRevokeMessage("scout"), "Agent 'scout' revoked.");
   assert.equal(agentRevokeMessage("scout", ["secret-vault", "diary"]), "Agent 'scout' revoked. These vault allowlists still name it: secret-vault, diary");
+});
+
+test("import breadcrumbs walk from the vault root to the browsed folder", () => {
+  assert.deepEqual(breadcrumbSegments("/v", "/v"), [{ name: "Vault root", path: "/v" }]);
+  assert.deepEqual(breadcrumbSegments("/v", "", "Root"), [{ name: "Root", path: "/v" }]);
+  assert.deepEqual(breadcrumbSegments("/v", "/v/Work/Notes"), [
+    { name: "Vault root", path: "/v" },
+    { name: "Work", path: "/v/Work" },
+    { name: "Notes", path: "/v/Work/Notes" },
+  ]);
+});
+
+test("use-folder gating explains the direct-child rule", () => {
+  assert.equal(useFolderBlockedReason({ root: "/v", path: "/v", canUseHere: false }), "Open a folder inside the vault root to import it");
+  assert.equal(useFolderBlockedReason({ root: "/v", path: "/v/Work/Notes", canUseHere: false }), "Only folders directly inside the vault root can be imported");
+  assert.equal(useFolderBlockedReason({ root: "/v", path: "/v/Work", canUseHere: true }), "");
+  assert.equal(useFolderBlockedReason(null), "Open a folder inside the vault root to import it");
 });

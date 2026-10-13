@@ -1,0 +1,25 @@
+{
+  "name": "anything-obsidian",
+  "version": "0.1.0",
+  "description": "Local control plane connecting managed Obsidian vaults with AnythingLLM RAG indexes",
+  "type": "module",
+  "bin": {
+    "anything-obsidian": "bin/anything-obsidian.mjs"
+  },
+  "files": [
+    "bin/",
+    "dashboard/",
+    "lib/",
+    "scripts/",
+    "mcp/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test \"dashboard/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"scripts/**/*.test.mjs\""
+  },
+  "license": "MIT",
+  "private": true
+}

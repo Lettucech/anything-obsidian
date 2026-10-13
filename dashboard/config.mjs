@@ -58,7 +58,15 @@ export function classifySystemState(services) {
   return "partial";
 }
 
-export function publicConfig(env) {
+export function publicConfig(env, mode = "docker") {
+  if (mode === "native") {
+    return {
+      dashboardUrl: `http://localhost:${env.DASHBOARD_PORT || "11400"}`,
+      anythingllmUrl: stripTrailingSlash(env.ANYTHINGLLM_BASE_URL || ""),
+      mcpUrl: null,
+      vaultsRoot: env.VAULTS_ROOT || "",
+    };
+  }
   const dashboardPort = env.HOST_DASHBOARD_PORT || "11300";
   const anythingllmPort = env.HOST_ANYTHINGLLM_PORT || "11301";
   const mcpPort = env.HOST_MCP_PORT || "11333";
@@ -69,4 +77,8 @@ export function publicConfig(env) {
     mcpUrl: `http://localhost:${mcpPort}/mcp`,
     vaultsRoot: env.VAULTS_ROOT || "/vaults",
   };
+}
+
+function stripTrailingSlash(value) {
+  return value.replace(/\/+$/, "");
 }
