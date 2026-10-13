@@ -18,9 +18,11 @@ import {
   readSchedulerStatus,
   tailLogFile,
   waitForHttp,
+  WORKER_SCRIPT_PATH,
 } from "../dashboard/local-jobs.mjs";
 import { createAppConfigStore, defaultConfigRoot, expandTilde, nativeEnv } from "../lib/app-config.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
+import { createAutostartManager } from "../lib/autostart.mjs";
 
 const execFileAsync = promisify(execFile);
 const USAGE = `Usage: anything-obsidian <command>
@@ -31,6 +33,7 @@ Commands:
   start-bg   Start the background sync scheduler
   stop       Stop the dashboard (if backgrounded) and the sync scheduler
   status     Show install, config, and service health (--json for agents)
+  autostart  Keep the dashboard and scheduler running: on | off | status
 
 Options:
   --vaults-root <path>       Vault root directory (init)
@@ -62,13 +65,17 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
     case "init":
       return runInit({ flags, store, env, io, fetchImpl, log, promptFactory: deps.promptFactory });
     case "start":
-      return runStart({ store, env, spawnImpl, fetchImpl, log, background: "bg" in flags, noBrowser: "no-browser" in flags });
+      return runStart({ store, env, spawnImpl, fetchImpl, log, launchctl: deps.launchctl, background: "bg" in flags, noBrowser: "no-browser" in flags });
     case "start-bg":
       return runStartBg({ store, env, spawnImpl, killImpl, log });
+    case "scheduler-fg":
+      return runSchedulerFg({ store, env, spawnImpl, log });
     case "stop":
-      return runStop({ store, killImpl, log });
+      return runStop({ store, killImpl, log, launchctl: deps.launchctl, env });
     case "status":
-      return runStatus({ store, env, fetchImpl, execFileImpl, log, json: "json" in flags });
+      return runStatus({ store, env, fetchImpl, execFileImpl, log, json: "json" in flags, launchctl: deps.launchctl });
+    case "autostart":
+      return runAutostart({ subcommand: rest[0], store, env, log, json: "json" in flags, launchctl: deps.launchctl });
     case "-h":
     case "--help":
     case "help":
@@ -78,6 +85,94 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
       log(USAGE);
       return command === undefined ? 0 : 2;
   }
+}
+
+function autostartManager({ store, env, log, launchctl }) {
+  try {
+    return createAutostartManager({
+      homedir: env.HOME || undefined,
+      logsRoot: store.paths.logsRoot,
+      ...(launchctl ? { launchctl } : {}),
+    });
+  } catch (error) {
+    log(`Autostart is unavailable here: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+async function runAutostart({ subcommand, store, env, log, json, launchctl }) {
+  const config = await loadConfigOrWarn(store, log);
+  if (!config) return 1;
+  await store.ensureLayout();
+  const manager = autostartManager({ store, env, log, launchctl });
+  if (!manager) return 1;
+
+  switch (subcommand) {
+    case "on": {
+      await manager.enable({
+        dashboardLogPath: store.paths.dashboardLogPath,
+        schedulerLogPath: store.paths.schedulerLogPath,
+      });
+      const state = await manager.status();
+      if (json) {
+        log(JSON.stringify({ ok: true, autostart: "on", services: state }, null, 2));
+      } else {
+        log("Autostart is on. The dashboard and sync scheduler are running and will");
+        log("start again at every login and restart automatically if they crash.");
+      }
+      return 0;
+    }
+    case "off": {
+      await manager.disable();
+      if (json) {
+        log(JSON.stringify({ ok: true, autostart: "off" }, null, 2));
+      } else {
+        log("Autostart is off. The dashboard and scheduler are stopped and will not");
+        log("start at login. Start them any time with: anything-obsidian start");
+      }
+      return 0;
+    }
+    case "status":
+    default: {
+      const enabled = await manager.enabled();
+      const services = enabled ? await manager.status() : { dashboard: { loaded: false, running: false, pid: null }, scheduler: { loaded: false, running: false, pid: null } };
+      if (json) {
+        log(JSON.stringify({ ok: true, autostart: { enabled, ...services } }, null, 2));
+        return 0;
+      }
+      const describe = (name, service) =>
+        `${name}: ${service.running ? `running (pid ${service.pid})` : service.loaded ? "loaded, not running" : "not loaded"}`;
+      log(`Autostart: ${enabled ? "on" : "off"}`);
+      log(`  ${describe("Dashboard", services.dashboard)}`);
+      log(`  ${describe("Scheduler", services.scheduler)}`);
+      return 0;
+    }
+  }
+}
+
+async function runSchedulerFg({ store, env, spawnImpl, log }) {
+  const config = await loadConfigOrWarn(store, log);
+  if (!config) return 1;
+  await store.ensureLayout();
+
+  const child = spawnImpl(process.execPath, [WORKER_SCRIPT_PATH, "scheduler"], {
+    env: nativeEnv(config, store.paths, { env }),
+    stdio: "inherit",
+  });
+  const forward = (signal) => {
+    try {
+      child.kill(signal);
+    } catch {
+      // already gone
+    }
+  };
+  process.on("SIGTERM", () => forward("SIGTERM"));
+  process.on("SIGINT", () => forward("SIGINT"));
+  const code = await new Promise((resolve) => {
+    child.on("error", () => resolve(1));
+    child.on("close", resolve);
+  });
+  return code === 0 ? 0 : 1;
 }
 
 async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory }) {
@@ -203,38 +298,59 @@ async function loadConfigOrWarn(store, log) {
   return config;
 }
 
-async function runStart({ store, env, spawnImpl, fetchImpl, log, background, noBrowser }) {
+async function runStart({ store, env, spawnImpl, fetchImpl, log, launchctl, background, noBrowser }) {
   const config = await loadConfigOrWarn(store, log);
   if (!config) return 1;
   await store.ensureLayout();
 
-  const childEnv = { ...nativeEnv(config, store.paths, { env }), AO_MODE: "native" };
   const url = `http://localhost:${config.dashboardPort}`;
+  const manager = autostartManager({ store, env, log, launchctl });
+  // When launchd spawned us (AO_LAUNCHD), the plist IS the supervisor: run the
+  // server in-process and never self-detect as "already managed".
+  const autostartOn = manager && !env.AO_LAUNCHD ? await manager.enabled() : false;
 
   if (background) {
-    const result = startDashboardProcess({
-      env: childEnv,
-      pidPath: store.paths.dashboardPidPath,
-      logPath: store.paths.dashboardLogPath,
-      spawnImpl,
-    });
-    if (result.alreadyRunning) {
-      log(`Dashboard is already running at ${url}.`);
+    if (autostartOn && manager) {
+      await manager.enable({
+        dashboardLogPath: store.paths.dashboardLogPath,
+        schedulerLogPath: store.paths.schedulerLogPath,
+      });
+      log(`Dashboard is managed by launchd and running at ${url}.`);
     } else {
-      log(`Starting dashboard (pid ${result.pid})…`);
-      const ready = await waitForHttp(`http://127.0.0.1:${config.dashboardPort}/api/status`, { fetchImpl });
-      if (!ready) {
-        const logTail = tailLogFile(store.paths.dashboardLogPath, 20);
-        log(`✗ Dashboard did not become ready. Last log lines:`);
-        log(logTail || `(no log output)`);
-        return 1;
+      const childEnv = { ...nativeEnv(config, store.paths, { env }), AO_MODE: "native" };
+      const result = startDashboardProcess({
+        env: childEnv,
+        pidPath: store.paths.dashboardPidPath,
+        logPath: store.paths.dashboardLogPath,
+        spawnImpl,
+      });
+      if (result.alreadyRunning) {
+        log(`Dashboard is already running at ${url}.`);
+      } else {
+        log(`Starting dashboard (pid ${result.pid})…`);
+        const ready = await waitForHttp(`http://127.0.0.1:${config.dashboardPort}/api/status`, { fetchImpl });
+        if (!ready) {
+          const logTail = tailLogFile(store.paths.dashboardLogPath, 20);
+          log(`✗ Dashboard did not become ready. Last log lines:`);
+          log(logTail || `(no log output)`);
+          return 1;
+        }
+        log(`Dashboard running at ${url}.`);
       }
-      log(`Dashboard running at ${url}.`);
     }
     if (!noBrowser) openBrowser(url, { spawnImpl });
     return 0;
   }
 
+  if (autostartOn && manager) {
+    const services = await manager.status();
+    if (services.dashboard.running) {
+      log(`Dashboard is already managed by launchd and running at ${url}.`);
+      return 0;
+    }
+  }
+
+  const childEnv = { ...nativeEnv(config, store.paths, { env }), AO_MODE: "native" };
   const server = createDashboardServer({
     mode: "native",
     env: childEnv,
@@ -280,26 +396,38 @@ async function runStartBg({ store, env, spawnImpl, killImpl, log }) {
   return 0;
 }
 
-async function runStop({ store, killImpl, log }) {
+async function runStop({ store, killImpl, log, launchctl, env }) {
   const config = await loadConfigOrWarn(store, log);
   if (!config) return 1;
 
-  let exitCode = 0;
+  const manager = autostartManager({ store, env: env || process.env, log, launchctl });
+  if (manager && (await manager.enabled())) {
+    await manager.halt();
+    log("Dashboard and scheduler stopped (launchd services unloaded).");
+    log("They will start again at next login while autostart is on.");
+    log("Disable that permanently with: anything-obsidian autostart off");
+    return 0;
+  }
+
   const dashboard = await stopSchedulerProcess({ pidPath: store.paths.dashboardPidPath, killImpl });
   log(dashboard.stopped ? `Dashboard stopped (pid ${dashboard.pid}).` : "Dashboard is not running.");
   const scheduler = await stopSchedulerProcess({ pidPath: store.paths.schedulerPidPath, killImpl });
   log(scheduler.stopped ? `Scheduler stopped (pid ${scheduler.pid}).` : "Scheduler is not running.");
-  return exitCode;
+  return 0;
 }
 
-async function runStatus({ store, env, fetchImpl, execFileImpl, log, json }) {
+async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launchctl }) {
   const config = await store.load();
+  const manager = autostartManager({ store, env, log, launchctl });
+  const autostartEnabled = manager ? await manager.enabled() : false;
+  const launchd = autostartEnabled && manager ? await manager.status() : null;
   const report = {
     ok: false,
     platform: process.platform,
     node: process.version.replace(/^v/, ""),
     git: null,
     config: null,
+    autostart: { enabled: autostartEnabled, ...(launchd ?? {}) },
     anythingllm: { ok: false, detail: "not configured" },
     dashboard: { running: false, pid: null, healthy: false, url: null },
     scheduler: { running: false, pid: null },
@@ -322,9 +450,26 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json }) {
     dashboardPort: config.dashboardPort,
   };
 
-  const dashboard = readSchedulerStatus({ pidPath: store.paths.dashboardPidPath, killImpl: processKill });
+  let dashboardPid = null;
+  let dashboardRunning = false;
+  let schedulerPid = null;
+  let schedulerRunning = false;
+  if (launchd) {
+    dashboardPid = launchd.dashboard.pid;
+    dashboardRunning = launchd.dashboard.running;
+    schedulerPid = launchd.scheduler.pid;
+    schedulerRunning = launchd.scheduler.running;
+  } else {
+    const dashboard = readSchedulerStatus({ pidPath: store.paths.dashboardPidPath, killImpl: processKill });
+    dashboardPid = dashboard.pid;
+    dashboardRunning = dashboard.running;
+    const scheduler = readSchedulerStatus({ pidPath: store.paths.schedulerPidPath, killImpl: processKill });
+    schedulerPid = scheduler.pid;
+    schedulerRunning = scheduler.running;
+  }
+
   let dashboardHealthy = false;
-  if (dashboard.running) {
+  if (dashboardRunning) {
     try {
       const response = await fetchImpl(`http://127.0.0.1:${config.dashboardPort}/api/status`);
       dashboardHealthy = response.ok;
@@ -332,10 +477,8 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json }) {
       dashboardHealthy = false;
     }
   }
-  report.dashboard = { running: dashboard.running, pid: dashboard.pid, healthy: dashboardHealthy, url: dashboardUrl };
-
-  const scheduler = readSchedulerStatus({ pidPath: store.paths.schedulerPidPath, killImpl: processKill });
-  report.scheduler = { running: scheduler.running, pid: scheduler.pid };
+  report.dashboard = { running: dashboardRunning, pid: dashboardPid, healthy: dashboardHealthy, url: dashboardUrl };
+  report.scheduler = { running: schedulerRunning, pid: schedulerPid };
 
   const client = createAnythingllmClient({
     baseUrl: config.anythingllmBaseUrl,
@@ -383,6 +526,7 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json }) {
     const dashboard = value.dashboard;
     log(`  ${mark(dashboard.healthy)} Dashboard: ${dashboard.healthy ? `running at ${dashboard.url}` : dashboard.running ? `starting or unhealthy (pid ${dashboard.pid})` : "not running"}`);
     log(`  ${mark(value.scheduler.running)} Scheduler: ${value.scheduler.running ? `running (pid ${value.scheduler.pid})` : "not running"}`);
+    log(`  ${mark(value.autostart.enabled)} Autostart: ${value.autostart.enabled ? "on (starts at login, restarts on crash)" : "off"}`);
   }
 }
 

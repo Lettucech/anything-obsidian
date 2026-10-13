@@ -305,3 +305,145 @@ async function waitForPidExit(pid) {
   }
   throw new Error(`pid ${pid} did not exit`);
 }
+
+function fakeLaunchctl(tracker, { runningLabels = [] } = {}) {
+  return async (args) => {
+    tracker.push(args);
+    if (args[0] === "bootstrap") return { stdout: "", stderr: "" };
+    if (args[0] === "kickstart") return { stdout: "", stderr: "" };
+    if (args[0] === "bootout") return { stdout: "", stderr: "" };
+    if (args[0] === "print") {
+      const label = args[1].split("/").at(-1);
+      if (runningLabels.includes(label)) {
+        return { stdout: `\t"state" = "running"\n\t"pid" = 4321\n`, stderr: "" };
+      }
+      throw new Error("Could not find service");
+    }
+    return { stdout: "", stderr: "" };
+  };
+}
+
+async function initializedEnv(home, url) {
+  const env = { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home };
+  await runCli(
+    ["init", "--vaults-root", path.join(home, "Vaults"), "--url", url, "--api-key", "k"],
+    { env, log: () => {} },
+  );
+  return env;
+}
+
+test("autostart on writes plists, kickstarts launchd, and off tears it down", async () => {
+  const { home, url } = await setup({});
+  const env = await initializedEnv(home, url);
+  const tracker = [];
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+  const deps = { env, log: output.line, launchctl: fakeLaunchctl(tracker) };
+
+  assert.equal(await runCli(["autostart", "on"], deps), 0);
+  const paths = createAppConfigStore({ rootDir: configRoot(home) }).paths;
+  const launchAgents = path.join(home, "Library", "LaunchAgents");
+  assert.equal(existsSync(path.join(launchAgents, "app.anything-obsidian.dashboard.plist")), true);
+  assert.equal(existsSync(path.join(launchAgents, "app.anything-obsidian.scheduler.plist")), true);
+  const dashboardPlist = readFileSync(path.join(launchAgents, "app.anything-obsidian.dashboard.plist"), "utf8");
+  assert.match(dashboardPlist, /<string>--no-browser<\/string>/);
+  assert.match(dashboardPlist, new RegExp(paths.logsRoot.replaceAll("/", "\\/")));
+  assert.equal(tracker.filter((args) => args[0] === "kickstart").length, 2);
+  assert.match(output.lines.join("\n"), /Autostart is on/);
+
+  tracker.length = 0;
+  assert.equal(await runCli(["autostart", "off"], deps), 0);
+  assert.equal(tracker.filter((args) => args[0] === "bootout").length, 2);
+  assert.equal(existsSync(path.join(launchAgents, "app.anything-obsidian.dashboard.plist")), false);
+  assert.match(output.lines.join("\n"), /Autostart is off/);
+});
+
+test("autostart status reports plist state without launchd calls when off", async () => {
+  const { home, url } = await setup({});
+  const env = await initializedEnv(home, url);
+  const tracker = [];
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+
+  assert.equal(await runCli(["autostart", "status"], {
+    env, log: output.line, launchctl: fakeLaunchctl(tracker),
+  }), 0);
+  assert.deepEqual(tracker, []);
+  assert.match(output.lines.join("\n"), /Autostart: off/);
+
+  output.lines.length = 0;
+  assert.equal(await runCli(["autostart", "status", "--json"], {
+    env, log: output.line, launchctl: fakeLaunchctl(tracker, { runningLabels: [] }),
+  }), 0);
+  const report = JSON.parse(output.lines.at(-1));
+  assert.equal(report.autostart.enabled, false);
+});
+
+test("autostart status reads launchd state when enabled", async () => {
+  const { home, url } = await setup({});
+  const env = await initializedEnv(home, url);
+  const tracker = [];
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+  const deps = { env, log: output.line, launchctl: fakeLaunchctl(tracker, { runningLabels: ["app.anything-obsidian.dashboard"] }) };
+
+  await runCli(["autostart", "on"], deps);
+  output.lines.length = 0;
+  assert.equal(await runCli(["autostart", "status", "--json"], deps), 0);
+  const report = JSON.parse(output.lines.at(-1));
+  assert.equal(report.autostart.enabled, true);
+  assert.equal(report.autostart.dashboard.running, true);
+  assert.equal(report.autostart.dashboard.pid, 4321);
+  assert.equal(report.autostart.scheduler.running, false);
+});
+
+test("stop with autostart on unloads launchd services instead of pid files", async () => {
+  const { home, url } = await setup({});
+  const env = await initializedEnv(home, url);
+  const tracker = [];
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+  const deps = { env, log: output.line, launchctl: fakeLaunchctl(tracker) };
+
+  await runCli(["autostart", "on"], deps);
+  tracker.length = 0;
+  output.lines.length = 0;
+
+  assert.equal(await runCli(["stop"], deps), 0);
+  assert.equal(tracker.filter((args) => args[0] === "bootout").length, 2);
+  const text = output.lines.join("\n");
+  assert.match(text, /stopped \(launchd services unloaded\)/);
+  assert.match(text, /autostart off/);
+  assert.equal(existsSync(path.join(home, "Library", "LaunchAgents", "app.anything-obsidian.dashboard.plist")), true);
+});
+
+test("start --bg with autostart on goes through launchd instead of a pid file", async () => {
+  const { home, url } = await setup({});
+  const env = await initializedEnv(home, url);
+  const tracker = [];
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+  const deps = { env, log: output.line, launchctl: fakeLaunchctl(tracker) };
+
+  await runCli(["autostart", "on"], deps);
+  tracker.length = 0;
+  output.lines.length = 0;
+
+  assert.equal(await runCli(["start", "--bg", "--no-browser"], deps), 0);
+  assert.equal(tracker.filter((args) => args[0] === "kickstart").length, 2);
+  assert.match(output.lines.join("\n"), /managed by launchd/);
+  const paths = createAppConfigStore({ rootDir: configRoot(home) }).paths;
+  assert.equal(existsSync(paths.dashboardPidPath), false);
+});
+
+test("status --json includes autostart and uses launchd state when enabled", async () => {
+  const { home, url } = await setup({ body: { workspaces: [] } });
+  const env = await initializedEnv(home, url);
+  const tracker = [];
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+  const deps = { env, log: output.line, launchctl: fakeLaunchctl(tracker, { runningLabels: ["app.anything-obsidian.dashboard"] }) };
+
+  await runCli(["autostart", "on"], deps);
+  output.lines.length = 0;
+  assert.equal(await runCli(["status", "--json"], deps), 0);
+  const report = JSON.parse(output.lines.at(-1));
+  assert.equal(report.autostart.enabled, true);
+  assert.equal(report.autostart.dashboard.running, true);
+  assert.equal(report.dashboard.running, true);
+  assert.equal(report.scheduler.running, false);
+});
