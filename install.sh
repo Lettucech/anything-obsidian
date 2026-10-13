@@ -47,6 +47,22 @@ Environment overrides:
 USAGE_EOF
 }
 
+# ---------- when piped, re-exec from a real file so prompts work ----------
+# Runs before flag parsing so "$@" is still intact. The env guard prevents
+# the re-executed instance from re-execing again.
+if [ ! -t 0 ] && [ -z "${AO_INSTALLER_EXECED:-}" ]; then
+  if [ -r "$0" ] && [ -s "$0" ] && [ "$0" != "/dev/stdin" ]; then SCRIPT_FILE="$0";
+  else
+    SCRIPT_FILE="$APP_ROOT/install.$$.sh"
+    mkdir -p "$APP_ROOT"
+    curl -fsSL "$SELF_URL" -o "$SCRIPT_FILE" || die "Could not download the installer. Check your network and try again."
+  fi
+  if ( : </dev/tty ) 2>/dev/null; then STDIN_SRC="/dev/tty"; else STDIN_SRC="/dev/null"; fi
+  AO_INSTALLER_EXECED=1
+  export AO_INSTALLER_EXECED
+  exec sh "$SCRIPT_FILE" "$@" <"$STDIN_SRC"
+fi
+
 # ---------- flags ----------
 VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; WANT_HELP=0
 while [ $# -gt 0 ]; do
@@ -65,20 +81,6 @@ if [ "$WANT_HELP" -eq 1 ]; then usage; exit 0; fi
 
 NON_INTERACTIVE=0
 if [ -n "$VAULTS_ROOT" ] && [ -n "$URL" ] && [ -n "$API_KEY" ]; then NON_INTERACTIVE=1; fi
-
-# ---------- when piped, re-exec from a real file so prompts work ----------
-if [ ! -t 0 ]; then
-  if [ -r "$0" ] && [ -s "$0" ] && ! printf '%s' "$0" | grep -q '^/dev/stdin$'; then SCRIPT_FILE="$0";
-  else
-    SCRIPT_FILE="$APP_ROOT/install.$$.sh"
-    mkdir -p "$APP_ROOT"
-    curl -fsSL "$SELF_URL" -o "$SCRIPT_FILE" || die "Could not download the installer. Check your network and try again."
-  fi
-  if [ "$NON_INTERACTIVE" -eq 1 ]; then
-    exec sh "$SCRIPT_FILE" "$@" </dev/null
-  fi
-  exec sh "$SCRIPT_FILE" "$@" </dev/tty >/dev/tty 2>&1
-fi
 
 # ---------- platform ----------
 OS="$(uname -s)"; ARCH="$(uname -m)"

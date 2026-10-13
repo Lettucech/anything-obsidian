@@ -22,6 +22,21 @@ BRANCH="${ANYTHING_OBSIDIAN_BRANCH:-main}"
 
 say() { printf '%s\n' "$*"; }
 
+# ---------- when piped, re-exec from a real file (before flag parsing so "$@" stays intact) ----------
+if [ ! -t 0 ] && [ -z "${AO_UNINSTALLER_EXECED:-}" ]; then
+  if [ -r "$0" ] && [ -s "$0" ] && [ "$0" != "/dev/stdin" ]; then SCRIPT_FILE="$0";
+  else
+    SCRIPT_FILE="$APP_ROOT/uninstall.$$.sh"
+    mkdir -p "$APP_ROOT" 2>/dev/null || mkdir -p "$HOME/.anything-obsidian"
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$BRANCH/uninstall.sh" -o "$SCRIPT_FILE" \
+      || { printf '!! Could not download the uninstaller.\n' >&2; exit 1; }
+  fi
+  if ( : </dev/tty ) 2>/dev/null; then STDIN_SRC="/dev/tty"; else STDIN_SRC="/dev/null"; fi
+  AO_UNINSTALLER_EXECED=1
+  export AO_UNINSTALLER_EXECED
+  exec sh "$SCRIPT_FILE" "$@" <"$STDIN_SRC"
+fi
+
 PURGE_DATA=0; ASSUME_YES=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -33,21 +48,6 @@ while [ $# -gt 0 ]; do
     *) printf '!! Unknown option: %s\n' "$1" >&2; exit 1 ;;
   esac
 done
-
-# ---------- when piped, re-exec from a real file ----------
-if [ ! -t 0 ]; then
-  if [ -r "$0" ] && [ -s "$0" ]; then SCRIPT_FILE="$0";
-  else
-    SCRIPT_FILE="$APP_ROOT/uninstall.$$.sh"
-    mkdir -p "$APP_ROOT" 2>/dev/null || mkdir -p "$HOME/.anything-obsidian"
-    curl -fsSL "https://raw.githubusercontent.com/$REPO/$BRANCH/uninstall.sh" -o "$SCRIPT_FILE" \
-      || { printf '!! Could not download the uninstaller.\n' >&2; exit 1; }
-  fi
-  if [ "$ASSUME_YES" -eq 1 ] || [ "$PURGE_DATA" -eq 1 ]; then
-    exec sh "$SCRIPT_FILE" "$@" </dev/null
-  fi
-  exec sh "$SCRIPT_FILE" "$@" </dev/tty >/dev/tty 2>&1
-fi
 
 # ---------- locate the data directory ----------
 DATA_DIR="${ANYTHING_OBSIDIAN_HOME:-}"
