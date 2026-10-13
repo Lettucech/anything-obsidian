@@ -31,6 +31,11 @@ anything-obsidian status --json   # exit 0 + "ok": true == done
 Collect the AnythingLLM URL and API key from the user (Settings → Developer
 API). Never invent a key. Verify with `status --json` after every change.
 
+The installer registers macOS LaunchAgents by default (auto-start at login,
+auto-restart on crash): `anything-obsidian autostart on|off|status` controls
+them. While autostart is on, `stop` unloads the services until next login —
+tell the user that, and use `autostart off` for a permanent stop.
+
 ## Repo conventions
 
 - Pure Node ESM (`type: module`), **zero runtime dependencies** — do not add

@@ -136,8 +136,17 @@ browsed folder is the root or deeper than one level.
 - `stop` — SIGTERM → SIGKILL → pid file cleanup.
 - `--help` / unknown commands print usage.
 
-## Phase 2 (not this change)
+## Phase 2 progress
 
-LaunchAgent
-auto-start, job persistence across restarts, Keychain-backed API key, npm
-publish.
+- **Auto-start / auto-restart (done 2026-10-13):** `autostart on|off|status`
+  registers two per-user macOS LaunchAgents (`app.anything-obsidian.dashboard`
+  running `start --no-browser`, `app.anything-obsidian.scheduler` running the
+  foreground `scheduler-fg` command) with `RunAtLoad` + `KeepAlive`. While
+  autostart is on, launchd owns the processes: `stop` unloads them (they
+  return at next login), `start --bg` delegates to `kickstart`, and `status`
+  reports launchd state instead of pid files. The installer enables this by
+  default (`--no-autostart` to opt out) and also copies the two agent skills
+  into detected skill directories (`--no-skills` to opt out). Linux systemd
+  units are not implemented.
+- **Job persistence, Keychain-backed API key, npm publish:** still open.
+  (npm publish is unlikely to ever be needed given `install.sh`.)

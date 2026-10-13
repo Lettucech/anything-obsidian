@@ -93,13 +93,19 @@ server) and never hosts AnythingLLM itself.
    anything-obsidian stop         # stops the dashboard and the scheduler
    ```
 
-3. Keep vault sync running after the browser is closed:
+3. Vault sync and the dashboard stay running on their own. The installer
+   registers a per-user macOS LaunchAgent (no admin needed): both start at
+   every login and restart automatically if they crash. Control it any time:
 
    ```bash
-   anything-obsidian start-bg
+   anything-obsidian autostart status   # what is registered and running
+   anything-obsidian stop               # stop now (returns at next login)
+   anything-obsidian autostart off      # stop permanently
+   anything-obsidian autostart on       # turn auto-restart back on
    ```
 
-   The same scheduler can be toggled from the dashboard's power button.
+   If you declined autostart during install, `anything-obsidian start-bg`
+   runs the sync scheduler without it.
 
 Configuration, registry, secrets, agent tokens, state, and logs all live under
 one directory (`~/Library/Application Support/anything-obsidian/` on macOS;
@@ -107,15 +113,14 @@ override with `ANYTHING_OBSIDIAN_HOME`). The Docker stack described above can
 be used at the same time: the native dashboard listens on 11400 and never
 touches Docker's 11300 deployment.
 
-Uninstall in one command — it stops everything, removes the app and CLI, and
-keeps your data and vault folders by default:
+Uninstall in one command — it stops everything (including the LaunchAgents),
+removes the app and CLI, and keeps your data and vault folders by default:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/uninstall.sh | sh
 ```
 
-Auto-start on login is planned as the next phase; see
-`docs/superpowers/specs/2026-10-07-native-app.md`.
+See `docs/superpowers/specs/2026-10-07-native-app.md` for the design notes.
 
 ## MCP access
 
