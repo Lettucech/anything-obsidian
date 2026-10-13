@@ -51,7 +51,28 @@ test("vault routes import a local repository, attach a workspace, and remove onl
   assert.equal(created.status, 201);
   assert.equal((await request(app, "DELETE", "/api/vaults/personal")).status, 204);
   assert.deepEqual(secrets.removed, ["personal"]);
-  assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
+  assert.deepEqual((await request(app, "GET", "/api/vaults")).body.vaults, []);
+});
+
+test("vault creation falls back to the vault id when an import has no display name", async () => {
+  const createdWorkspaces = [];
+  const app = createDashboardServer({
+    docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(),
+    anythingllm: {
+      async listWorkspaces() { return []; },
+      async createWorkspace({ name }) { createdWorkspaces.push(name); return { id: 3, name, slug: "diary" }; },
+    },
+    vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(), env: {},
+  });
+
+  const response = await request(app, "POST", "/api/vaults", {
+    sourceMode: "import", id: "diary", directory: "diary", name: "",
+    workspaceMode: "create", repositoryVisibility: "public",
+    gitUserName: "Diary Bot", gitUserEmail: "diary@example.test",
+  });
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(createdWorkspaces, ["diary"]);
 });
 
 test("agent token routes create, list, and revoke MCP agent identities", async () => {
