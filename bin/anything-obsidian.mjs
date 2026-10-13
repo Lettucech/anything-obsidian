@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
@@ -423,6 +424,14 @@ function parseFlags(args) {
   return flags;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === entryUrl()) {
   process.exitCode = await runCli();
+}
+
+function entryUrl() {
+  try {
+    return pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return pathToFileURL(path.resolve(process.argv[1])).href;
+  }
 }
