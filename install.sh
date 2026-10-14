@@ -247,7 +247,7 @@ fi
 # ---------- start ----------
 say ""
 DASH_PORT="$PORT"
-if [ -z "$DASH_PORT" ]; then DASH_PORT=11400; fi
+if [ -z "$DASH_PORT" ]; then DASH_PORT=21400; fi
 open_dashboard_in_browser() {
   if [ "$NO_BROWSER" -eq 1 ]; then return 0; fi
   if command -v open >/dev/null 2>&1; then open "http://localhost:$DASH_PORT" >/dev/null 2>&1 || true

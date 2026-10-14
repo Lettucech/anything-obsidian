@@ -45,7 +45,7 @@ server) and never hosts AnythingLLM itself.
    Desktop), the AnythingLLM base URL and Developer API key, and it tests the
    connection before saving a 0600 config under
    `~/Library/Application Support/anything-obsidian/`. When it finishes, the
-   dashboard is running and your browser opens at `http://localhost:11400`.
+   dashboard is running and your browser opens at `http://localhost:21400`.
 
    Prefer no prompts? Pass everything up front (also how agents install it):
 
@@ -59,7 +59,7 @@ server) and never hosts AnythingLLM itself.
    (`npx skills add Lettucech/anything-obsidian --skill anything-obsidian-setup`)
    and handle the whole flow — install, setup, and health checks.
 
-2. Manage everything in the browser at `http://localhost:11400`. The
+2. Manage everything in the browser at `http://localhost:21400`. The
    dashboard can be stopped and restarted:
 
    ```bash
@@ -113,7 +113,7 @@ See `docs/superpowers/specs/2026-10-07-native-app.md` for the design notes.
 The endpoint is bound to loopback only and starts with autostart:
 
 ```text
-http://localhost:11433/mcp
+http://localhost:21433/mcp
 ```
 
 It exposes RAG plus read-only local vault discovery:
@@ -168,7 +168,7 @@ anything-obsidian lan token <t>   # or set your own token
 anything-obsidian lan off
 ```
 
-Remote clients connect to `http://<host>:11444/mcp` and must send:
+Remote clients connect to `http://<host>:21444/mcp` and must send:
 
 ```text
 Authorization: Bearer <lan-token>

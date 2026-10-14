@@ -267,8 +267,8 @@ async function serviceSnapshot({ anythingllm, native, fetchImpl }) {
     probeAnythingllm(anythingllm),
     Promise.resolve(readSchedulerStatus({ pidPath: native.schedulerPidPath, killImpl: native.killImpl })),
     probeGit(native.execFileImpl || promisify(nodeExecFile)),
-    probeHttp(fetchImpl, "http://127.0.0.1:11433/health"),
-    probeHttp(fetchImpl, "http://127.0.0.1:11444/health"),
+    probeHttp(fetchImpl, "http://127.0.0.1:21433/health"),
+    probeHttp(fetchImpl, "http://127.0.0.1:21444/health"),
   ]);
   return [
     {
@@ -293,7 +293,7 @@ async function serviceSnapshot({ anythingllm, native, fetchImpl }) {
       found: true,
       powerManaged: false,
       running: mcpHealth.ok,
-      state: mcpHealth.ok ? "running (loopback 11433)" : "stopped",
+      state: mcpHealth.ok ? "running (loopback 21433)" : "stopped",
       health: mcpHealth.ok ? mcpHealth : { ok: false, status: "stopped" },
     },
     {
@@ -302,7 +302,7 @@ async function serviceSnapshot({ anythingllm, native, fetchImpl }) {
       found: true,
       powerManaged: false,
       running: mcpLanHealth.ok,
-      state: mcpLanHealth.ok ? "running (11444, token required)" : "off",
+      state: mcpLanHealth.ok ? "running (21444, token required)" : "off",
       health: mcpLanHealth.ok ? mcpLanHealth : { ok: true, status: "off by default" },
     },
     {
@@ -429,7 +429,7 @@ async function readJsonBody(req) {
 }
 
 if (import.meta.url === entryUrl()) {
-  const port = Number(process.env.DASHBOARD_PORT || 11400);
+  const port = Number(process.env.DASHBOARD_PORT || 21400);
   createDashboardServer({
     native: {
       schedulerPidPath: process.env.AO_SCHEDULER_PID_PATH,

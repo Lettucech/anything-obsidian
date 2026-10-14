@@ -8,7 +8,7 @@ matches where the agent runs; neither profile writes vault source files.
 Start the default stack and connect to:
 
 ```text
-http://localhost:11433/mcp
+http://localhost:21433/mcp
 ```
 
 The local profile provides RAG plus raw-vault discovery and bounded source

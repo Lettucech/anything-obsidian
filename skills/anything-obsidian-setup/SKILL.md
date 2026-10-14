@@ -95,7 +95,7 @@ Human-readable form: `anything-obsidian status`.
 - On a headless Linux server without an active session, autostart needs
   `sudo loginctl enable-linger <user>` once; without it the installer falls
   back to a plain background start.
-- The dashboard URL is `http://localhost:11400` unless a `--port` was set.
+- The dashboard URL is `http://localhost:21400` unless a `--port` was set.
 
 The installer turns autostart on by default (opt out with `--no-autostart`).
 All state lives under one data directory (`~/Library/Application Support/

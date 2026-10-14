@@ -34,7 +34,7 @@ function nativeEnvObject() {
     AGENT_TOKENS_PATH: "/Users/x/Library/Application Support/anything-obsidian/agent-tokens",
     ANYTHINGLLM_BASE_URL: "http://localhost:11301",
     ANYTHINGLLM_API_KEY: "key",
-    DASHBOARD_PORT: "11400",
+    DASHBOARD_PORT: "21400",
   };
 }
 
@@ -59,7 +59,7 @@ test("native status reports AnythingLLM, scheduler, and git services", async () 
   assert.equal(byId.git.running, true);
   assert.match(byId.git.health.status, /git version/);
   assert.equal(response.body.systemState, "partial");
-  assert.equal(response.body.config.dashboardUrl, "http://localhost:11400");
+  assert.equal(response.body.config.dashboardUrl, "http://localhost:21400");
   assert.equal(response.body.config.anythingllmUrl, "http://localhost:11301");
   assert.equal(response.body.config.vaultsRoot, "/Users/x/Vaults");
 });

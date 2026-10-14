@@ -217,8 +217,8 @@ export function startHttpServer(profile) {
 }
 
 function mcpPort(profile) {
-  if (profile === "lan") return Number(process.env.MCP_LAN_PORT ?? 11444);
-  return Number(process.env.MCP_PORT ?? 11433);
+  if (profile === "lan") return Number(process.env.MCP_LAN_PORT ?? 21444);
+  return Number(process.env.MCP_PORT ?? 21433);
 }
 
 if (process.argv[1] && import.meta.url === entryUrl()) {

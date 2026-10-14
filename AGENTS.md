@@ -9,9 +9,9 @@ Anything Obsidian is a local control plane connecting Git-backed Obsidian
 vaults with AnythingLLM RAG indexes. Two forms coexist:
 
 - A plain Node app, installed by `install.sh`, managed by the
-  `anything-obsidian` CLI and a browser dashboard on port 11400. AnythingLLM
+  `anything-obsidian` CLI and a browser dashboard on port 21400. AnythingLLM
   is always an external client-side dependency (URL + API key in config) —
-  the app never hosts it. MCP endpoints: loopback 11433, optional LAN 11434
+  the app never hosts it. MCP endpoints: loopback 21433, optional LAN 11434
   (`lan on`, Bearer token required).
 
 There is no Docker stack, no Electron/desktop-shell plan, and no npm publish —
@@ -46,8 +46,8 @@ login session.
   packages; use `node:` builtins and the global `fetch`.
 - Tests: `npm test` runs `node --test` over `mcp/ dashboard/ lib/ scripts/
   bin/` (the MCP server is plain JS now).
-- Network boundaries: dashboard and local MCP bind `127.0.0.1` only (11400 /
-  11433); the LAN MCP (11444) is opt-in, RAG-only, and token-gated. Vault
+- Network boundaries: dashboard and local MCP bind `127.0.0.1` only (21400 /
+  21433); the LAN MCP (21444) is opt-in, RAG-only, and token-gated. Vault
   registry entries must be direct children of
   `VAULTS_ROOT`. Secrets never appear in API responses or logs
   (`redactSecretsText` / `redactSecretsObject`).

@@ -32,7 +32,7 @@ test("init writes the config non-interactively and validates AnythingLLM", async
   assert.equal(config.vaultsRoot, vaultsRoot);
   assert.equal(config.anythingllmBaseUrl, url);
   assert.equal(config.apiKey, "key-123");
-  assert.equal(config.dashboardPort, 11400);
+  assert.equal(config.dashboardPort, 21400);
   assert.equal(existsSync(vaultsRoot), true);
   assert.equal(existsSync(store.paths.secretsRoot), true);
   assert.equal(existsSync(path.dirname(store.paths.registryPath)), true);

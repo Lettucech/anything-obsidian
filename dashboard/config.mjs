@@ -35,7 +35,7 @@ export function classifySystemState(services) {
 
 export function publicConfig(env) {
   return {
-    dashboardUrl: `http://localhost:${env.DASHBOARD_PORT || "11400"}`,
+    dashboardUrl: `http://localhost:${env.DASHBOARD_PORT || "21400"}`,
     anythingllmUrl: (env.ANYTHINGLLM_BASE_URL || "").replace(/\/+$/, ""),
     mcpUrl: env.MCP_PORT ? `http://localhost:${env.MCP_PORT}/mcp` : null,
     vaultsRoot: env.VAULTS_ROOT || "",

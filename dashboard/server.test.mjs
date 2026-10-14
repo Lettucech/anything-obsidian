@@ -185,7 +185,7 @@ test("status returns classified system state and public config", async () => {
   writeFileSync(paths.schedulerPidPath, "9999\n");
   const app = createDashboardServer({
     jobs: fakeJobs(),
-    env: { ...nativeEnv(), DASHBOARD_PORT: "11400" },
+    env: { ...nativeEnv(), DASHBOARD_PORT: "21400" },
     native: { ...paths, killImpl: aliveKill(new Set([9999])), execFileImpl: async () => ({ stdout: "git version 2.39.0\n" }) },
   });
 
@@ -196,7 +196,7 @@ test("status returns classified system state and public config", async () => {
   assert.deepEqual(response.body.services.map((service) => service.id), ["anythingllm", "scheduler", "mcp", "mcp-lan", "git"]);
   assert.equal(response.body.services.find((service) => service.id === "scheduler").health.ok, true);
   assert.equal(response.body.services.find((service) => service.id === "mcp").running, false);
-  assert.equal(response.body.config.dashboardUrl, "http://localhost:11400");
+  assert.equal(response.body.config.dashboardUrl, "http://localhost:21400");
 });
 
 test("dashboard root serves the management UI only after the AnythingLLM key is verified", async () => {
@@ -331,7 +331,7 @@ function nativeEnv() {
     VAULT_SECRETS_PATH: `${root}/secrets`,
     VAULT_STATE_ROOT: `${root}/state`,
     AGENT_TOKENS_PATH: `${root}/agent-tokens`,
-    DASHBOARD_PORT: "11400",
+    DASHBOARD_PORT: "21400",
     ANYTHINGLLM_BASE_URL: "http://localhost:11301",
   };
 }
