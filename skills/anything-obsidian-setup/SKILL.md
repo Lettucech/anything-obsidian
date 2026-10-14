@@ -81,10 +81,14 @@ Human-readable form: `anything-obsidian status`.
 - `anything-obsidian start-bg` — background sync scheduler only.
 - `anything-obsidian stop` — stops the dashboard and the scheduler.
 - `anything-obsidian autostart on|off|status` — keep both running: `on`
-  registers macOS LaunchAgents so the dashboard and scheduler start at every
-  login and restart automatically if they crash. While autostart is on,
-  `stop` unloads the services for now (they return at next login) — say so
-  when reporting to the user, and use `autostart off` for a permanent stop.
+  registers per-user services (macOS LaunchAgents, Linux systemd user units)
+  so the dashboard and scheduler start at every login and restart
+  automatically if they crash. While autostart is on, `stop` unloads the
+  services for now (they return at next login) — say so when reporting to the
+  user, and use `autostart off` for a permanent stop.
+- On a headless Linux server without an active session, autostart needs
+  `sudo loginctl enable-linger <user>` once; without it the installer falls
+  back to a plain background start.
 - The dashboard URL is `http://localhost:11400` unless a `--port` was set.
 
 The installer turns autostart on by default (opt out with `--no-autostart`).

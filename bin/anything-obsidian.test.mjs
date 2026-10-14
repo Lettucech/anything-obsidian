@@ -408,7 +408,7 @@ test("stop with autostart on unloads launchd services instead of pid files", asy
   assert.equal(await runCli(["stop"], deps), 0);
   assert.equal(tracker.filter((args) => args[0] === "bootout").length, 2);
   const text = output.lines.join("\n");
-  assert.match(text, /stopped \(launchd services unloaded\)/);
+  assert.match(text, /stopped \(autostart services unloaded\)/);
   assert.match(text, /autostart off/);
   assert.equal(existsSync(path.join(home, "Library", "LaunchAgents", "app.anything-obsidian.dashboard.plist")), true);
 });
@@ -446,4 +446,54 @@ test("status --json includes autostart and uses launchd state when enabled", asy
   assert.equal(report.autostart.dashboard.running, true);
   assert.equal(report.dashboard.running, true);
   assert.equal(report.scheduler.running, false);
+});
+
+function fakeSystemctl(tracker, { activeStates = {} } = {}) {
+  return async (args) => {
+    tracker.push(args);
+    if (args[1] === "show") {
+      const unit = args[2];
+      const state = activeStates[unit] ?? "inactive";
+      return { stdout: `ActiveState=${state}\nMainPID=${state === "active" ? 2468 : 0}\n`, stderr: "" };
+    }
+    return { stdout: "", stderr: "" };
+  };
+}
+
+test("autostart on linux uses systemd units instead of launchd plists", async () => {
+  const { home, url } = await setup({});
+  const env = await initializedEnv(home, url);
+  const tracker = [];
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+  const deps = { env, log: output.line, platform: "linux", systemctl: fakeSystemctl(tracker) };
+
+  assert.equal(await runCli(["autostart", "on"], deps), 0);
+  const unitDir = path.join(home, ".config", "systemd", "user");
+  assert.equal(existsSync(path.join(unitDir, "anything-obsidian-dashboard.service")), true);
+  assert.equal(existsSync(path.join(unitDir, "anything-obsidian-scheduler.service")), true);
+  const dashboard = readFileSync(path.join(unitDir, "anything-obsidian-dashboard.service"), "utf8");
+  assert.match(dashboard, /ExecStart=/);
+  assert.match(dashboard, /Restart=always/);
+  assert.equal(tracker.filter((args) => args[1] === "enable").length, 2);
+
+  output.lines.length = 0;
+  assert.equal(await runCli(["autostart", "status", "--json"], deps), 0);
+  const report = JSON.parse(output.lines.at(-1));
+  assert.equal(report.autostart.enabled, true);
+
+  output.lines.length = 0;
+  assert.equal(await runCli(["stop"], deps), 0);
+  assert.equal(tracker.filter((args) => args[1] === "stop").length, 2);
+  assert.match(output.lines.join("\n"), /autostart services unloaded/);
+});
+
+test("autostart is unavailable on unsupported platforms", async () => {
+  const { home, url } = await setup({});
+  const env = await initializedEnv(home, url);
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+
+  assert.equal(await runCli(["autostart", "on"], {
+    env, log: output.line, platform: "win32",
+  }), 1);
+  assert.match(output.lines.join("\n"), /not supported on win32/);
 });

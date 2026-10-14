@@ -65,7 +65,7 @@ fi
 
 say "Anything Obsidian uninstaller"
 
-# ---------- stop launchd services (they may own the processes) ----------
+# ---------- stop launchd / systemd services (they may own the processes) ----------
 UID_NUM="$(id -u)"
 for label in app.anything-obsidian.dashboard app.anything-obsidian.scheduler; do
   plist="$HOME/Library/LaunchAgents/$label.plist"
@@ -75,6 +75,17 @@ for label in app.anything-obsidian.dashboard app.anything-obsidian.scheduler; do
     say "  removed LaunchAgent $label"
   fi
 done
+if command -v systemctl >/dev/null 2>&1; then
+  UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  for unit in anything-obsidian-dashboard.service anything-obsidian-scheduler.service; do
+    if [ -f "$UNIT_DIR/$unit" ]; then
+      systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+      rm -f "$UNIT_DIR/$unit"
+      say "  removed systemd unit $unit"
+    fi
+  done
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+fi
 
 # ---------- stop processes ----------
 stop_pid_file() {

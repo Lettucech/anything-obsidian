@@ -23,7 +23,7 @@ import {
 } from "../dashboard/local-jobs.mjs";
 import { createAppConfigStore, defaultConfigRoot, expandTilde, nativeEnv } from "../lib/app-config.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
-import { createAutostartManager } from "../lib/autostart.mjs";
+import { createServiceManager } from "../lib/autostart.mjs";
 
 const execFileAsync = promisify(execFile);
 const USAGE = `Usage: anything-obsidian <command>
@@ -66,17 +66,17 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
     case "init":
       return runInit({ flags, store, env, io, fetchImpl, log, promptFactory: deps.promptFactory });
     case "start":
-      return runStart({ store, env, spawnImpl, fetchImpl, log, launchctl: deps.launchctl, background: "bg" in flags, noBrowser: "no-browser" in flags });
+      return runStart({ store, env, spawnImpl, fetchImpl, log, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform, background: "bg" in flags, noBrowser: "no-browser" in flags });
     case "start-bg":
       return runStartBg({ store, env, spawnImpl, killImpl, log });
     case "scheduler-fg":
       return runSchedulerFg({ store, env, spawnImpl, log });
     case "stop":
-      return runStop({ store, killImpl, log, launchctl: deps.launchctl, env });
+      return runStop({ store, killImpl, log, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform, env });
     case "status":
-      return runStatus({ store, env, fetchImpl, execFileImpl, log, json: "json" in flags, launchctl: deps.launchctl });
+      return runStatus({ store, env, fetchImpl, execFileImpl, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
     case "autostart":
-      return runAutostart({ subcommand: rest[0], store, env, log, json: "json" in flags, launchctl: deps.launchctl });
+      return runAutostart({ subcommand: rest[0], store, env, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
     case "-h":
     case "--help":
     case "help":
@@ -88,12 +88,14 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
   }
 }
 
-function autostartManager({ store, env, log, launchctl }) {
+function autostartManager({ store, env, log, launchctl, systemctl, platform = process.platform }) {
   try {
-    return createAutostartManager({
+    return createServiceManager({
+      platform,
       homedir: env.HOME || undefined,
       logsRoot: store.paths.logsRoot,
       ...(launchctl ? { launchctl } : {}),
+      ...(systemctl ? { systemctl } : {}),
     });
   } catch (error) {
     log(`Autostart is unavailable here: ${error instanceof Error ? error.message : String(error)}`);
@@ -101,11 +103,11 @@ function autostartManager({ store, env, log, launchctl }) {
   }
 }
 
-async function runAutostart({ subcommand, store, env, log, json, launchctl }) {
+async function runAutostart({ subcommand, store, env, log, json, launchctl, systemctl, platform }) {
   const config = await loadConfigOrWarn(store, log);
   if (!config) return 1;
   await store.ensureLayout();
-  const manager = autostartManager({ store, env, log, launchctl });
+  const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
   if (!manager) return 1;
 
   switch (subcommand) {
@@ -157,7 +159,7 @@ async function runSchedulerFg({ store, env, spawnImpl, log }) {
   if (!config) return 1;
   await store.ensureLayout();
 
-  if (env.AO_LAUNCHD) {
+  if (env.AO_SUPERVISED) {
     process.title = "anything-obsidian-scheduler";
   }
   const child = spawnImpl(process.argv[0] || process.execPath, [WORKER_SCRIPT_PATH, "scheduler"], {
@@ -303,16 +305,16 @@ async function loadConfigOrWarn(store, log) {
   return config;
 }
 
-async function runStart({ store, env, spawnImpl, fetchImpl, log, launchctl, background, noBrowser }) {
+async function runStart({ store, env, spawnImpl, fetchImpl, log, launchctl, systemctl, platform, background, noBrowser }) {
   const config = await loadConfigOrWarn(store, log);
   if (!config) return 1;
   await store.ensureLayout();
 
   const url = `http://localhost:${config.dashboardPort}`;
-  const manager = autostartManager({ store, env, log, launchctl });
-  // When launchd spawned us (AO_LAUNCHD), the plist IS the supervisor: run the
+  const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
+  // When a service manager spawned us (AO_SUPERVISED), it is the supervisor: run the
   // server in-process and never self-detect as "already managed".
-  const autostartOn = manager && !env.AO_LAUNCHD ? await manager.enabled() : false;
+  const autostartOn = manager && !env.AO_SUPERVISED ? await manager.enabled() : false;
 
   if (background) {
     if (autostartOn && manager) {
@@ -356,7 +358,7 @@ async function runStart({ store, env, spawnImpl, fetchImpl, log, launchctl, back
   }
 
   const childEnv = { ...nativeEnv(config, store.paths, { env }), AO_MODE: "native" };
-  if (env.AO_LAUNCHD) {
+  if (env.AO_SUPERVISED) {
     // The Activity Monitor name follows the process title and the executable;
     // both carry the anything-obsidian role for launchd-spawned services.
     process.title = "anything-obsidian-dashboard";
@@ -407,15 +409,15 @@ async function runStartBg({ store, env, spawnImpl, killImpl, log }) {
   return 0;
 }
 
-async function runStop({ store, killImpl, log, launchctl, env }) {
+async function runStop({ store, killImpl, log, launchctl, systemctl, platform, env }) {
   const config = await loadConfigOrWarn(store, log);
   if (!config) return 1;
 
-  const manager = autostartManager({ store, env: env || process.env, log, launchctl });
+  const manager = autostartManager({ store, env: env || process.env, log, launchctl, systemctl, platform });
   if (manager && (await manager.enabled())) {
     await manager.halt();
-    log("Dashboard and scheduler stopped (launchd services unloaded).");
-    log("They will start again at next login while autostart is on.");
+    log("Dashboard and scheduler stopped (autostart services unloaded).");
+    log("They will start again at next login or reboot while autostart is on.");
     log("Disable that permanently with: anything-obsidian autostart off");
     return 0;
   }
@@ -427,9 +429,9 @@ async function runStop({ store, killImpl, log, launchctl, env }) {
   return 0;
 }
 
-async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launchctl }) {
+async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launchctl, systemctl, platform }) {
   const config = await store.load();
-  const manager = autostartManager({ store, env, log, launchctl });
+  const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
   const autostartEnabled = manager ? await manager.enabled() : false;
   const launchd = autostartEnabled && manager ? await manager.status() : null;
   const report = {

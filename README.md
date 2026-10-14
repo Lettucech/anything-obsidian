@@ -94,18 +94,22 @@ server) and never hosts AnythingLLM itself.
    ```
 
 3. Vault sync and the dashboard stay running on their own. The installer
-   registers a per-user macOS LaunchAgent (no admin needed): both start at
-   every login and restart automatically if they crash. Control it any time:
+   registers per-user services (macOS LaunchAgents, or systemd user units on
+   Linux — no admin needed): both start at every login and restart
+   automatically if they crash. Control them any time:
 
    ```bash
-   anything-obsidian autostart status   # what is registered and running
-   anything-obsidian stop               # stop now (returns at next login)
+   anything-obsidian status       # health + setup check (--json for agents)
+   anything-obsidian autostart status
+   anything-obsidian stop         # stop now (returns at next login/reboot)
    anything-obsidian autostart off      # stop permanently
    anything-obsidian autostart on       # turn auto-restart back on
    ```
 
-   If you declined autostart during install, `anything-obsidian start-bg`
-   runs the sync scheduler without it.
+   On a headless Linux server, run `sudo loginctl enable-linger $USER` once
+   and the services keep running even without an active login session. If you
+   declined autostart during install, `anything-obsidian start-bg` runs the
+   sync scheduler without it.
 
 Configuration, registry, secrets, agent tokens, state, and logs all live under
 one directory (`~/Library/Application Support/anything-obsidian/` on macOS;

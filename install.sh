@@ -42,6 +42,7 @@ Options:
   --no-browser    do not open the browser when done
   --no-skills     skip installing agent skills into detected skill directories
   --no-autostart  do not register login auto-start / crash auto-restart
+                  (macOS: LaunchAgents; Linux: systemd user units)
 
 Environment overrides:
   ANYTHING_OBSIDIAN_APP_HOME     where the app lives (default ~/.anything-obsidian)

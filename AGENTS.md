@@ -31,10 +31,13 @@ anything-obsidian status --json   # exit 0 + "ok": true == done
 Collect the AnythingLLM URL and API key from the user (Settings → Developer
 API). Never invent a key. Verify with `status --json` after every change.
 
-The installer registers macOS LaunchAgents by default (auto-start at login,
-auto-restart on crash): `anything-obsidian autostart on|off|status` controls
-them. While autostart is on, `stop` unloads the services until next login —
-tell the user that, and use `autostart off` for a permanent stop.
+The installer registers per-user auto-start services by default (macOS
+LaunchAgents, Linux systemd user units): `anything-obsidian autostart
+on|off|status` controls them. While autostart is on, `stop` unloads the
+services until the next login/reboot — tell the user that, and use
+`autostart off` for a permanent stop. Headless Linux servers need
+`sudo loginctl enable-linger <user>` once for services to run without a
+login session.
 
 ## Repo conventions
 
