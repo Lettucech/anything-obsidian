@@ -51,6 +51,12 @@ curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/in
 - Interactive humans can drop the flags entirely: the installer asks the same
   questions.
 
+## Keeping it current
+
+```sh
+anything-obsidian update   # re-downloads the app + dependencies, keeps all data
+```
+
 ## Verify (do this after every install or change)
 
 ```sh

@@ -11,15 +11,19 @@
     "dashboard/",
     "lib/",
     "scripts/",
-    "mcp/",
-    "README.md"
+    "README.md",
+    "mcp/"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test \"dashboard/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"scripts/**/*.test.mjs\""
+    "test": "node --test \"mcp/**/*.test.mjs\" \"dashboard/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"scripts/**/*.test.mjs\" \"bin/**/*.test.mjs\""
   },
   "license": "MIT",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.24.1"
+  }
 }

@@ -91,7 +91,7 @@ export async function doctor({
     }
     if (embedded === 0) {
       throw new Error(
-        `index empty: 0 embedded vs ${files.length} vault files (run: docker compose run --rm worker embed --all)`,
+        `index empty: 0 embedded vs ${files.length} vault files (use the dashboard's Rebuild index action)`,
       );
     }
     const embeddedSet = new Set(Object.keys(manifest.files ?? {}));

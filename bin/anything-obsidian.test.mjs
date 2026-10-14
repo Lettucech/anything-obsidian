@@ -347,12 +347,12 @@ test("autostart on writes plists, kickstarts launchd, and off tears it down", as
   const dashboardPlist = readFileSync(path.join(launchAgents, "app.anything-obsidian.dashboard.plist"), "utf8");
   assert.match(dashboardPlist, /<string>--no-browser<\/string>/);
   assert.match(dashboardPlist, new RegExp(paths.logsRoot.replaceAll("/", "\\/")));
-  assert.equal(tracker.filter((args) => args[0] === "kickstart").length, 2);
+  assert.equal(tracker.filter((args) => args[0] === "kickstart").length, 3);
   assert.match(output.lines.join("\n"), /Autostart is on/);
 
   tracker.length = 0;
   assert.equal(await runCli(["autostart", "off"], deps), 0);
-  assert.equal(tracker.filter((args) => args[0] === "bootout").length, 2);
+  assert.equal(tracker.filter((args) => args[0] === "bootout").length, 4);
   assert.equal(existsSync(path.join(launchAgents, "app.anything-obsidian.dashboard.plist")), false);
   assert.match(output.lines.join("\n"), /Autostart is off/);
 });
@@ -406,7 +406,7 @@ test("stop with autostart on unloads launchd services instead of pid files", asy
   output.lines.length = 0;
 
   assert.equal(await runCli(["stop"], deps), 0);
-  assert.equal(tracker.filter((args) => args[0] === "bootout").length, 2);
+  assert.equal(tracker.filter((args) => args[0] === "bootout").length, 4);
   const text = output.lines.join("\n");
   assert.match(text, /stopped \(autostart services unloaded\)/);
   assert.match(text, /autostart off/);
@@ -425,7 +425,7 @@ test("start --bg with autostart on goes through launchd instead of a pid file", 
   output.lines.length = 0;
 
   assert.equal(await runCli(["start", "--bg", "--no-browser"], deps), 0);
-  assert.equal(tracker.filter((args) => args[0] === "kickstart").length, 2);
+  assert.equal(tracker.filter((args) => args[0] === "kickstart").length, 3);
   assert.match(output.lines.join("\n"), /managed by launchd/);
   const paths = createAppConfigStore({ rootDir: configRoot(home) }).paths;
   assert.equal(existsSync(paths.dashboardPidPath), false);
@@ -474,7 +474,7 @@ test("autostart on linux uses systemd units instead of launchd plists", async ()
   const dashboard = readFileSync(path.join(unitDir, "anything-obsidian-dashboard.service"), "utf8");
   assert.match(dashboard, /ExecStart=/);
   assert.match(dashboard, /Restart=always/);
-  assert.equal(tracker.filter((args) => args[1] === "enable").length, 2);
+  assert.equal(tracker.filter((args) => args[1] === "enable").length, 3);
 
   output.lines.length = 0;
   assert.equal(await runCli(["autostart", "status", "--json"], deps), 0);
@@ -483,7 +483,7 @@ test("autostart on linux uses systemd units instead of launchd plists", async ()
 
   output.lines.length = 0;
   assert.equal(await runCli(["stop"], deps), 0);
-  assert.equal(tracker.filter((args) => args[1] === "stop").length, 2);
+  assert.equal(tracker.filter((args) => args[1] === "stop").length, 4);
   assert.match(output.lines.join("\n"), /autostart services unloaded/);
 });
 

@@ -153,6 +153,22 @@ mv "$SOURCE_DIR" "$APP_DIR"
 rm -rf "$STAGING"
 say "  ✓ app installed: $APP_DIR"
 
+# ---------- dependencies (MCP server runtime) ----------
+if (cd "$APP_DIR" && "$NODE_BIN" "$APP_DIR/node_modules/../package.json" >/dev/null 2>&1); then :; fi
+NPM_CLI=""
+for candidate in "$(dirname "$NODE_BIN")/npm" "$(dirname "$NODE_BIN")/../lib/node_modules/npm/bin/npm-cli.js"; do
+  if [ -f "$candidate" ]; then NPM_CLI="$candidate"; break; fi
+done
+if [ -n "$NPM_CLI" ] && [ ! -d "$APP_DIR/node_modules" ]; then
+  say "  installing dependencies (MCP server)…"
+  if (cd "$APP_DIR" && "$NODE_BIN" "$NPM_CLI" ci --omit=dev --no-audit --no-fund >/dev/null 2>&1); then
+    say "  ✓ dependencies installed"
+  else
+    warn "Dependency install failed — the dashboard and sync still work, but MCP endpoints will not."
+    warn "Retry any time: cd $APP_DIR && npm ci --omit=dev"
+  fi
+fi
+
 # ---------- CLI launcher ----------
 LAUNCHER="$BIN_DIR/anything-obsidian"
 mkdir -p "$BIN_DIR"

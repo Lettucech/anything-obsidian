@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,7 +20,7 @@ test("vault routes clone a repository and create its managed workspace", async (
   };
   const secrets = fakeSecrets();
   const vaultStorage = fakeVaultStorage();
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage, secrets, env: {} });
+  const app = createDashboardServer({ jobs: fakeJobs(), registry, anythingllm, vaultStorage, secrets, env: nativeEnv(), native: nativePaths() });
 
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
   const created = await request(app, "POST", "/api/vaults", validVaultPayload());
@@ -41,7 +42,7 @@ test("vault routes import a local repository, attach a workspace, and remove onl
     async listWorkspaces() { return [{ id: 2, name: "Personal", slug: "personal" }]; },
   };
   const secrets = fakeSecrets();
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), secrets, env: {} });
+  const app = createDashboardServer({ jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), secrets, env: nativeEnv(), native: nativePaths() });
 
   const created = await request(app, "POST", "/api/vaults", {
     sourceMode: "import", id: "personal", name: "Personal", directory: "personal",
@@ -57,12 +58,12 @@ test("vault routes import a local repository, attach a workspace, and remove onl
 test("vault creation falls back to the vault id when an import has no display name", async () => {
   const createdWorkspaces = [];
   const app = createDashboardServer({
-    docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(),
+    jobs: fakeJobs(), registry: fakeRegistry(),
     anythingllm: {
       async listWorkspaces() { return []; },
       async createWorkspace({ name }) { createdWorkspaces.push(name); return { id: 3, name, slug: "diary" }; },
     },
-    vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(), env: {},
+    vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
   });
 
   const response = await request(app, "POST", "/api/vaults", {
@@ -80,11 +81,11 @@ test("agent token routes create, list, and revoke MCP agent identities", async (
   const registry = fakeRegistry();
   await registry.create({ id: "secret-vault", allowlist: ["scout"] });
   const app = createDashboardServer({
-    docker: fakeDocker(), jobs: fakeJobs(), registry,
+    jobs: fakeJobs(), registry,
     anythingllm: { async listWorkspaces() { return []; } },
     vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(),
     agentTokens: createAgentTokenStore({ rootPath: root }),
-    env: {},
+    env: nativeEnv(), native: nativePaths(),
   });
 
   assert.deepEqual((await request(app, "GET", "/api/agents")).body, { agents: [] });
@@ -111,8 +112,8 @@ test("vault creation requires an explicit automatic-commit identity and private 
   const vaultStorage = fakeVaultStorage();
   const secrets = fakeSecrets();
   const app = createDashboardServer({
-    docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(),
-    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets, env: {},
+    jobs: fakeJobs(), registry: fakeRegistry(),
+    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets, env: nativeEnv(), native: nativePaths(),
   });
 
   const missingIdentity = await request(app, "POST", "/api/vaults", {
@@ -133,8 +134,8 @@ test("vault creation requires an explicit automatic-commit identity and private 
 test("private local imports also require an HTTPS credential for later sync", async () => {
   const vaultStorage = fakeVaultStorage();
   const app = createDashboardServer({
-    docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(),
-    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets: fakeSecrets(), env: {},
+    jobs: fakeJobs(), registry: fakeRegistry(),
+    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
   });
 
   const response = await request(app, "POST", "/api/vaults", {
@@ -148,7 +149,7 @@ test("private local imports also require an HTTPS credential for later sync", as
 test("vault creation checks AnythingLLM before cloning", async () => {
   const vaultStorage = fakeVaultStorage();
   const app = createDashboardServer({
-    docker: fakeDocker(), jobs: fakeJobs(), registry: fakeRegistry(), vaultStorage, secrets: fakeSecrets(), env: {},
+    jobs: fakeJobs(), registry: fakeRegistry(), vaultStorage, secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
     anythingllm: {
       async listWorkspaces() { throw new Error("AnythingLLM API 403"); },
       async createWorkspace() { throw new Error("should not create a workspace"); },
@@ -167,7 +168,7 @@ test("test connection validates Git and AnythingLLM without cloning or saving a 
   const registry = fakeRegistry();
   const anythingllm = { async listWorkspaces() { return []; } };
   const app = createDashboardServer({
-    docker: fakeDocker(), jobs: fakeJobs(), registry, anythingllm, vaultStorage, secrets: fakeSecrets(), env: {},
+    jobs: fakeJobs(), registry, anythingllm, vaultStorage, secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
   });
 
   const response = await request(app, "POST", "/api/vaults/test-connection", validVaultPayload());
@@ -180,33 +181,27 @@ test("test connection validates Git and AnythingLLM without cloning or saving a 
 });
 
 test("status returns classified system state and public config", async () => {
-  const healthRequests = [];
+  const paths = nativePaths();
+  writeFileSync(paths.schedulerPidPath, "9999\n");
   const app = createDashboardServer({
-    docker: fakeDocker({
-      running: new Set(["anything-obsidian-anythingllm", "anything-obsidian-mcp", "anything-obsidian-syncer"]),
-    }),
     jobs: fakeJobs(),
-    env: { HOST_DASHBOARD_PORT: "11300", HOST_ANYTHINGLLM_PORT: "11301" },
-    fetchImpl: async (url, options) => {
-      healthRequests.push({ url, options });
-      return { ok: true, status: 200 };
-    },
+    env: { ...nativeEnv(), DASHBOARD_PORT: "11400" },
+    native: { ...paths, killImpl: aliveKill(new Set([9999])), execFileImpl: async () => ({ stdout: "git version 2.39.0\n" }) },
   });
 
   const response = await request(app, "GET", "/api/status");
 
   assert.equal(response.status, 200);
-  assert.equal(response.body.systemState, "on");
-  assert.equal(response.body.services.length, 3);
-  assert.deepEqual(response.body.services.map((service) => service.id), ["anythingllm", "mcp", "syncer"]);
-  assert.equal(response.body.services.find((service) => service.id === "syncer").health.ok, true);
-  assert.equal(healthRequests.some((request) => request.url === "http://mcp:3333/health"), true);
-  assert.equal(response.body.config.dashboardUrl, "http://localhost:11300");
+  assert.equal(response.body.systemState, "partial");
+  assert.deepEqual(response.body.services.map((service) => service.id), ["anythingllm", "scheduler", "mcp", "mcp-lan", "git"]);
+  assert.equal(response.body.services.find((service) => service.id === "scheduler").health.ok, true);
+  assert.equal(response.body.services.find((service) => service.id === "mcp").running, false);
+  assert.equal(response.body.config.dashboardUrl, "http://localhost:11400");
 });
 
 test("dashboard root serves the management UI only after the AnythingLLM key is verified", async () => {
   const app = createDashboardServer({
-    docker: fakeDocker(), jobs: fakeJobs(), env: {},
+    jobs: fakeJobs(), env: nativeEnv(), native: nativePaths(),
     anythingllm: { async listWorkspaces() { return []; } },
   });
 
@@ -218,7 +213,7 @@ test("dashboard root serves the management UI only after the AnythingLLM key is 
 
 test("dashboard root serves a setup guide when the AnythingLLM key is invalid", async () => {
   const app = createDashboardServer({
-    docker: fakeDocker(), jobs: fakeJobs(), env: { HOST_ANYTHINGLLM_PORT: "11401" },
+    jobs: fakeJobs(), env: { ...nativeEnv(), ANYTHINGLLM_BASE_URL: "http://localhost:11401" }, native: nativePaths(),
     anythingllm: { async listWorkspaces() { throw new Error("AnythingLLM API 403"); } },
   });
 
@@ -230,62 +225,42 @@ test("dashboard root serves a setup guide when the AnythingLLM key is invalid", 
   assert.doesNotMatch(response.body, /id="vault-dialog"/);
 });
 
-test("system off stops all services concurrently", async () => {
-  let releaseFirstStop;
-  const firstStop = new Promise((resolve) => {
-    releaseFirstStop = resolve;
+test("system off stops the scheduler and clears its pid file", async () => {
+  const paths = nativePaths();
+  writeFileSync(paths.schedulerPidPath, "1234\n");
+  const app = createDashboardServer({
+    jobs: fakeJobs(), env: nativeEnv(),
+    native: { ...paths, killImpl: aliveKill(new Set([1234])) },
   });
-  const docker = fakeDocker({
-    stopContainer: async (name) => {
-      docker.stopped.push(name);
-      if (name === "anything-obsidian-anythingllm") await firstStop;
-    },
-  });
-  const app = createDashboardServer({ docker, jobs: fakeJobs(), env: {} });
-
-  const responsePromise = request(app, "POST", "/api/system/off");
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.deepEqual(docker.stopped, [
-    "anything-obsidian-anythingllm",
-    "anything-obsidian-mcp",
-    "anything-obsidian-syncer",
-  ]);
-  releaseFirstStop();
-  assert.equal((await responsePromise).status, 200);
-});
-
-test("system off stops only controlled services", async () => {
-  const docker = fakeDocker({ running: new Set(["anything-obsidian-anythingllm"]) });
-  const app = createDashboardServer({ docker, jobs: fakeJobs(), env: {} });
 
   const response = await request(app, "POST", "/api/system/off");
 
   assert.equal(response.status, 200);
-  assert.deepEqual(docker.stopped, [
-    "anything-obsidian-anythingllm",
-    "anything-obsidian-mcp",
-    "anything-obsidian-syncer",
-  ]);
-  assert.equal(docker.stopped.includes("anything-obsidian-dashboard"), false);
+  assert.equal(existsSync(paths.schedulerPidPath), false);
 });
 
-test("system on starts only controlled services", async () => {
-  const docker = fakeDocker();
-  const app = createDashboardServer({ docker, jobs: fakeJobs(), env: {} });
+test("system on starts the scheduler process and reports it running", async () => {
+  const paths = nativePaths();
+  const app = createDashboardServer({
+    jobs: fakeJobs(), env: nativeEnv(),
+    native: {
+      ...paths,
+      spawnImpl: () => {
+        writeFileSync(paths.schedulerPidPath, "2345\n");
+        return { pid: 2345, unref() {} };
+      },
+      killImpl: aliveKill(new Set([2345])),
+    },
+  });
 
   const response = await request(app, "POST", "/api/system/on");
 
   assert.equal(response.status, 200);
-  assert.deepEqual(docker.started, [
-    "anything-obsidian-anythingllm",
-    "anything-obsidian-mcp",
-    "anything-obsidian-syncer",
-  ]);
+  assert.equal(response.body.services.find((service) => service.id === "scheduler").running, true);
 });
 
 test("logs reject unknown service ids", async () => {
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), env: {} });
+  const app = createDashboardServer({ jobs: fakeJobs(), env: nativeEnv(), native: nativePaths() });
 
   const response = await request(app, "GET", "/api/logs?service=/var/run/docker.sock");
 
@@ -298,10 +273,9 @@ test("vault actions reject unknown action ids and start an allowed scoped job", 
   const registry = fakeRegistry();
   await registry.create({ id: "work" });
   const app = createDashboardServer({
-    docker: fakeDocker({ running: new Set(["anything-obsidian-anythingllm"]) }),
     jobs,
     registry,
-    env: {},
+    env: nativeEnv(), native: nativePaths(),
   });
 
   assert.equal((await request(app, "POST", "/api/vaults/work/actions/rm-all")).status, 404);
@@ -314,7 +288,6 @@ test("actions return conflict when job preconditions fail", async () => {
   const registry = fakeRegistry();
   await registry.create({ id: "work" });
   const app = createDashboardServer({
-    docker: fakeDocker(),
     jobs: {
       latest: () => null,
       get: () => null,
@@ -323,7 +296,7 @@ test("actions return conflict when job preconditions fail", async () => {
       },
     },
     registry,
-    env: {},
+    env: nativeEnv(), native: nativePaths(),
   });
 
   const response = await request(app, "POST", "/api/vaults/work/actions/embed");
@@ -333,7 +306,7 @@ test("actions return conflict when job preconditions fail", async () => {
 });
 
 test("static files do not serve traversal-looking paths", async () => {
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), env: {} });
+  const app = createDashboardServer({ jobs: fakeJobs(), env: nativeEnv(), native: nativePaths() });
 
   const response = await request(app, "GET", "/..%2fserver.mjs");
 
@@ -342,7 +315,7 @@ test("static files do not serve traversal-looking paths", async () => {
 });
 
 test("static files return not found instead of server error", async () => {
-  const app = createDashboardServer({ docker: fakeDocker(), jobs: fakeJobs(), env: {} });
+  const app = createDashboardServer({ jobs: fakeJobs(), env: nativeEnv(), native: nativePaths() });
 
   const response = await request(app, "GET", "/missing.css");
 
@@ -350,28 +323,39 @@ test("static files return not found instead of server error", async () => {
   assert.match(response.body.error, /Not found/);
 });
 
-function fakeDocker({ running = new Set(), stopContainer } = {}) {
+function nativeEnv() {
+  const root = "/tmp/anything-obsidian-server-fixture";
   return {
-    started: [],
-    stopped: [],
-    async inspectContainer(name) {
-      return {
-        found: true,
-        id: `container-${name}`,
-        name,
-        state: running.has(name) ? "running" : "exited",
-        running: running.has(name),
-      };
-    },
-    async startContainer(name) {
-      this.started.push(name);
-    },
-    stopContainer: stopContainer || (async function (name) {
-      this.stopped.push(name);
-    }),
-    async containerLogs() {
-      return "ANYTHINGLLM_API_KEY=[redacted]";
-    },
+    VAULTS_ROOT: "/vaults",
+    VAULT_REGISTRY_PATH: `${root}/registry/vaults.json`,
+    VAULT_SECRETS_PATH: `${root}/secrets`,
+    VAULT_STATE_ROOT: `${root}/state`,
+    AGENT_TOKENS_PATH: `${root}/agent-tokens`,
+    DASHBOARD_PORT: "11400",
+    ANYTHINGLLM_BASE_URL: "http://localhost:11301",
+  };
+}
+
+function nativePaths() {
+  const root = mkdtempSync(path.join(tmpdir(), `anything-obsidian-server-${Math.random().toString(36).slice(2)}`));
+  return {
+    schedulerPidPath: path.join(root, "scheduler.pid"),
+    schedulerLogPath: path.join(root, "scheduler.log"),
+    jobStorePath: path.join(root, "jobs.json"),
+  };
+}
+
+function aliveKill(alive) {
+  return (pid, signal = 0) => {
+    if (signal !== 0) {
+      alive.delete(pid);
+      return;
+    }
+    if (!alive.has(pid)) {
+      const error = new Error("ESRCH");
+      error.code = "ESRCH";
+      throw error;
+    }
   };
 }
 

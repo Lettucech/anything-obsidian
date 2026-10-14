@@ -12,7 +12,6 @@ import { importTree } from "./import-tree.mjs";
 
 function nativeApp({ env = nativeEnvObject(), anythingllm, spawnImpl, killImpl, execFileImpl, schedulerPidPath, schedulerLogPath } = {}) {
   return createDashboardServer({
-    mode: "native",
     env,
     anythingllm: anythingllm || { async listWorkspaces() { return []; } },
     jobs: createLocalJobManager({ env }),
@@ -39,8 +38,9 @@ function nativeEnvObject() {
   };
 }
 
-test("native mode requires scheduler paths", () => {
-  assert.throws(() => createDashboardServer({ mode: "native" }), /native mode requires native paths/);
+test("native paths are required", () => {
+  const env = nativeEnvObject();
+  assert.throws(() => createDashboardServer({ env }), /native paths are required/);
 });
 
 test("native status reports AnythingLLM, scheduler, and git services", async () => {
@@ -49,11 +49,13 @@ test("native status reports AnythingLLM, scheduler, and git services", async () 
   const response = await request(app, "GET", "/api/status");
 
   assert.equal(response.status, 200);
-  assert.deepEqual(response.body.services.map((service) => service.id), ["anythingllm", "scheduler", "git"]);
+  assert.deepEqual(response.body.services.map((service) => service.id), ["anythingllm", "scheduler", "mcp", "mcp-lan", "git"]);
   const byId = Object.fromEntries(response.body.services.map((service) => [service.id, service]));
   assert.equal(byId.anythingllm.running, true);
   assert.equal(byId.anythingllm.health.ok, true);
   assert.equal(byId.scheduler.running, false);
+  assert.equal(byId.mcp.running, false);
+  assert.equal(byId["mcp-lan"].state, "off");
   assert.equal(byId.git.running, true);
   assert.match(byId.git.health.status, /git version/);
   assert.equal(response.body.systemState, "partial");
@@ -173,7 +175,6 @@ test("native vault actions start spawn-based jobs gated on the AnythingLLM probe
     vaults: [{ id: "work", name: "work", directory: "work", workspaceSlug: "work", gitUserName: "A", gitUserEmail: "a@b.c" }],
   }));
   const app = createDashboardServer({
-    mode: "native",
     env,
     anythingllm: { async listWorkspaces() { return []; } },
     native: { schedulerPidPath: path.join(root, "s.pid"), schedulerLogPath: path.join(root, "s.log") },

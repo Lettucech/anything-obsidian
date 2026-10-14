@@ -8,7 +8,7 @@ matches where the agent runs; neither profile writes vault source files.
 Start the default stack and connect to:
 
 ```text
-http://localhost:11333/mcp
+http://localhost:11433/mcp
 ```
 
 The local profile provides RAG plus raw-vault discovery and bounded source
@@ -72,7 +72,7 @@ Set `HOST_MCP_LAN_PORT`, `MCP_LAN_TOKEN`, and `MCP_LAN_ALLOWED_HOSTS` in the
 host's `.env`, then start the optional profile:
 
 ```bash
-docker compose --profile lan up -d mcp-lan
+anything-obsidian lan on
 ```
 
 Connect to `http://<host>:<HOST_MCP_LAN_PORT>/mcp` and configure the MCP client

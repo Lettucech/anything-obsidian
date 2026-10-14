@@ -1,29 +1,3 @@
-export const CONTROLLED_SERVICES = Object.freeze({
-  anythingllm: Object.freeze({
-    id: "anythingllm",
-    name: "anything-obsidian-anythingllm",
-    label: "AnythingLLM",
-    health: Object.freeze({ url: "http://anythingllm:3001/api/docs", okStatus: 200 }),
-  }),
-  mcp: Object.freeze({
-    id: "mcp",
-    name: "anything-obsidian-mcp",
-    label: "MCP",
-    health: Object.freeze({ url: "http://mcp:3333/health", okStatus: 200 }),
-  }),
-  syncer: Object.freeze({
-    id: "syncer",
-    name: "anything-obsidian-syncer",
-    label: "Syncer",
-  }),
-});
-
-export const LOG_SERVICES = Object.freeze({
-  anythingllm: CONTROLLED_SERVICES.anythingllm,
-  mcp: CONTROLLED_SERVICES.mcp,
-  syncer: CONTROLLED_SERVICES.syncer,
-});
-
 export const WORKER_ACTIONS = Object.freeze({
   sync: Object.freeze({
     id: "sync",
@@ -52,33 +26,18 @@ export const WORKER_ACTIONS = Object.freeze({
 });
 
 export function classifySystemState(services) {
-  const running = services.filter((service) => service.found && service.running).length;
-  if (running === services.length) return "on";
+  const managed = services.filter((service) => service.powerManaged !== false);
+  const running = managed.filter((service) => service.found && service.running).length;
+  if (running === managed.length) return "on";
   if (running === 0) return "off";
   return "partial";
 }
 
-export function publicConfig(env, mode = "docker") {
-  if (mode === "native") {
-    return {
-      dashboardUrl: `http://localhost:${env.DASHBOARD_PORT || "11400"}`,
-      anythingllmUrl: stripTrailingSlash(env.ANYTHINGLLM_BASE_URL || ""),
-      mcpUrl: null,
-      vaultsRoot: env.VAULTS_ROOT || "",
-    };
-  }
-  const dashboardPort = env.HOST_DASHBOARD_PORT || "11300";
-  const anythingllmPort = env.HOST_ANYTHINGLLM_PORT || "11301";
-  const mcpPort = env.HOST_MCP_PORT || "11333";
-
+export function publicConfig(env) {
   return {
-    dashboardUrl: `http://localhost:${dashboardPort}`,
-    anythingllmUrl: `http://localhost:${anythingllmPort}`,
-    mcpUrl: `http://localhost:${mcpPort}/mcp`,
-    vaultsRoot: env.VAULTS_ROOT || "/vaults",
+    dashboardUrl: `http://localhost:${env.DASHBOARD_PORT || "11400"}`,
+    anythingllmUrl: (env.ANYTHINGLLM_BASE_URL || "").replace(/\/+$/, ""),
+    mcpUrl: env.MCP_PORT ? `http://localhost:${env.MCP_PORT}/mcp` : null,
+    vaultsRoot: env.VAULTS_ROOT || "",
   };
-}
-
-function stripTrailingSlash(value) {
-  return value.replace(/\/+$/, "");
 }

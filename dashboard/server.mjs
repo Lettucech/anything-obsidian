@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 import { execFile as nodeExecFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-import { CONTROLLED_SERVICES, LOG_SERVICES, classifySystemState, publicConfig } from "./config.mjs";
-import { DockerClient } from "./docker-client.mjs";
-import { createJobManager } from "./jobs.mjs";
+import { classifySystemState, publicConfig } from "./config.mjs";
 import { createLocalJobManager, readSchedulerStatus, startSchedulerProcess, stopSchedulerProcess, tailLogFile } from "./local-jobs.mjs";
 import { redactSecretsObject, redactSecretsText } from "./redact.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
@@ -24,48 +23,39 @@ const publicRoot = path.join(__dirname, "public");
 const NATIVE_LOG_IDS = new Set(["syncer", "scheduler"]);
 
 export function createDashboardServer({
-  mode = "docker",
-  docker = new DockerClient(),
   env = process.env,
   jobs,
   fetchImpl = fetch,
-  native = null,
+  native = {},
   registry = createVaultRegistry({
-    rootPath: env.VAULTS_ROOT || "/vaults",
-    registryPath: env.VAULT_REGISTRY_PATH || "/workspace/.anything-obsidian-registry/vaults.json",
+    rootPath: env.VAULTS_ROOT || "",
+    registryPath: env.VAULT_REGISTRY_PATH || "",
   }),
   anythingllm = createAnythingllmClient({
-    baseUrl: env.ANYTHINGLLM_BASE_URL || "http://anythingllm:3001",
+    baseUrl: env.ANYTHINGLLM_BASE_URL || "",
     apiKey: env.ANYTHINGLLM_API_KEY || "",
     fetchImpl,
   }),
   vaultStorage = createVaultStorage({ registry }),
   secrets = createVaultSecretStore({
-    rootPath: env.VAULT_SECRETS_PATH || "/workspace/.anything-obsidian-secrets",
+    rootPath: env.VAULT_SECRETS_PATH || "",
   }),
   agentTokens = createAgentTokenStore({
-    rootPath: env.AGENT_TOKENS_PATH || "/workspace/.anything-obsidian-agent-tokens",
+    rootPath: env.AGENT_TOKENS_PATH || "",
   }),
 } = {}) {
-  if (mode === "native" && !native?.schedulerPidPath) {
-    throw new Error("native mode requires native paths (schedulerPidPath, schedulerLogPath)");
+  if (!native?.schedulerPidPath) {
+    throw new Error("native paths are required (schedulerPidPath, schedulerLogPath)");
   }
-  let jobManager = jobs;
-  if (!jobManager) {
-    const jobStore = mode === "native" && native?.jobStorePath
-      ? createFileJobStore({ filePath: native.jobStorePath })
-      : null;
-    jobManager = mode === "native"
-      ? createLocalJobManager({ env, jobStore })
-      : createJobManager({ docker });
-  }
-  const context = { mode, docker, env, fetchImpl, native: native || {}, anythingllm, jobs: jobManager };
+  const jobManager = jobs
+    || createLocalJobManager({ env, jobStore: native.jobStorePath ? createFileJobStore({ filePath: native.jobStorePath }) : null });
+  const context = { env, fetchImpl, native, anythingllm, jobs: jobManager };
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://localhost");
       if (req.method === "GET" && url.pathname === "/") {
         if (await dashboardReady(anythingllm)) return await serveStatic(res, url.pathname);
-        return sendHtml(res, 200, dashboardSetupPage(publicConfig(env, mode).anythingllmUrl, mode));
+        return sendHtml(res, 200, dashboardSetupPage(publicConfig(env).anythingllmUrl));
       }
       if (req.method === "GET" && url.pathname === "/api/vaults") {
         return sendJson(res, 200, { vaults: await registry.list() });
@@ -154,39 +144,23 @@ export function createDashboardServer({
         return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "POST" && url.pathname === "/api/system/on") {
-        if (mode === "native") {
-          startSchedulerProcess({
-            env: { ...env },
-            pidPath: native.schedulerPidPath,
-            logPath: native.schedulerLogPath,
-            spawnImpl: native.spawnImpl,
-            killImpl: native.killImpl,
-          });
-        } else {
-          for (const service of Object.values(CONTROLLED_SERVICES)) await docker.startContainer(service.name);
-        }
+        startSchedulerProcess({
+          env: { ...env },
+          pidPath: native.schedulerPidPath,
+          logPath: native.schedulerLogPath,
+          spawnImpl: native.spawnImpl,
+          killImpl: native.killImpl,
+        });
         return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "POST" && url.pathname === "/api/system/off") {
-        if (mode === "native") {
-          await stopSchedulerProcess({ pidPath: native.schedulerPidPath, killImpl: native.killImpl });
-        } else {
-          await Promise.all(
-            Object.values(CONTROLLED_SERVICES).map((service) => docker.stopContainer(service.name)),
-          );
-        }
+        await stopSchedulerProcess({ pidPath: native.schedulerPidPath, killImpl: native.killImpl });
         return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "GET" && url.pathname === "/api/logs") {
         const id = url.searchParams.get("service") || "";
-        if (mode === "native") {
-          if (!NATIVE_LOG_IDS.has(id)) return sendJson(res, 400, { error: `Unknown log service: ${id}` });
-          const logs = redactSecretsText(tailLogFile(native.schedulerLogPath));
-          return sendJson(res, 200, { service: id, logs });
-        }
-        const service = LOG_SERVICES[id];
-        if (!service) return sendJson(res, 400, { error: `Unknown log service: ${id}` });
-        const logs = redactSecretsText(await docker.containerLogs(service.name, { tail: 300 }));
+        if (!NATIVE_LOG_IDS.has(id)) return sendJson(res, 400, { error: `Unknown log service: ${id}` });
+        const logs = redactSecretsText(tailLogFile(native.schedulerLogPath));
         return sendJson(res, 200, { service: id, logs });
       }
       if (req.method === "GET" && url.pathname === "/api/import-tree") {
@@ -207,7 +181,7 @@ export function createDashboardServer({
           return sendJson(res, 404, { error: `Unknown action: ${actionId}` });
         }
         if (!(await registry.get(vaultId))) return sendJson(res, 404, { error: "Vault was not found" });
-        const snapshot = await serviceSnapshotFor(context);
+        const snapshot = await serviceSnapshot(context);
         try {
           const job = await jobManager.start(vaultId, actionId, snapshot);
           return sendJson(res, 202, job);
@@ -276,27 +250,25 @@ async function dashboardReady(anythingllm) {
   }
 }
 
-async function statusPayload({ mode, docker, jobs, env, fetchImpl, native, anythingllm }) {
-  const services = await serviceSnapshotFor({ mode, docker, fetchImpl, native, anythingllm });
+async function statusPayload({ jobs, env, fetchImpl, native, anythingllm }) {
+  const services = await serviceSnapshot({ anythingllm, native, fetchImpl });
   return redactSecretsObject({
     ok: true,
     systemState: classifySystemState(services),
     services,
     latestJob: jobs.latest(),
     jobs: jobs.list?.() ?? [],
-    config: publicConfig(env, mode),
+    config: publicConfig(env),
   });
 }
 
-function serviceSnapshotFor({ mode, docker, fetchImpl, native, anythingllm }) {
-  return mode === "native" ? nativeServiceSnapshot({ anythingllm, native }) : serviceSnapshot({ docker, fetchImpl });
-}
-
-async function nativeServiceSnapshot({ anythingllm, native }) {
-  const [anythingllmHealth, schedulerStatus, gitHealth] = await Promise.all([
+async function serviceSnapshot({ anythingllm, native, fetchImpl }) {
+  const [anythingllmHealth, schedulerStatus, gitHealth, mcpHealth, mcpLanHealth] = await Promise.all([
     probeAnythingllm(anythingllm),
     Promise.resolve(readSchedulerStatus({ pidPath: native.schedulerPidPath, killImpl: native.killImpl })),
     probeGit(native.execFileImpl || promisify(nodeExecFile)),
+    probeHttp(fetchImpl, "http://127.0.0.1:11433/health"),
+    probeHttp(fetchImpl, "http://127.0.0.1:11444/health"),
   ]);
   return [
     {
@@ -316,6 +288,24 @@ async function nativeServiceSnapshot({ anythingllm, native }) {
       health: { ok: schedulerStatus.running, status: schedulerStatus.running ? "running" : "stopped" },
     },
     {
+      id: "mcp",
+      label: "MCP",
+      found: true,
+      powerManaged: false,
+      running: mcpHealth.ok,
+      state: mcpHealth.ok ? "running (loopback 11433)" : "stopped",
+      health: mcpHealth.ok ? mcpHealth : { ok: false, status: "stopped" },
+    },
+    {
+      id: "mcp-lan",
+      label: "MCP (LAN)",
+      found: true,
+      powerManaged: false,
+      running: mcpLanHealth.ok,
+      state: mcpLanHealth.ok ? "running (11444, token required)" : "off",
+      health: mcpLanHealth.ok ? mcpLanHealth : { ok: true, status: "off by default" },
+    },
+    {
       id: "git",
       label: "Git",
       found: true,
@@ -324,6 +314,15 @@ async function nativeServiceSnapshot({ anythingllm, native }) {
       health: gitHealth,
     },
   ];
+}
+
+async function probeHttp(fetchImpl, url) {
+  try {
+    const response = await (fetchImpl || fetch)(url);
+    return { ok: response.ok, status: response.status };
+  } catch {
+    return { ok: false, status: "not running" };
+  }
 }
 
 async function probeAnythingllm(anythingllm) {
@@ -341,29 +340,6 @@ async function probeGit(execFileImpl) {
     return { ok: true, status: String(stdout).trim() || "available" };
   } catch {
     return { ok: false, status: "git command not found" };
-  }
-}
-
-async function serviceSnapshot({ docker, fetchImpl }) {
-  return await Promise.all(
-    Object.values(CONTROLLED_SERVICES).map(async (service) => {
-      const inspected = await docker.inspectContainer(service.name);
-      const health = !inspected.running
-        ? { ok: false, status: "not-running" }
-        : service.health
-          ? await probeHealth(fetchImpl, service.health.url, service.health.okStatus)
-          : { ok: true, status: "running" };
-      return { ...inspected, id: service.id, label: service.label, health };
-    }),
-  );
-}
-
-async function probeHealth(fetchImpl, url, okStatus) {
-  try {
-    const response = await fetchImpl(url);
-    return { ok: response.status === okStatus || response.ok, status: response.status };
-  } catch (error) {
-    return { ok: false, status: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -399,20 +375,13 @@ function sendHtml(res, status, body) {
   res.end(body);
 }
 
-function dashboardSetupPage(anythingllmUrl, mode = "docker") {
+function dashboardSetupPage(anythingllmUrl) {
   const anythingllm = escapeHtml(anythingllmUrl);
-  const steps = mode === "native"
-    ? `<ol>
+  const steps = `<ol>
         <li>Open AnythingLLM and finish its initial setup.</li>
         <li>Go to <strong>Settings → Developer API</strong> and create an API key.</li>
         <li>Run <code>anything-obsidian init</code> and enter the URL and API key.</li>
         <li>Restart with <code>anything-obsidian start</code>, then refresh this page.</li>
-      </ol>`
-    : `<ol>
-        <li>Open AnythingLLM and finish its initial setup.</li>
-        <li>Go to <strong>Settings → Developer API</strong> and create an API key.</li>
-        <li>Save it in this project's <code>.env</code> as <code>ANYTHINGLLM_API_KEY=...</code>.</li>
-        <li>Run <code>docker compose up -d --force-recreate dashboard mcp</code>, then refresh this page.</li>
       </ol>`;
   return `<!doctype html>
 <html lang="en">
@@ -459,20 +428,23 @@ async function readJsonBody(req) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const mode = process.env.AO_MODE === "native" ? "native" : "docker";
-  const port = Number(process.env.DASHBOARD_PORT || (mode === "native" ? 11400 : 3000));
-  const host = mode === "native" ? "127.0.0.1" : "0.0.0.0";
+if (import.meta.url === entryUrl()) {
+  const port = Number(process.env.DASHBOARD_PORT || 11400);
   createDashboardServer({
-    mode,
-    native: mode === "native"
-      ? {
-          schedulerPidPath: process.env.AO_SCHEDULER_PID_PATH,
-          schedulerLogPath: process.env.AO_SCHEDULER_LOG_PATH,
-          jobStorePath: process.env.AO_JOB_STORE_PATH,
-        }
-      : null,
-  }).listen(port, host, () => {
-    console.error(`[anything-obsidian-dashboard] listening on ${host}:${port}`);
+    native: {
+      schedulerPidPath: process.env.AO_SCHEDULER_PID_PATH,
+      schedulerLogPath: process.env.AO_SCHEDULER_LOG_PATH,
+      jobStorePath: process.env.AO_JOB_STORE_PATH,
+    },
+  }).listen(port, "127.0.0.1", () => {
+    console.error(`[anything-obsidian-dashboard] listening on 127.0.0.1:${port}`);
   });
+}
+
+function entryUrl() {
+  try {
+    return pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return pathToFileURL(path.resolve(process.argv[1])).href;
+  }
 }

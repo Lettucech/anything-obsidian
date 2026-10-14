@@ -8,15 +8,16 @@ and operate Anything Obsidian on their machine.
 Anything Obsidian is a local control plane connecting Git-backed Obsidian
 vaults with AnythingLLM RAG indexes. Two forms coexist:
 
-- **Native (primary):** plain Node app, installed by `install.sh`, managed by
-  the `anything-obsidian` CLI and a browser dashboard on port 11400.
-  AnythingLLM is always an external client-side dependency (URL + API key in
-  config) — the app never hosts it.
-- **Docker (legacy/parallel):** `docker compose up -d`, dashboard on 11300.
-  Keep this path working; never break Docker-mode behavior.
+- A plain Node app, installed by `install.sh`, managed by the
+  `anything-obsidian` CLI and a browser dashboard on port 11400. AnythingLLM
+  is always an external client-side dependency (URL + API key in config) —
+  the app never hosts it. MCP endpoints: loopback 11433, optional LAN 11434
+  (`lan on`, Bearer token required).
 
-There is no Electron/desktop-shell plan and no npm publish — distribution is
-`install.sh` from this repo.
+There is no Docker stack, no Electron/desktop-shell plan, and no npm publish —
+distribution is `install.sh` from this repo. The root `package.json` now
+carries real dependencies (MCP SDK, zod); `install.sh` runs `npm ci --omit=dev`
+and `anything-obsidian update` refreshes both app and dependencies.
 
 ## Helping a user install and set up
 
@@ -43,12 +44,11 @@ login session.
 
 - Pure Node ESM (`type: module`), **zero runtime dependencies** — do not add
   packages; use `node:` builtins and the global `fetch`.
-- Tests: `npm test` runs `node --test` over `dashboard/ lib/ scripts/ bin/`.
-  The TS files under `mcp/anythingllm/` have their own toolchain (`tsx`) and
-  are NOT covered by the root suite — never "fix" them by running the root
-  test runner.
-- Native-mode boundaries: dashboard binds `127.0.0.1` only; Docker keeps
-  `0.0.0.0:11300`. Vault registry entries must be direct children of
+- Tests: `npm test` runs `node --test` over `mcp/ dashboard/ lib/ scripts/
+  bin/` (the MCP server is plain JS now).
+- Network boundaries: dashboard and local MCP bind `127.0.0.1` only (11400 /
+  11433); the LAN MCP (11444) is opt-in, RAG-only, and token-gated. Vault
+  registry entries must be direct children of
   `VAULTS_ROOT`. Secrets never appear in API responses or logs
   (`redactSecretsText` / `redactSecretsObject`).
 - Removing a vault from management never deletes its repository, workspace,

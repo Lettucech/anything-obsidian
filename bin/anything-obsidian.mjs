@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
@@ -24,6 +24,7 @@ import {
 import { createAppConfigStore, defaultConfigRoot, expandTilde, nativeEnv } from "../lib/app-config.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createServiceManager } from "../lib/autostart.mjs";
+import { randomBytes } from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 const USAGE = `Usage: anything-obsidian <command>
@@ -35,6 +36,8 @@ Commands:
   stop       Stop the dashboard (if backgrounded) and the sync scheduler
   status     Show install, config, and service health (--json for agents)
   autostart  Keep the dashboard and scheduler running: on | off | status
+  lan        Manage the LAN MCP endpoint: token <t> | on | off | status
+  update     Update the app in place (data and settings are kept)
 
 Options:
   --vaults-root <path>       Vault root directory (init)
@@ -77,6 +80,12 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
       return runStatus({ store, env, fetchImpl, execFileImpl, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
     case "autostart":
       return runAutostart({ subcommand: rest[0], store, env, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
+    case "mcp-fg":
+      return runMcpFg({ store, env, spawnImpl, log, lan: rest.includes("--lan") || flags.lan === "" || flags.lan === "1" });
+    case "lan":
+      return runLan({ subcommand: rest[0], argument: rest[1], store, env, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
+    case "update":
+      return runUpdate({ log, spawnImpl });
     case "-h":
     case "--help":
     case "help":
@@ -444,6 +453,8 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
     anythingllm: { ok: false, detail: "not configured" },
     dashboard: { running: false, pid: null, healthy: false, url: null },
     scheduler: { running: false, pid: null },
+    mcp: { running: false, healthy: false, url: null },
+    mcpLan: { running: false, healthy: false, url: null },
     vaults: null,
   };
 
@@ -467,11 +478,15 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
   let dashboardRunning = false;
   let schedulerPid = null;
   let schedulerRunning = false;
+  let mcpRunning = false;
+  let mcpLanRunning = false;
   if (launchd) {
     dashboardPid = launchd.dashboard.pid;
     dashboardRunning = launchd.dashboard.running;
     schedulerPid = launchd.scheduler.pid;
     schedulerRunning = launchd.scheduler.running;
+    mcpRunning = launchd.mcp?.running ?? false;
+    mcpLanRunning = launchd.mcpLan?.running ?? false;
   } else {
     const dashboard = readSchedulerStatus({ pidPath: store.paths.dashboardPidPath, killImpl: processKill });
     dashboardPid = dashboard.pid;
@@ -492,6 +507,24 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
   }
   report.dashboard = { running: dashboardRunning, pid: dashboardPid, healthy: dashboardHealthy, url: dashboardUrl };
   report.scheduler = { running: schedulerRunning, pid: schedulerPid };
+  const probeMcp = async (port) => {
+    try {
+      const response = await fetchImpl(`http://127.0.0.1:${port}/health`);
+      return { running: response.ok || response.status < 500, healthy: response.ok };
+    } catch {
+      return { running: false, healthy: false };
+    }
+  };
+  if (mcpRunning || !launchd) {
+    const local = await probeMcp(11433);
+    report.mcp = { ...local, url: "http://localhost:11433/mcp" };
+  } else {
+    report.mcp = { running: false, healthy: false, url: "http://localhost:11433/mcp" };
+  }
+  if (mcpLanRunning) {
+    const lan = await probeMcp(11444);
+    report.mcpLan = { ...lan, url: "http://<host>:11434/mcp" };
+  }
 
   const client = createAnythingllmClient({
     baseUrl: config.anythingllmBaseUrl,
@@ -539,6 +572,8 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
     const dashboard = value.dashboard;
     log(`  ${mark(dashboard.healthy)} Dashboard: ${dashboard.healthy ? `running at ${dashboard.url}` : dashboard.running ? `starting or unhealthy (pid ${dashboard.pid})` : "not running"}`);
     log(`  ${mark(value.scheduler.running)} Scheduler: ${value.scheduler.running ? `running (pid ${value.scheduler.pid})` : "not running"}`);
+    log(`  ${mark(value.mcp.healthy)} Local MCP: ${value.mcp.healthy ? `running at ${value.mcp.url}` : value.mcp.running ? "starting or unhealthy" : "not running"}`);
+    log(`  ${mark(value.mcpLan.healthy)} LAN MCP: ${value.mcpLan.healthy ? "running (port 11444)" : "off or not running"}`);
     log(`  ${mark(value.autostart.enabled)} Autostart: ${value.autostart.enabled ? "on (starts at login, restarts on crash)" : "off"}`);
   }
 }
@@ -554,6 +589,144 @@ async function gitVersion(execFileImpl = execFileAsync) {
 
 function processKill(pid, signal) {
   process.kill(pid, signal);
+}
+
+async function runMcpFg({ store, env, spawnImpl, log, lan }) {
+  const config = await loadConfigOrWarn(store, log);
+  if (!config) return 1;
+  await store.ensureLayout();
+
+  const childEnv = {
+    ...nativeEnv(config, store.paths, { env }),
+    MCP_TRANSPORT: "http",
+    MCP_PROFILE: lan ? "lan" : "local",
+    ...(lan && config.lanToken ? { MCP_AUTH_TOKEN: config.lanToken } : {}),
+  };
+  if (lan && !config.lanToken) {
+    log("LAN MCP requires a token. Run: anything-obsidian lan on");
+    return 1;
+  }
+  if (env.AO_SUPERVISED) {
+    process.title = lan ? "anything-obsidian-mcp-lan" : "anything-obsidian-mcp";
+  }
+
+  const mcpPath = path.join(path.dirname(path.dirname(realpathSync(process.argv[1]))), "mcp", "index.mjs");
+  const child = spawnImpl(process.argv[0] || process.execPath, [mcpPath, "--http", ...(lan ? ["--lan"] : [])], {
+    env: childEnv,
+    stdio: "inherit",
+  });
+  const forward = (signal) => {
+    try {
+      child.kill(signal);
+    } catch {
+      // already gone
+    }
+  };
+  process.on("SIGTERM", () => forward("SIGTERM"));
+  process.on("SIGINT", () => forward("SIGINT"));
+  const code = await new Promise((resolve) => {
+    child.on("error", () => resolve(1));
+    child.on("close", resolve);
+  });
+  return code === 0 ? 0 : 1;
+}
+
+async function runLan({ subcommand, argument, store, env, log, json, launchctl, systemctl, platform }) {
+  const config = await loadConfigOrWarn(store, log);
+  if (!config) return 1;
+  await store.ensureLayout();
+
+  switch (subcommand) {
+    case "token": {
+      const token = String(argument ?? "").trim();
+      if (!token) {
+        log("Usage: anything-obsidian lan token <value>");
+        return 2;
+      }
+      await store.save({ ...config, lanToken: token });
+      log("LAN token saved.");
+      log("Restart the LAN endpoint to apply it: anything-obsidian lan on");
+      return 0;
+    }
+    case "on": {
+      let effective = config;
+      if (!config.lanToken) {
+        const token = randomBytes(24).toString("base64url");
+        effective = await store.save({ ...config, lanToken: token });
+        log("Generated a LAN admin token (shown once, save it now):");
+        log(`  ${token}`);
+      }
+      const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
+      if (!manager) return 1;
+      await manager.enableLan({
+        mcpLanLogPath: store.paths.mcpLanLogPath || store.paths.schedulerLogPath,
+      });
+      log("LAN MCP is on at http://0.0.0.0:11444/mcp (RAG-only, Bearer token required).");
+      log("Per-agent tokens from the dashboard also work; they see only allowlisted vaults.");
+      return 0;
+    }
+    case "off": {
+      const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
+      if (!manager) return 1;
+      await manager.disableLan();
+      log("LAN MCP is off.");
+      return 0;
+    }
+    case "status":
+    default: {
+      const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
+      if (!manager) return 1;
+      const enabled = await manager.lanEnabled();
+      const state = enabled ? (await manager.status()).mcpLan : { loaded: false, running: false, pid: null };
+      if (json) {
+        log(JSON.stringify({ ok: true, lan: { enabled, ...state } }, null, 2));
+        return 0;
+      }
+      log(`LAN MCP: ${enabled ? "on" : "off"}`);
+      log(`  endpoint: ${state.running ? "running" : enabled ? "registered, not running" : "not registered"} (port 11434, RAG-only)`);
+      log(`  token: ${config.lanToken ? "configured" : "not set (anything-obsidian lan on generates one)"}`);
+      return 0;
+    }
+  }
+}
+
+async function runUpdate({ log, spawnImpl }) {
+  const repo = process.env.ANYTHING_OBSIDIAN_REPO || "Lettucech/anything-obsidian";
+  const branch = process.env.ANYTHING_OBSIDIAN_BRANCH || "main";
+  const appRoot = process.env.ANYTHING_OBSIDIAN_APP_HOME || `${process.env.HOME}/.anything-obsidian`;
+  const appDir = path.join(appRoot, "app");
+  if (!existsSync(appDir)) {
+    log("No managed install found. Run the installer instead:");
+    log("  curl -fsSL https://raw.githubusercontent.com/" + repo + "/" + branch + "/install.sh | sh");
+    return 1;
+  }
+  log(`Updating from github.com/${repo} (${branch})…`);
+  const staging = path.join(appRoot, "download.update.$$");
+  await mkdir(staging, { recursive: true });
+  const curl = spawnImpl("curl", ["-fsSL", `https://github.com/${repo}/archive/refs/heads/${branch}.tar.gz`], { stdio: ["ignore", "pipe", "inherit"] });
+  const tar = spawnImpl("tar", ["-xz", "-C", staging], { stdio: [curl.stdout, "ignore", "inherit"] });
+  curl.stderr?.on("data", () => {});
+  await new Promise((resolve, reject) => { curl.on("error", reject); tar.on("error", reject); tar.on("close", resolve); });
+  const sourceDir = readdirSync(staging).map((entry) => path.join(staging, entry)).find((entry) => statSync(entry).isDirectory());
+  if (!sourceDir) {
+    log("Downloaded archive was empty.");
+    return 1;
+  }
+  rmSync(appDir, { recursive: true, force: true });
+  renameSync(sourceDir, appDir);
+  rmSync(staging, { recursive: true, force: true });
+  log("  ✓ app updated");
+  const npmPath = path.join(path.dirname(process.argv[0] || process.execPath), "npm");
+  const npm = spawnImpl(npmPath === "npm" ? process.execPath : npmPath, ["ci", "--omit=dev"], { cwd: appDir, stdio: "inherit" });
+  const npmCode = await new Promise((resolve) => { npm.on("error", () => resolve(1)); npm.on("close", resolve); });
+  if (npmCode !== 0) {
+    log("  !! npm ci failed — MCP services may not start until you re-run the installer.");
+  } else {
+    log("  ✓ dependencies installed");
+  }
+  log("Restart services if autostart is on:");
+  log("  anything-obsidian autostart off && anything-obsidian autostart on");
+  return 0;
 }
 
 function openBrowser(url, { spawnImpl = spawn, platform = process.platform } = {}) {

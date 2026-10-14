@@ -99,8 +99,16 @@ test("local job manager persists jobs across manager restarts", async () => {
 
   const first = createLocalJobManager({ env, workerPath: fixture, jobStore });
   const job = await first.start("work", "doctor", []);
-  await waitFor(() => settled(first, job.id));
-
+  // Poll the file itself: a fresh manager would mark a still-running job as
+  // interrupted on restore, which is correct boot behavior but not this test.
+  await waitFor(() => {
+    try {
+      const stored = JSON.parse(readFileSync(jobStore.filePath, "utf8"));
+      return ["succeeded", "failed"].includes(stored.jobs.find((entry) => entry.id === job.id)?.status ?? "") || null;
+    } catch {
+      return null;
+    }
+  });
   const second = createLocalJobManager({ env, workerPath: fixture, jobStore });
   assert.equal(second.get(job.id).status, "succeeded");
   assert.equal(second.latest().id, job.id);

@@ -158,3 +158,23 @@ browsed folder is the root or deeper than one level.
 - **Keychain-backed API key, Linux server hardening beyond linger, npm
   publish:** still open. (npm publish is unlikely to ever be needed given
   `install.sh`.)
+
+## Phase 3 (2026-10-14): Docker removed, native MCP endpoints
+
+The Docker stack (compose, images, docker client, docker-mode server
+branches, `.env.example`) was removed entirely — the repo is native-only. The
+TypeScript MCP server under `mcp/anythingllm/` was ported to plain JS at
+`mcp/*.mjs` (single source of truth; tests joined the root suite). The root
+`package.json` gained its first runtime dependencies (`@modelcontextprotocol/sdk`,
+`zod`); `install.sh` runs `npm ci --omit=dev` and tolerates failure (dashboard
+and sync keep working; MCP reports a clear error).
+
+Services: `mcp-fg` joins `scheduler-fg` as the foreground command pattern;
+autostart manages a third unit `anything-obsidian-mcp` (loopback 11433,
+local profile, 7 read-only tools) and an opt-in `anything-obsidian-mcp-lan`
+(0.0.0.0:11444, RAG-only 3 tools, Bearer token required) registered through
+the new `lan token|on|off|status` CLI group; the LAN admin token lives in
+config.json (0600). The services grid gained MCP rows marked
+`powerManaged: false` so the power button still reflects the scheduler only.
+`anything-obsidian update` re-downloads the app, reinstalls dependencies, and
+keeps all data.
