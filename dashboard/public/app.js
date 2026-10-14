@@ -39,6 +39,28 @@ export function nextTheme(theme) {
   return theme === "dark" ? "light" : "dark";
 }
 
+export function lastSyncLabel(lastSync, now = Date.now()) {
+  if (!lastSync) return "Never synced";
+  const finished = Date.parse(lastSync.finishedAt);
+  if (Number.isNaN(finished)) return "Synced";
+  const seconds = Math.max(0, Math.round((now - finished) / 1000));
+  const ago = seconds < 60 ? `${seconds}s ago`
+    : seconds < 3600 ? `${Math.round(seconds / 60)}m ago`
+    : seconds < 86400 ? `${Math.round(seconds / 3600)}h ago`
+    : `${Math.round(seconds / 86400)}d ago`;
+  return lastSync.status === "failed" ? `Sync failed ${ago}` : `Synced ${ago}`;
+}
+
+export function failedSyncs(vaults) {
+  return vaults.filter((vault) => vault.lastSync?.status === "failed");
+}
+
+export function syncBanner(failed) {
+  if (!failed.length) return "";
+  const names = failed.map((vault) => vault.id).join(", ");
+  return `Sync failed for: ${names}. Check the logs below or run Sync now.`;
+}
+
 export function dashboardMetrics(status, vaults) {
   const services = status.services ?? [];
   return [
@@ -98,7 +120,7 @@ export function useFolderBlockedReason(tree) {
 if (typeof document !== "undefined") {
   const state = { status: null, vaults: [], agents: [], editingId: null, createdVaultId: null, createdAgentName: null, browse: { open: false, path: "", tree: null } };
   const els = Object.fromEntries([
-    "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form",
+    "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form", "sync-banner",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
     "source-mode-field", "import-help", "import-id-field", "import-directory-field",
     "clone-url-field", "workspace-slug-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
@@ -386,6 +408,10 @@ if (typeof document !== "undefined") {
   }
 
   function render() {
+    const failed = failedSyncs(state.vaults);
+    const banner = syncBanner(failed);
+    els.syncbanner.textContent = banner;
+    els.syncbanner.hidden = !banner;
     els.systemstate.textContent = state.status.systemState;
     els.systemstate.className = `system-status ${state.status.systemState}`;
     els.power.textContent = systemPowerLabel(state.status.systemState);
@@ -426,7 +452,8 @@ if (typeof document !== "undefined") {
     if (vault.gitAuthMode === "https-token") pills.append(element("span", "vault-pill private", "Private"));
     header.append(identity, pills);
     const details = element("dl", "vault-details");
-    details.append(vaultDetail("Repository", `${vault.gitRemote}/${vault.gitBranch}`), vaultDetail("Workspace", vault.workspaceSlug), vaultDetail("Sync", `Every ${vault.syncIntervalSeconds}s`));
+    details.append(vaultDetail("Repository", `${vault.gitRemote}/${vault.gitBranch}`), vaultDetail("Workspace", vault.workspaceSlug), vaultDetail("Sync", `Every ${vault.syncIntervalSeconds}s`), vaultDetail("Last sync", lastSyncLabel(vault.lastSync)));
+    if (vault.lastSync?.status === "failed") card.classList.add("sync-failed");
     card.append(header, details);
     if (vault.accessMode === "restricted") card.append(element("p", "note", restrictedAccessNote(vault.allowlist)));
     const actions = element("div", "vault-actions");

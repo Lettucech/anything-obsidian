@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { doctor } from "./doctor.mjs";
 import { loadEnvText, resolveConfig } from "./lib/env.mjs";
-import { runWorker } from "./worker.mjs";
+import { runWorker, syncAndEmbed } from "./worker.mjs";
 
 test("parses simple env text without shell evaluation", () => {
   assert.deepEqual(loadEnvText("A=one\nB=\"two dollars $$\"\n# comment\n"), {
@@ -195,4 +195,47 @@ test("doctor checks vault mount and AnythingLLM with injected fetch", async () =
   } finally {
     await rm(vaultPath, { force: true, recursive: true });
   }
+});
+
+test("worker sync records status and notifies on failure", async () => {
+  const records = [];
+  const notifications = [];
+  const store = { record: async (vaultId, entry) => { records.push({ vaultId, entry }); return entry; } };
+  const worker = {
+    logger: { info() {}, error() {} },
+    syncVaultOnce: async () => { throw new Error("git push rejected"); },
+    shouldEmbedAfterSync: () => true,
+    embedVault: async () => ({ scanned: 0, uploaded: 0, removed: 0 }),
+    syncStatusStore: () => store,
+    notify: async (title, body) => { notifications.push({ title, body }); },
+  };
+
+  await assert.rejects(
+    () => syncAndEmbed({ worker, config: { vaultId: "work", gitAutoPush: true, embedAfterSync: true } }),
+    /git push rejected/,
+  );
+
+  assert.deepEqual(records, [{ vaultId: "work", entry: { status: "failed", error: "git push rejected" } }]);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].title, "Anything Obsidian sync failed");
+  assert.match(notifications[0].body, /work/);
+});
+
+test("worker sync records a successful run without notifying", async () => {
+  const records = [];
+  const notifications = [];
+  const store = { record: async (vaultId, entry) => { records.push({ vaultId, entry }); return entry; } };
+  const worker = {
+    logger: { info() {}, error() {} },
+    syncVaultOnce: async () => ({ pushed: true }),
+    shouldEmbedAfterSync: () => true,
+    embedVault: async () => ({ scanned: 2, uploaded: 2, removed: 0 }),
+    syncStatusStore: () => store,
+    notify: async (title, body) => { notifications.push({ title, body }); },
+  };
+
+  await syncAndEmbed({ worker, config: { vaultId: "work", gitAutoPush: true, embedAfterSync: true } });
+
+  assert.deepEqual(records, [{ vaultId: "work", entry: { status: "succeeded", pushed: true, embedded: true } }]);
+  assert.deepEqual(notifications, []);
 });

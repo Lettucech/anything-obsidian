@@ -97,6 +97,10 @@ Update in place any time (data and settings are kept):
 anything-obsidian update
 ```
 
+Sync failures surface in the dashboard (a red banner plus a per-vault
+"Last sync" line) and as an OS notification; set `AO_NOTIFY=0` in the
+service environment to silence the notifications.
+
 Uninstall in one command — it stops everything (including the LaunchAgents),
 removes the app and CLI, and keeps your data and vault folders by default:
 

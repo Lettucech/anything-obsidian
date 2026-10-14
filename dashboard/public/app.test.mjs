@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   actionDisabledReason, activeTheme, agentCreatedLabel, agentRevokeMessage, breadcrumbSegments, dashboardMetrics,
-  gitAuthForRepository, nextTheme, restrictedAccessNote, serviceTone, systemPowerLabel, useFolderBlockedReason, vaultActionUrl,
+  failedSyncs, gitAuthForRepository, lastSyncLabel, nextTheme, restrictedAccessNote, serviceTone, syncBanner, systemPowerLabel, useFolderBlockedReason, vaultActionUrl,
   vaultSourcePayload,
 } from "./app.js";
 
@@ -115,4 +115,26 @@ test("use-folder gating explains the direct-child rule", () => {
   assert.equal(useFolderBlockedReason({ root: "/v", path: "/v/Work/Notes", canUseHere: false }), "Only folders directly inside the vault root can be imported");
   assert.equal(useFolderBlockedReason({ root: "/v", path: "/v/Work", canUseHere: true }), "");
   assert.equal(useFolderBlockedReason(null), "Open a folder inside the vault root to import it");
+});
+
+test("last sync labels render relative time and failure", () => {
+  const now = Date.parse("2026-10-15T12:00:00.000Z");
+  assert.equal(lastSyncLabel(null, now), "Never synced");
+  assert.equal(lastSyncLabel({ status: "succeeded", finishedAt: "2026-10-15T11:59:40.000Z" }, now), "Synced 20s ago");
+  assert.equal(lastSyncLabel({ status: "succeeded", finishedAt: "2026-10-15T11:30:00.000Z" }, now), "Synced 30m ago");
+  assert.equal(lastSyncLabel({ status: "succeeded", finishedAt: "2026-10-14T12:00:00.000Z" }, now), "Synced 1d ago");
+  assert.equal(lastSyncLabel({ status: "failed", finishedAt: "2026-10-15T11:58:00.000Z" }, now), "Sync failed 2m ago");
+  assert.equal(lastSyncLabel({ status: "succeeded", finishedAt: "nonsense" }, now), "Synced");
+});
+
+test("failed syncs drive the alert banner", () => {
+  const failed = [
+    { id: "work", lastSync: { status: "failed" } },
+    { id: "diary", lastSync: { status: "succeeded" } },
+    { id: "secret", lastSync: { status: "failed" } },
+  ];
+  assert.deepEqual(failedSyncs(failed).map((vault) => vault.id), ["work", "secret"]);
+  assert.equal(syncBanner(failedSyncs(failed)), "Sync failed for: work, secret. Check the logs below or run Sync now.");
+  assert.equal(syncBanner([]), "");
+  assert.deepEqual(failedSyncs([{ id: "x", lastSync: null }]), []);
 });

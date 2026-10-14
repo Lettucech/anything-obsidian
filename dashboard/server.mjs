@@ -17,6 +17,7 @@ import { createAnythingllmClient } from "./anythingllm.mjs";
 import { createVaultStorage } from "./vault-storage.mjs";
 import { importTree } from "./import-tree.mjs";
 import { createFileJobStore } from "./job-store.mjs";
+import { createSyncStatusStore, syncStatusPath } from "../lib/sync-status.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, "public");
@@ -58,7 +59,9 @@ export function createDashboardServer({
         return sendHtml(res, 200, dashboardSetupPage(publicConfig(env).anythingllmUrl));
       }
       if (req.method === "GET" && url.pathname === "/api/vaults") {
-        return sendJson(res, 200, { vaults: await registry.list() });
+        const vaults = await registry.list();
+        const syncStatus = native.lastSyncPath ? await createSyncStatusStore({ filePath: native.lastSyncPath }).all() : {};
+        return sendJson(res, 200, { vaults: vaults.map((vault) => ({ ...vault, lastSync: syncStatus[vault.id] ?? null })) });
       }
       if (req.method === "POST" && url.pathname === "/api/vaults/test-connection") {
         const input = await readJsonBody(req);
@@ -435,6 +438,7 @@ if (import.meta.url === entryUrl()) {
       schedulerPidPath: process.env.AO_SCHEDULER_PID_PATH,
       schedulerLogPath: process.env.AO_SCHEDULER_LOG_PATH,
       jobStorePath: process.env.AO_JOB_STORE_PATH,
+      lastSyncPath: process.env.AO_LAST_SYNC_PATH,
     },
   }).listen(port, "127.0.0.1", () => {
     console.error(`[anything-obsidian-dashboard] listening on 127.0.0.1:${port}`);

@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { createDashboardServer } from "./server.mjs";
 import { createAgentTokenStore } from "../lib/agent-tokens.mjs";
+import { createSyncStatusStore } from "../lib/sync-status.mjs";
 
 test("vault routes clone a repository and create its managed workspace", async () => {
   const registry = fakeRegistry();
@@ -497,3 +498,28 @@ async function requestText(server, path) {
     server.emit("request", req, res);
   });
 }
+
+test("vault listings carry the last sync status when available", async () => {
+  const paths = nativePaths();
+  const registry = fakeRegistry();
+  await registry.create({ id: "work" });
+  const store = createSyncStatusStore({ filePath: path.join(paths.schedulerPidPath, "..", "last-sync.json") });
+  await store.record("work", { status: "succeeded", pushed: true, embedded: true });
+  const app = createDashboardServer({
+    jobs: fakeJobs(), registry, secrets: fakeSecrets(), vaultStorage: fakeVaultStorage(),
+    env: nativeEnv(), native: { ...paths, lastSyncPath: store.filePath },
+  });
+
+  const response = await request(app, "GET", "/api/vaults");
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.vaults.length, 1);
+  assert.equal(response.body.vaults[0].lastSync.status, "succeeded");
+  assert.equal(response.body.vaults[0].lastSync.pushed, true);
+
+  const withoutStore = createDashboardServer({
+    jobs: fakeJobs(), registry, secrets: fakeSecrets(), vaultStorage: fakeVaultStorage(),
+    env: nativeEnv(), native: paths,
+  });
+  assert.equal((await request(withoutStore, "GET", "/api/vaults")).body.vaults[0].lastSync, null);
+});

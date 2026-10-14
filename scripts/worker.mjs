@@ -9,9 +9,13 @@ import { loadEnvFile } from "./lib/env.mjs";
 import { registryFor, loadVaultConfig } from "./vault-config.mjs";
 import { runScheduler } from "./scheduler.mjs";
 import { shouldEmbedAfterSync, syncVaultOnce } from "./watch-vault.mjs";
+import { createSyncStatusStore, syncStatusPath } from "../lib/sync-status.mjs";
+import { createNotifier } from "../lib/notify.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..");
+
+const defaultNotifier = createNotifier();
 
 const defaultDeps = {
   doctor,
@@ -24,6 +28,7 @@ const defaultDeps = {
   shouldEmbedAfterSync,
   syncVaultOnce,
   runScheduler,
+  notify: defaultNotifier.notify.bind(defaultNotifier),
 };
 
 export async function runWorker(argv = process.argv.slice(2), env = process.env, deps = {}) {
@@ -115,28 +120,40 @@ async function commandConfig(argv, env, worker) {
   return worker.loadVaultConfig(await worker.loadEnv(env), vaultId);
 }
 
-async function syncAndEmbed({ worker, config }) {
-  worker.logger.info("Sync started");
-  const syncResult = await worker.syncVaultOnce({ config });
-  worker.logger.info(`Git sync completed; pushed=${syncResult.pushed}`);
-  let embedded = false;
-  if (
-    worker.shouldEmbedAfterSync({
-      embedAfterSync: config.embedAfterSync,
-      gitAutoPush: config.gitAutoPush,
-      pushSucceeded: syncResult.pushed,
-    })
-  ) {
-    worker.logger.info("Embedding started");
-    const embedResult = await worker.embedVault({ config, all: false });
-    worker.logger.info(formatEmbedResult("Embedding completed", embedResult));
-    embedded = true;
-  } else {
-    worker.logger.info("Embedding skipped; Git push did not complete");
+export async function syncAndEmbed({ worker, config }) {
+  const statusStore = worker.syncStatusStore
+    ? worker.syncStatusStore()
+    : createSyncStatusStore({ filePath: syncStatusPath(config.vaultStateRoot || path.join(repoRoot, ".anything-obsidian-state")) });
+  try {
+    worker.logger.info("Sync started");
+    const syncResult = await worker.syncVaultOnce({ config });
+    worker.logger.info(`Git sync completed; pushed=${syncResult.pushed}`);
+    let embedded = false;
+    if (
+      worker.shouldEmbedAfterSync({
+        embedAfterSync: config.embedAfterSync,
+        gitAutoPush: config.gitAutoPush,
+        pushSucceeded: syncResult.pushed,
+      })
+    ) {
+      worker.logger.info("Embedding started");
+      const embedResult = await worker.embedVault({ config, all: false });
+      worker.logger.info(formatEmbedResult("Embedding completed", embedResult));
+      embedded = true;
+    } else {
+      worker.logger.info("Embedding skipped; Git push did not complete");
+    }
+    const result = { ...syncResult, embedded };
+    worker.logger.info(`Sync completed; embedded=${result.embedded}`);
+    await statusStore.record(config.vaultId, { status: "succeeded", pushed: result.pushed, embedded });
+    return result;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    worker.logger.error(`Sync failed; ${detail}`);
+    await statusStore.record(config.vaultId, { status: "failed", error: detail });
+    await worker.notify("Anything Obsidian sync failed", `Vault '${config.vaultId}': ${detail}`);
+    throw error;
   }
-  const result = { ...syncResult, embedded };
-  worker.logger.info(`Sync completed; embedded=${result.embedded}`);
-  return result;
 }
 
 async function sleep(ms) {

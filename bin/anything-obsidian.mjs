@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 import { createAnythingllmClient } from "../dashboard/anythingllm.mjs";
 import { createDashboardServer } from "../dashboard/server.mjs";
 import { createFileJobStore } from "../dashboard/job-store.mjs";
+import { syncStatusPath } from "../lib/sync-status.mjs";
 import {
   createLocalJobManager,
   startDashboardProcess,
@@ -380,6 +381,7 @@ async function runStart({ store, env, spawnImpl, fetchImpl, log, launchctl, syst
       schedulerPidPath: store.paths.schedulerPidPath,
       schedulerLogPath: store.paths.schedulerLogPath,
       jobStorePath: store.paths.jobStorePath,
+      lastSyncPath: syncStatusPath(store.paths.stateRoot),
       spawnImpl,
     },
   });
