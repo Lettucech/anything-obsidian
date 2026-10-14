@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -324,9 +324,20 @@ test("static files return not found instead of server error", async () => {
   assert.match(response.body.error, /Not found/);
 });
 
+const FIXTURE_ROOT = "/tmp/anything-obsidian-server-fixture";
+test.afterEach(() => {
+  // The autostart manager writes real plist files under the fixture HOME;
+  // clear them so later runs do not observe stale registration state.
+  rmSync(path.join(FIXTURE_ROOT, "Library", "LaunchAgents"), { recursive: true, force: true });
+});
+
 function nativeEnv() {
   const root = "/tmp/anything-obsidian-server-fixture";
   return {
+    // HOME must point at the fixture root: the autostart manager writes
+    // real plist files under $HOME/Library/LaunchAgents and falling back to
+    // the actual home directory leaks test artifacts onto the machine.
+    HOME: root,
     VAULTS_ROOT: "/vaults",
     VAULT_REGISTRY_PATH: `${root}/registry/vaults.json`,
     VAULT_SECRETS_PATH: `${root}/secrets`,
@@ -523,3 +534,71 @@ test("vault listings carry the last sync status when available", async () => {
   });
   assert.equal((await request(withoutStore, "GET", "/api/vaults")).body.vaults[0].lastSync, null);
 });
+
+test("autostart and lan endpoints manage services through the platform manager", async () => {
+  const tracker = [];
+  const launchctl = async (args) => {
+    tracker.push(args.join(" "));
+    if (args[0] === "print") throw new Error("not loaded");
+    return { stdout: "", stderr: "" };
+  };
+  const paths = nativePaths();
+  const makeApp = () => createDashboardServer({
+    jobs: fakeJobs(), registry: fakeRegistry(), secrets: fakeSecrets(), vaultStorage: fakeVaultStorage(),
+    env: { ...nativeEnv(), ANYTHING_OBSIDIAN_HOME: configRoot(tmpHome()) },
+    native: { ...paths, lastSyncPath: path.join(paths.schedulerPidPath, "..", "last-sync.json") },
+    platform: "darwin", launchctl,
+  });
+
+  const before = await request(makeApp(), "GET", "/api/autostart");
+  assert.equal(before.status, 200);
+  assert.equal(before.body.enabled, false);
+
+  const on = await request(makeApp(), "POST", "/api/autostart", { action: "on" });
+  assert.equal(on.status, 200);
+  assert.equal(on.body.enabled, true);
+  assert.ok(tracker.some((entry) => entry.startsWith("bootstrap")));
+
+  const bad = await request(makeApp(), "POST", "/api/autostart", { action: "toggle" });
+  assert.equal(bad.status, 400);
+
+  const lanOff = await request(makeApp(), "POST", "/api/lan", { action: "off" });
+  assert.equal(lanOff.status, 200);
+  assert.equal(lanOff.body.enabled, false);
+});
+
+test("lan on generates and stores a token when none is configured", async () => {
+  const home = tmpHome();
+  const { createAppConfigStore } = await import("../lib/app-config.mjs");
+  await createAppConfigStore({ rootDir: configRoot(home) }).save({
+    vaultsRoot: path.join(home, "v"), anythingllmBaseUrl: "http://l", apiKey: "k",
+  });
+  const paths = nativePaths();
+  const app = createDashboardServer({
+    jobs: fakeJobs(), registry: fakeRegistry(), secrets: fakeSecrets(), vaultStorage: fakeVaultStorage(),
+    env: { ...nativeEnv(), ANYTHING_OBSIDIAN_HOME: configRoot(home) },
+    native: paths, platform: "darwin",
+    launchctl: async (args) => {
+      if (args[0] === "print") throw new Error("not loaded");
+      return { stdout: "", stderr: "" };
+    },
+  });
+
+  const response = await request(app, "POST", "/api/lan", { action: "on" });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.enabled, true);
+  assert.match(response.body.token, /^[A-Za-z0-9_-]{20,}$/);
+  const config = await createAppConfigStore({ rootDir: configRoot(home) }).load();
+  assert.equal(config.lanToken, response.body.token);
+});
+
+let homeCounter = 0;
+function tmpHome() {
+  homeCounter += 1;
+  return path.join(tmpdir(), `anything-obsidian-server-home-${process.pid}-${homeCounter}-${Math.random().toString(36).slice(2)}`);
+}
+
+function configRoot(home) {
+  return path.join(home, "app-support");
+}

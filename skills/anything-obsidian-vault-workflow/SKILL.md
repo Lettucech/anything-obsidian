@@ -16,9 +16,11 @@ Use this skill when an agent must:
 
 ## Do Not Use When
 
-Do not use this skill to administer the Anything Obsidian services, debug its
-deployment, register a vault, or change Git sync and embedding configuration.
-Use the dashboard and project operations guidance for those tasks.
+Do not use this skill to administer the Anything Obsidian services or install
+them — use the `anything-obsidian-setup` skill for machine setup, and the
+local MCP `ao_*` management tools (or the dashboard) for runtime
+administration such as registering a vault or changing Git sync and embedding
+configuration.
 
 Do not use the LAN MCP profile to edit a vault. It is intentionally RAG-only.
 
@@ -29,10 +31,12 @@ is a derived index that may lag behind the files. Use RAG to discover likely
 sources, then verify consequential claims against the source note before
 answering or editing.
 
-The MCP interface is read-only. Never call obsolete MCP write, patch, upload,
-sync, or reindex tools even if a stale deployment advertises them. If the live
-tool surface contradicts this contract, fail closed for mutations and report
-the deployment drift.
+Vault file access over MCP is read-only: never write, patch, or upload note
+content through MCP. The local profile additionally exposes `ao_*`
+management tools (vault lifecycle, sync/embed jobs, agent tokens, service
+control) — those manage the system, not vault source files, and are the
+approved way for an agent to operate Anything Obsidian on the user's behalf.
+The LAN profile is RAG-only and exposes none of them.
 
 This skill grants no write, commit, sync, or push authority. The target vault's
 applicable `AGENTS.md`, other local instructions, and the user's approval define

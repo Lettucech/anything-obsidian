@@ -3,6 +3,7 @@ import { execFile as nodeExecFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -18,6 +19,8 @@ import { createVaultStorage } from "./vault-storage.mjs";
 import { importTree } from "./import-tree.mjs";
 import { createFileJobStore } from "./job-store.mjs";
 import { createSyncStatusStore, syncStatusPath } from "../lib/sync-status.mjs";
+import { createServiceManager } from "../lib/autostart.mjs";
+import { randomBytes } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, "public");
@@ -28,6 +31,9 @@ export function createDashboardServer({
   jobs,
   fetchImpl = fetch,
   native = {},
+  platform = process.platform,
+  launchctl,
+  systemctl,
   registry = createVaultRegistry({
     rootPath: env.VAULTS_ROOT || "",
     registryPath: env.VAULT_REGISTRY_PATH || "",
@@ -50,7 +56,7 @@ export function createDashboardServer({
   }
   const jobManager = jobs
     || createLocalJobManager({ env, jobStore: native.jobStorePath ? createFileJobStore({ filePath: native.jobStorePath }) : null });
-  const context = { env, fetchImpl, native, anythingllm, jobs: jobManager };
+  const context = { env, fetchImpl, native, anythingllm, jobs: jobManager, platform, launchctl, systemctl };
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://localhost");
@@ -160,6 +166,62 @@ export function createDashboardServer({
         await stopSchedulerProcess({ pidPath: native.schedulerPidPath, killImpl: native.killImpl });
         return sendJson(res, 200, await statusPayload(context));
       }
+      if (url.pathname === "/api/autostart") {
+        const manager = serviceManagerFor(context);
+        if (req.method === "GET") {
+          const enabled = await manager.enabled();
+          const lanEnabled = await manager.lanEnabled();
+          const services = enabled || lanEnabled ? await manager.status() : null;
+          return sendJson(res, 200, { enabled, lanEnabled, ...(services ? { services } : {}) });
+        }
+        if (req.method === "POST") {
+          const input = await readJsonBody(req);
+          if (input.action !== "on" && input.action !== "off") {
+            return sendJson(res, 400, { error: "action must be on or off" });
+          }
+          if (input.action === "on") {
+            await manager.enable({
+              dashboardLogPath: native.schedulerLogPath.replace(/scheduler\.log$/, "dashboard.log"),
+              schedulerLogPath: native.schedulerLogPath,
+              mcpLogPath: native.schedulerLogPath.replace(/scheduler\.log$/, "mcp.log"),
+            });
+          } else {
+            await manager.disable();
+          }
+          const enabled = await manager.enabled();
+          return sendJson(res, 200, { enabled, lanEnabled: await manager.lanEnabled() });
+        }
+      }
+      if (url.pathname === "/api/lan") {
+        const manager = serviceManagerFor(context);
+        if (req.method === "GET") {
+          return sendJson(res, 200, { enabled: await manager.lanEnabled() });
+        }
+        if (req.method === "POST") {
+          const input = await readJsonBody(req);
+          if (input.action === "token") {
+            if (!String(input.token ?? "").trim()) return sendJson(res, 400, { error: "token is required" });
+            await registryUpdateLanToken(env, String(input.token).trim());
+            return sendJson(res, 200, { tokenConfigured: true });
+          }
+          if (input.action !== "on" && input.action !== "off") {
+            return sendJson(res, 400, { error: "action must be on, off, or token" });
+          }
+          if (input.action === "off") {
+            await manager.disableLan();
+            return sendJson(res, 200, { enabled: false });
+          }
+          let lanToken = await readLanToken(env);
+          let generated = null;
+          if (!lanToken) {
+            generated = randomBytes(24).toString("base64url");
+            await registryUpdateLanToken(env, generated);
+            lanToken = generated;
+          }
+          await manager.enableLan({ mcpLanLogPath: native.schedulerLogPath.replace(/scheduler\.log$/, "mcp-lan.log") });
+          return sendJson(res, 200, { enabled: true, ...(generated ? { token: generated } : {}) });
+        }
+      }
       if (req.method === "GET" && url.pathname === "/api/logs") {
         const id = url.searchParams.get("service") || "";
         if (!NATIVE_LOG_IDS.has(id)) return sendJson(res, 400, { error: `Unknown log service: ${id}` });
@@ -251,6 +313,34 @@ async function dashboardReady(anythingllm) {
   } catch {
     return false;
   }
+}
+
+function serviceManagerFor({ env, native, platform, launchctl, systemctl }) {
+  return createServiceManager({
+    platform,
+    ...(env.HOME ? { homedir: env.HOME } : {}),
+    ...(launchctl ? { launchctl } : {}),
+    ...(systemctl ? { systemctl } : {}),
+    logsRoot: path.dirname(native.schedulerLogPath || path.join(os.homedir(), "logs")),
+  });
+}
+
+async function configStoreFor(env) {
+  const { createAppConfigStore, defaultConfigRoot } = await import("../lib/app-config.mjs");
+  const rootDir = env.ANYTHING_OBSIDIAN_HOME || defaultConfigRoot({ env });
+  return createAppConfigStore({ rootDir });
+}
+
+async function readLanToken(env) {
+  const config = await (await configStoreFor(env)).load();
+  return config?.lanToken ?? null;
+}
+
+async function registryUpdateLanToken(env, token) {
+  const store = await configStoreFor(env);
+  const config = await store.load();
+  if (!config) throw new Error("This app is not initialized yet. Run: anything-obsidian init");
+  await store.save({ ...config, lanToken: token });
 }
 
 async function statusPayload({ jobs, env, fetchImpl, native, anythingllm }) {

@@ -21,10 +21,22 @@ async function toolNames(profile) {
   return result.tools.map((tool) => tool.name).sort();
 }
 
-test("local MCP exposes only read-only vault discovery and RAG tools", async () => {
+test("local MCP exposes read-only vault tools, RAG tools, and management tools", async () => {
   assert.deepEqual(await toolNames("local"), [
     "anythingllm_answer",
     "anythingllm_search_chunks",
+    "ao_agent_create",
+    "ao_agent_revoke",
+    "ao_autostart",
+    "ao_job_get",
+    "ao_lan",
+    "ao_status",
+    "ao_vault_add",
+    "ao_vault_doctor",
+    "ao_vault_embed",
+    "ao_vault_remove",
+    "ao_vault_sync",
+    "ao_vault_update",
     "obsidian_file_list",
     "obsidian_file_read",
     "obsidian_vault_context",

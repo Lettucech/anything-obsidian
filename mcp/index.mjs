@@ -14,6 +14,7 @@ import { mcpHttpOptions } from "./http-config.mjs";
 import { ADMIN_IDENTITY, ANONYMOUS_IDENTITY, loadVaults, resolveVault, visibleVaults } from "./vault-registry.mjs";
 import { loadAgentIdentities, resolveIdentity } from "./agent-identity.mjs";
 import { createVaultFileService } from "./vault-files.mjs";
+import { dashboardApi, registerManagementTools } from "./manage.mjs";
 import { defaultConfigRoot, configPaths } from "../lib/app-config.mjs";
 
 const chatPathTemplate = process.env.ANYTHINGLLM_CHAT_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/chat";
@@ -42,7 +43,10 @@ export function createServer(profile = "local", identity = ANONYMOUS_IDENTITY) {
     }),
   );
 
-  if (profile === "local") registerLocalVaultTools(server, vaultFiles);
+  if (profile === "local") {
+    registerLocalVaultTools(server, vaultFiles);
+    registerManagementTools(server, dashboardApi(), { z });
+  }
   registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identity);
   return server;
 }
