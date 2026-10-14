@@ -14,17 +14,33 @@ export const SERVER_SCRIPT_PATH = path.join(repoRoot, "dashboard", "server.mjs")
 export function createLocalJobManager({
   env = {},
   workerPath = WORKER_SCRIPT_PATH,
-  nodePath = process.execPath,
+  // argv[0] keeps the renamed display binary so worker processes carry the
+  // anything-obsidian name in Activity Monitor too.
+  nodePath = process.argv[0] || process.execPath,
   cwd = repoRoot,
   now = Date.now,
   spawnImpl = nodeSpawn,
   logLimit = 500,
+  jobStore = null,
 } = {}) {
   const jobs = new Map();
   const activeJobIds = new Map();
+  let restored = Promise.resolve();
+  if (jobStore?.loadSync) {
+    for (const job of jobStore.loadSync()) jobs.set(job.id, job);
+  } else if (jobStore) {
+    restored = (async () => {
+      for (const job of await jobStore.load()) jobs.set(job.id, job);
+    })();
+  }
+
+  const persist = () => (jobStore
+    ? jobStore.save(Array.from(jobs.values())).catch(() => {})
+    : Promise.resolve());
 
   return {
     async start(vaultId, actionId, serviceSnapshot = []) {
+      await restored;
       if (Array.isArray(actionId)) {
         serviceSnapshot = actionId;
         actionId = vaultId;
@@ -52,6 +68,7 @@ export function createLocalJobManager({
       };
       jobs.set(id, job);
       activeJobIds.set(vaultId, id);
+      await persist();
 
       runLocalJob({ job, action, vaultId, spawnImpl, nodePath, workerPath, cwd, env, logLimit })
         .catch((error) => {
@@ -61,6 +78,7 @@ export function createLocalJobManager({
         .finally(() => {
           job.finishedAt = new Date(now()).toISOString();
           activeJobIds.delete(vaultId);
+          persist();
         });
 
       return job;

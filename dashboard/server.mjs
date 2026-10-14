@@ -17,6 +17,7 @@ import { createAgentTokenStore } from "../lib/agent-tokens.mjs";
 import { createAnythingllmClient } from "./anythingllm.mjs";
 import { createVaultStorage } from "./vault-storage.mjs";
 import { importTree } from "./import-tree.mjs";
+import { createFileJobStore } from "./job-store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, "public");
@@ -49,7 +50,15 @@ export function createDashboardServer({
   if (mode === "native" && !native?.schedulerPidPath) {
     throw new Error("native mode requires native paths (schedulerPidPath, schedulerLogPath)");
   }
-  const jobManager = jobs ?? (mode === "native" ? createLocalJobManager({ env }) : createJobManager({ docker }));
+  let jobManager = jobs;
+  if (!jobManager) {
+    const jobStore = mode === "native" && native?.jobStorePath
+      ? createFileJobStore({ filePath: native.jobStorePath })
+      : null;
+    jobManager = mode === "native"
+      ? createLocalJobManager({ env, jobStore })
+      : createJobManager({ docker });
+  }
   const context = { mode, docker, env, fetchImpl, native: native || {}, anythingllm, jobs: jobManager };
   return createServer(async (req, res) => {
     try {
@@ -460,6 +469,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       ? {
           schedulerPidPath: process.env.AO_SCHEDULER_PID_PATH,
           schedulerLogPath: process.env.AO_SCHEDULER_LOG_PATH,
+          jobStorePath: process.env.AO_JOB_STORE_PATH,
         }
       : null,
   }).listen(port, host, () => {

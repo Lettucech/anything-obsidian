@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 
 import { createAnythingllmClient } from "../dashboard/anythingllm.mjs";
 import { createDashboardServer } from "../dashboard/server.mjs";
+import { createFileJobStore } from "../dashboard/job-store.mjs";
 import {
   createLocalJobManager,
   startDashboardProcess,
@@ -112,6 +113,7 @@ async function runAutostart({ subcommand, store, env, log, json, launchctl }) {
       await manager.enable({
         dashboardLogPath: store.paths.dashboardLogPath,
         schedulerLogPath: store.paths.schedulerLogPath,
+        displayRoot: store.paths.displayRoot,
       });
       const state = await manager.status();
       if (json) {
@@ -155,7 +157,10 @@ async function runSchedulerFg({ store, env, spawnImpl, log }) {
   if (!config) return 1;
   await store.ensureLayout();
 
-  const child = spawnImpl(process.execPath, [WORKER_SCRIPT_PATH, "scheduler"], {
+  if (env.AO_LAUNCHD) {
+    process.title = "anything-obsidian-scheduler";
+  }
+  const child = spawnImpl(process.argv[0] || process.execPath, [WORKER_SCRIPT_PATH, "scheduler"], {
     env: nativeEnv(config, store.paths, { env }),
     stdio: "inherit",
   });
@@ -351,13 +356,19 @@ async function runStart({ store, env, spawnImpl, fetchImpl, log, launchctl, back
   }
 
   const childEnv = { ...nativeEnv(config, store.paths, { env }), AO_MODE: "native" };
+  if (env.AO_LAUNCHD) {
+    // The Activity Monitor name follows the process title and the executable;
+    // both carry the anything-obsidian role for launchd-spawned services.
+    process.title = "anything-obsidian-dashboard";
+  }
   const server = createDashboardServer({
     mode: "native",
     env: childEnv,
-    jobs: createLocalJobManager({ env: childEnv }),
+    jobs: createLocalJobManager({ env: childEnv, nodePath: process.argv[0] || process.execPath, jobStore: createFileJobStore({ filePath: store.paths.jobStorePath }) }),
     native: {
       schedulerPidPath: store.paths.schedulerPidPath,
       schedulerLogPath: store.paths.schedulerLogPath,
+      jobStorePath: store.paths.jobStorePath,
       spawnImpl,
     },
   });
@@ -568,14 +579,14 @@ function parseFlags(args) {
   return flags;
 }
 
-if (process.argv[1] && import.meta.url === entryUrl()) {
-  process.exitCode = await runCli();
-}
-
 function entryUrl() {
   try {
     return pathToFileURL(realpathSync(process.argv[1])).href;
   } catch {
     return pathToFileURL(path.resolve(process.argv[1])).href;
   }
+}
+
+if (process.argv[1] && import.meta.url === entryUrl()) {
+  process.exitCode = await runCli();
 }
