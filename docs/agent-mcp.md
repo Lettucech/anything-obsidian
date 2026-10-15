@@ -12,22 +12,22 @@ http://localhost:21433/mcp
 ```
 
 The local profile provides RAG plus raw-vault discovery and bounded source
-reads. `obsidian_vault_directory` is local-only and returns the configured
+reads. `any_obs_vault_directory` is local-only and returns the configured
 host path of a selected vault, allowing an agent that already has local
 filesystem authority to make edits outside this project's MCP scope.
-`obsidian_vault_context` adds the selected vault's root policy files,
+`any_obs_vault_context` adds the selected vault's root policy files,
 non-secret sync settings, source-of-truth status, and RAG freshness boundary so
 the agent can assess the edit surface before opening that directory.
 
 Available tools:
 
-- `obsidian_vault_list`
-- `obsidian_vault_context`
-- `obsidian_vault_directory`
-- `obsidian_file_list`
-- `obsidian_file_read`
-- `anythingllm_search_chunks`
-- `anythingllm_answer`
+- `any_obs_vault_list`
+- `any_obs_vault_context`
+- `any_obs_vault_directory`
+- `any_obs_file_list`
+- `any_obs_file_read`
+- `any_obs_rag_search`
+- `any_obs_rag_answer`
 
 For a reusable retrieval and edit workflow, install the repository skill:
 
@@ -37,8 +37,8 @@ npx skills add Lettucech/anything-obsidian --skill anything-obsidian-vault-workf
 
 Its context-first flow is:
 
-1. Select one explicit vault with `obsidian_vault_list`.
-2. Call `obsidian_vault_context` and read the returned policy files.
+1. Select one explicit vault with `any_obs_vault_list`.
+2. Call `any_obs_vault_context` and read the returned policy files.
 3. Use RAG to discover candidates and raw file reads to verify source truth.
 4. For an approved edit, open the returned local directory and use normal
    filesystem and Git checks under the vault's own rules.
@@ -58,7 +58,7 @@ then add that agent name to the allowlist of each vault it should reach
 Authorization: Bearer <agent-token>
 ```
 
-With a valid agent token, `obsidian_vault_list` returns only open vaults plus
+With a valid agent token, `any_obs_vault_list` returns only open vaults plus
 the restricted vaults whose allowlist names that agent, and every tool enforces
 the same boundary. A tokenless local connection keeps its current access to
 open vaults only. The LAN profile's `MCP_LAN_TOKEN` stays an administrator
@@ -82,9 +82,9 @@ also appear in `MCP_LAN_ALLOWED_HOSTS`.
 
 The LAN profile deliberately exposes only:
 
-- `obsidian_vault_list`
-- `anythingllm_search_chunks`
-- `anythingllm_answer`
+- `any_obs_vault_list`
+- `any_obs_rag_search`
+- `any_obs_rag_answer`
 
 It does not mount the vault root and cannot return vault directories or raw
 source files. Keep the bearer token private: RAG results may contain source

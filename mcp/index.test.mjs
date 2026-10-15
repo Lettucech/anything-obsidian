@@ -26,30 +26,30 @@ test("local MCP exposes read-only vault tools, RAG tools, and management tools",
     "any_obs_agent_create",
     "any_obs_agent_revoke",
     "any_obs_autostart",
+    "any_obs_file_list",
+    "any_obs_file_read",
     "any_obs_job_get",
     "any_obs_lan",
+    "any_obs_rag_answer",
+    "any_obs_rag_search",
     "any_obs_status",
     "any_obs_vault_add",
+    "any_obs_vault_context",
+    "any_obs_vault_directory",
     "any_obs_vault_doctor",
     "any_obs_vault_embed",
+    "any_obs_vault_list",
     "any_obs_vault_remove",
     "any_obs_vault_sync",
     "any_obs_vault_update",
-    "anythingllm_answer",
-    "anythingllm_search_chunks",
-    "obsidian_file_list",
-    "obsidian_file_read",
-    "obsidian_vault_context",
-    "obsidian_vault_directory",
-    "obsidian_vault_list",
   ]);
 });
 
 test("LAN MCP exposes only RAG and safe vault selection metadata", async () => {
   assert.deepEqual(await toolNames("lan"), [
-    "anythingllm_answer",
-    "anythingllm_search_chunks",
-    "obsidian_vault_list",
+    "any_obs_rag_answer",
+    "any_obs_rag_search",
+    "any_obs_vault_list",
   ]);
 });
 
@@ -60,7 +60,7 @@ async function listedVaults(profile, identity) {
 
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  const result = await client.callTool({ name: "obsidian_vault_list", arguments: {} });
+  const result = await client.callTool({ name: "any_obs_vault_list", arguments: {} });
   await client.close();
   await server.close();
   const parsed = JSON.parse(result.content[0].text);

@@ -35,7 +35,7 @@ export function createServer(profile = "local", identity = ANONYMOUS_IDENTITY) {
   const server = new McpServer({ name: "anything-obsidian", version: "0.4.0" });
 
   server.tool(
-    "obsidian_vault_list",
+    "any_obs_vault_list",
     "List managed vault ids and names the caller can access for MCP selection. No repository, Git, or filesystem details are returned.",
     {},
     async () => asJsonContent({
@@ -57,7 +57,7 @@ function defaultPaths() {
 
 function registerLocalVaultTools(server, vaultFiles) {
   server.tool(
-    "obsidian_file_list",
+    "any_obs_file_list",
     "List Markdown and Canvas files from one managed Obsidian vault. Paths are vault-relative and this tool is read-only.",
     {
       vaultId: z.string().min(1).optional(),
@@ -68,7 +68,7 @@ function registerLocalVaultTools(server, vaultFiles) {
   );
 
   server.tool(
-    "obsidian_file_read",
+    "any_obs_file_read",
     "Read a bounded line range from a source-of-truth Obsidian file. This tool is read-only.",
     {
       vaultId: z.string().min(1).optional(),
@@ -81,14 +81,14 @@ function registerLocalVaultTools(server, vaultFiles) {
   );
 
   server.tool(
-    "obsidian_vault_context",
+    "any_obs_vault_context",
     "Return local edit context for one managed vault: its host directory, policy files, non-secret sync settings, and source-of-truth boundaries. This tool is read-only and local-only.",
     { vaultId: z.string().min(1).optional() },
     async (input) => asJsonContent(await vaultFiles.context(input)),
   );
 
   server.tool(
-    "obsidian_vault_directory",
+    "any_obs_vault_directory",
     "Return the configured host directory for one managed vault. This tool is local-only so an agent can open the vault directly when it has local filesystem authority.",
     { vaultId: z.string().min(1).optional() },
     async (input) => asJsonContent(await vaultFiles.directory(input)),
@@ -97,7 +97,7 @@ function registerLocalVaultTools(server, vaultFiles) {
 
 function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identity) {
   server.tool(
-    "anythingllm_answer",
+    "any_obs_rag_answer",
     "Ask AnythingLLM to answer from one managed vault. Prefer anythingllm_search_chunks when an agent needs source chunks.",
     {
       question: z.string().min(1),
@@ -115,7 +115,7 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
   );
 
   server.tool(
-    "anythingllm_search_chunks",
+    "any_obs_rag_search",
     "Search one managed vault vector index and return matching source chunks. Prefer this for agent RAG.",
     {
       query: z.string().min(1),

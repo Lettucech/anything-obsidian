@@ -45,9 +45,9 @@ portable workflow.
 
 ## Establish the vault context
 
-1. Call `obsidian_vault_list`. When more than one vault is available, select an
+1. Call `any_obs_vault_list`. When more than one vault is available, select an
    explicit `vaultId`; never search across vaults implicitly.
-2. On the local profile, call `obsidian_vault_context` before substantial
+2. On the local profile, call `any_obs_vault_context` before substantial
    retrieval or any proposed edit. Inspect its policy files, source directory,
    edit boundary, sync settings, and RAG freshness warning.
 3. Read every returned policy file before deciding placement, language,
@@ -56,17 +56,17 @@ portable workflow.
 4. Treat a restricted or inaccessible vault as blocked. Do not infer access
    from its name or from a RAG result.
 
-If `obsidian_vault_context` is unavailable, ordinary read-only retrieval may
+If `any_obs_vault_context` is unavailable, ordinary read-only retrieval may
 continue with the current read tools when access is otherwise clear. Do not
 edit until the local source directory, applicable policy, and sync side effects
 have been established through an authorized path.
 
 ## Retrieve and verify knowledge
 
-- Prefer `anythingllm_search_chunks` to discover candidate notes and source
-  passages. Use `anythingllm_answer` only when a synthesized answer is useful.
-- Use `obsidian_file_list` to inspect the actual vault structure and
-  `obsidian_file_read` to verify the current source text.
+- Prefer `any_obs_rag_search` to discover candidate notes and source
+  passages. Use `any_obs_rag_answer` only when a synthesized answer is useful.
+- Use `any_obs_file_list` to inspect the actual vault structure and
+  `any_obs_file_read` to verify the current source text.
 - Preserve the source path and any relevant date, revision, decision state, or
   uncertainty. Do not turn an index answer into project truth without checking
   the source note.
@@ -78,7 +78,7 @@ have been established through an authorized path.
 
 Before changing a file:
 
-1. Use the directory returned by `obsidian_vault_context` and confirm it is the
+1. Use the directory returned by `any_obs_vault_context` and confirm it is the
    selected vault's Git working tree.
 2. Inspect `git status` and preserve unrelated user changes.
 3. Identify the canonical target note and the rules applying to its path.
