@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -88,5 +88,45 @@ test("obsidian_vault_list is filtered by caller identity", async () => {
   } finally {
     if (previous === undefined) delete process.env.VAULT_REGISTRY_PATH;
     else process.env.VAULT_REGISTRY_PATH = previous;
+  }
+});
+
+test("vault_list entries carry the last sync outcome without error details", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-list-"));
+  const registryPath = path.join(root, "vaults.json");
+  const stateRoot = path.join(root, "state");
+  await mkdir(stateRoot, { recursive: true });
+  await writeFile(registryPath, JSON.stringify({
+    vaults: [
+      { id: "work", name: "Work", directory: "work", workspaceSlug: "work", enabled: true, accessMode: "open", allowlist: [] },
+    ],
+  }));
+  await writeFile(path.join(stateRoot, "last-sync.json"), JSON.stringify({
+    version: 1,
+    vaults: { work: { status: "failed", finishedAt: "2026-10-15T00:00:00.000Z", error: "secret-ish detail" } },
+  }));
+
+  const previousRegistry = process.env.VAULT_REGISTRY_PATH;
+  const previousState = process.env.VAULT_STATE_ROOT;
+  process.env.VAULT_REGISTRY_PATH = registryPath;
+  process.env.VAULT_STATE_ROOT = stateRoot;
+  try {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer("local");
+    const client = new Client({ name: "t", version: "0" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const result = await client.callTool({ name: "any_obs_vault_list", arguments: {} });
+    await client.close();
+    await server.close();
+    const vaults = JSON.parse(result.content[0].text).vaults;
+    assert.deepEqual(vaults, [
+      { id: "work", name: "Work", lastSync: { status: "failed", finishedAt: "2026-10-15T00:00:00.000Z" } },
+    ]);
+  } finally {
+    if (previousRegistry === undefined) delete process.env.VAULT_REGISTRY_PATH;
+    else process.env.VAULT_REGISTRY_PATH = previousRegistry;
+    if (previousState === undefined) delete process.env.VAULT_STATE_ROOT;
+    else process.env.VAULT_STATE_ROOT = previousState;
   }
 });

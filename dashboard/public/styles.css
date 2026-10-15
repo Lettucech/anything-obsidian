@@ -331,3 +331,5 @@ dialog form { padding: clamp(22px, 4vw, 34px); }
 .sync-banner { margin: 0 0 14px; border: 1px solid var(--danger); border-radius: 12px; padding: 12px 16px; background: rgb(213 72 97 / 12%); color: var(--danger); font-weight: 650; }
 .vault-card.sync-failed { border-color: var(--danger); }
 .vault-card.sync-failed .vault-id::after { content: " — sync failed"; color: var(--danger); font-weight: 650; }
+
+.update-badge { border: 1px solid var(--accent); background: var(--status-surface); color: var(--accent-strong); border-radius: 999px; padding: 6px 12px; font-size: 0.78rem; font-weight: 700; cursor: pointer; }

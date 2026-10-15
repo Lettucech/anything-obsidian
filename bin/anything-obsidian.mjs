@@ -12,6 +12,8 @@ import { createAnythingllmClient } from "../dashboard/anythingllm.mjs";
 import { createDashboardServer } from "../dashboard/server.mjs";
 import { createFileJobStore } from "../dashboard/job-store.mjs";
 import { syncStatusPath } from "../lib/sync-status.mjs";
+import { rotateLogs } from "../lib/log-rotate.mjs";
+import { compareVersions, currentVersionValue, fetchLatestVersion } from "../lib/update-check.mjs";
 import {
   createLocalJobManager,
   startDashboardProcess,
@@ -440,7 +442,7 @@ async function runStop({ store, killImpl, log, launchctl, systemctl, platform, e
   return 0;
 }
 
-async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launchctl, systemctl, platform }) {
+async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launchctl, systemctl, platform, fetchLatest = fetchLatestVersion }) {
   const config = await store.load();
   const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
   const autostartEnabled = manager ? await manager.enabled() : false;
@@ -550,6 +552,13 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
     report.vaults = null;
   }
 
+  const current = await currentVersionValue();
+  const latest = await fetchLatest({ fetchImpl });
+  report.update = {
+    current,
+    latest,
+    available: Boolean(latest) && compareVersions(current, latest) < 0,
+  };
   report.ok = Boolean(report.git) && report.anythingllm.ok;
   emit(report);
   return report.ok ? 0 : 1;
@@ -577,6 +586,9 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
     log(`  ${mark(value.mcp.healthy)} Local MCP: ${value.mcp.healthy ? `running at ${value.mcp.url}` : value.mcp.running ? "starting or unhealthy" : "not running"}`);
     log(`  ${mark(value.mcpLan.healthy)} LAN MCP: ${value.mcpLan.healthy ? "running (port 21444)" : "off or not running"}`);
     log(`  ${mark(value.autostart.enabled)} Autostart: ${value.autostart.enabled ? "on (starts at login, restarts on crash)" : "off"}`);
+    if (value.update?.available) {
+      log(`  ↻ Update available: ${value.update.current} -> ${value.update.latest} (run: anything-obsidian update)`);
+    }
   }
 }
 
@@ -608,6 +620,7 @@ async function runMcpFg({ store, env, spawnImpl, log, lan }) {
     log("LAN MCP requires a token. Run: anything-obsidian lan on");
     return 1;
   }
+  await rotateLogs({ logsRoot: store.paths.logsRoot });
   if (env.AO_SUPERVISED) {
     process.title = lan ? "anything-obsidian-mcp-lan" : "anything-obsidian-mcp";
   }

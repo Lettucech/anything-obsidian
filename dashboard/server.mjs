@@ -20,6 +20,8 @@ import { importTree } from "./import-tree.mjs";
 import { createFileJobStore } from "./job-store.mjs";
 import { createSyncStatusStore, syncStatusPath } from "../lib/sync-status.mjs";
 import { createServiceManager } from "../lib/autostart.mjs";
+import { rotateLogs } from "../lib/log-rotate.mjs";
+import { compareVersions, currentVersionValue, fetchLatestVersion } from "../lib/update-check.mjs";
 import { randomBytes } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -343,8 +345,17 @@ async function registryUpdateLanToken(env, token) {
   await store.save({ ...config, lanToken: token });
 }
 
-async function statusPayload({ jobs, env, fetchImpl, native, anythingllm }) {
+async function statusPayload(context) {
+  const { jobs, env, fetchImpl, native, anythingllm, platform, launchctl, systemctl } = context;
   const services = await serviceSnapshot({ anythingllm, native, fetchImpl });
+  let lanEnabled = false;
+  try {
+    lanEnabled = await serviceManagerFor(context).lanEnabled();
+  } catch {
+    lanEnabled = false;
+  }
+  const current = await currentVersionValue();
+  const latest = await fetchLatestVersion({ fetchImpl });
   return redactSecretsObject({
     ok: true,
     systemState: classifySystemState(services),
@@ -352,6 +363,8 @@ async function statusPayload({ jobs, env, fetchImpl, native, anythingllm }) {
     latestJob: jobs.latest(),
     jobs: jobs.list?.() ?? [],
     config: publicConfig(env),
+    update: { current, latest, available: Boolean(latest) && compareVersions(current, latest) < 0 },
+    lan: { enabled: lanEnabled },
   });
 }
 
@@ -522,6 +535,7 @@ async function readJsonBody(req) {
 }
 
 if (import.meta.url === entryUrl()) {
+  rotateLogs({ logsRoot: path.join(path.dirname(process.env.AO_LAST_SYNC_PATH || ""), "logs") }).catch(() => {});
   const port = Number(process.env.DASHBOARD_PORT || 21400);
   createDashboardServer({
     native: {

@@ -1,6 +1,6 @@
 {
   "name": "anything-obsidian",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local control plane connecting managed Obsidian vaults with AnythingLLM RAG indexes",
   "type": "module",
   "bin": {

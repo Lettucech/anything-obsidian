@@ -1,8 +1,9 @@
-export async function runScheduler({ registry, runVault, sleep, now = Date.now, logger = console }) {
+export async function runScheduler({ registry, runVault, sleep, now = Date.now, logger = console, housekeeping = null }) {
   const nextRunAt = new Map();
   let running = true;
 
   while (running) {
+    if (housekeeping) await housekeeping();
     const current = now();
     const vaults = (await registry.list()).filter((vault) => vault.enabled);
 

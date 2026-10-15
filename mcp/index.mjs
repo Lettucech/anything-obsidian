@@ -15,6 +15,7 @@ import { ADMIN_IDENTITY, ANONYMOUS_IDENTITY, loadVaults, resolveVault, visibleVa
 import { loadAgentIdentities, resolveIdentity } from "./agent-identity.mjs";
 import { createVaultFileService } from "./vault-files.mjs";
 import { dashboardApi, registerManagementTools } from "./manage.mjs";
+import { createSyncStatusStore, syncStatusPath } from "../lib/sync-status.mjs";
 import { defaultConfigRoot, configPaths } from "../lib/app-config.mjs";
 
 const chatPathTemplate = process.env.ANYTHINGLLM_CHAT_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/chat";
@@ -34,13 +35,24 @@ export function createServer(profile = "local", identity = ANONYMOUS_IDENTITY) {
 
   const server = new McpServer({ name: "anything-obsidian", version: "0.4.0" });
 
+  const syncStatuses = createSyncStatusStore({ filePath: syncStatusPath(process.env.VAULT_STATE_ROOT || defaultPaths().stateRoot) });
+
   server.tool(
     "any_obs_vault_list",
-    "List managed vault ids and names the caller can access for MCP selection. No repository, Git, or filesystem details are returned.",
+    "List managed vaults the caller can access, each with its id, name, and last sync outcome (status and time). No repository, Git, or filesystem details are returned.",
     {},
-    async () => asJsonContent({
-      vaults: visibleVaults(await loadVaults(vaultRegistryPath), identity).map(({ id, name }) => ({ id, name })),
-    }),
+    async () => {
+      const statuses = await syncStatuses.all();
+      return asJsonContent({
+        vaults: visibleVaults(await loadVaults(vaultRegistryPath), identity).map(({ id, name }) => ({
+          id,
+          name,
+          lastSync: statuses[id]
+            ? { status: statuses[id].status, finishedAt: statuses[id].finishedAt }
+            : null,
+        })),
+      });
+    },
   );
 
   if (profile === "local") {

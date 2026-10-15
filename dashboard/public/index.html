@@ -18,6 +18,7 @@
       </a>
       <div class="topbar-actions">
         <span id="system-state" class="system-status" aria-live="polite">Loading system state…</span>
+        <button id="update-badge" class="update-badge" type="button" hidden title="Run: anything-obsidian update">↻ Update available</button>
         <button id="theme-toggle" class="button button-secondary theme-toggle" type="button" aria-label="Switch color theme">
           <span id="theme-icon" class="theme-icon" aria-hidden="true">☼</span><span id="theme-label">Theme</span>
         </button>
@@ -177,6 +178,19 @@
           <p id="vault-dialog-message" class="message dialog-message" role="status"></p>
           <div class="form-actions"><button id="test-vault-connection" class="button button-secondary" type="button">Test connection</button><button id="vault-submit" class="button button-primary" type="submit">Clone and add vault</button><button id="cancel-vault" class="button button-quiet" type="button">Cancel</button></div>
         </form>
+      </dialog>
+
+      <dialog id="lan-dialog" aria-labelledby="lan-title">
+        <div class="dialog-heading">
+          <div class="dialog-mark" aria-hidden="true">◇</div>
+          <div>
+            <p class="eyebrow">MCP access</p>
+            <h2 id="lan-title">LAN endpoint enabled</h2>
+          </div>
+        </div>
+        <p class="note">Remote clients connect to <code>http://&lt;this-host&gt;:21444/mcp</code> (RAG-only) with this admin Bearer token. Copy it now — it is stored and will not be shown again.</p>
+        <pre id="lan-token-value" class="agent-token"></pre>
+        <div class="form-actions"><button id="lan-done" class="button button-primary" type="button">Done</button></div>
       </dialog>
 
       <dialog id="agent-dialog" aria-labelledby="agent-form-title">

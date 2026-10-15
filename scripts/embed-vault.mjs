@@ -37,9 +37,12 @@ export async function embedVault({ config, all = false }) {
   const deletions = [];
   const nextManifest = { version: 1, files: { ...manifest.files } };
 
-  for (const file of files) {
+  for (const [fileIndex, file] of files.entries()) {
     const rel = toPosix(path.relative(vaultPath, file));
     seen.add(rel);
+    if (files.length > 5 && (fileIndex + 1) % 5 === 0 && fileIndex + 1 < files.length) {
+      console.log(`Embedding progress: ${fileIndex + 1}/${files.length}`);
+    }
 
     const hash = await sha256(file);
     const previous = manifest.files[rel];

@@ -51,6 +51,13 @@ export function lastSyncLabel(lastSync, now = Date.now()) {
   return lastSync.status === "failed" ? `Sync failed ${ago}` : `Synced ${ago}`;
 }
 
+export function jobProgressLabel(job) {
+  if (!job || !["queued", "running"].includes(job.status) || !job.logs) return "";
+  const matches = [...job.logs.matchAll(/Embedding progress: (\d+)\/(\d+)/g)];
+  const latest = matches.at(-1);
+  return latest ? ` (${latest[1]}/${latest[2]})` : "";
+}
+
 export function failedSyncs(vaults) {
   return vaults.filter((vault) => vault.lastSync?.status === "failed");
 }
@@ -120,7 +127,7 @@ export function useFolderBlockedReason(tree) {
 if (typeof document !== "undefined") {
   const state = { status: null, vaults: [], agents: [], editingId: null, createdVaultId: null, createdAgentName: null, browse: { open: false, path: "", tree: null } };
   const els = Object.fromEntries([
-    "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form", "sync-banner",
+    "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form", "sync-banner", "update-badge", "lan-dialog", "lan-token-value", "lan-done",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
     "source-mode-field", "import-help", "import-id-field", "import-directory-field",
     "clone-url-field", "workspace-slug-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
@@ -161,6 +168,11 @@ if (typeof document !== "undefined") {
   els.importtree.addEventListener("click", handleBrowseNavigation);
   els.importbreadcrumb.addEventListener("click", handleBrowseNavigation);
   els.importusefolder.addEventListener("click", useSelectedFolder);
+  els.updatebadge.addEventListener("click", () => {
+    message(`Version ${state.status.update?.latest} is available. Update in a terminal with: anything-obsidian update`);
+  });
+  els.services.addEventListener("click", handleLanToggle);
+  els.landone.addEventListener("click", () => els.landialog.close());
 
   async function handleVaultAction(event) {
     const button = event.target.closest("button[data-vault-id], button[data-dashboard-action]");
@@ -408,6 +420,8 @@ if (typeof document !== "undefined") {
   }
 
   function render() {
+    const update = state.status.update;
+    els.updatebadge.hidden = !(update && update.available);
     const failed = failedSyncs(state.vaults);
     const banner = syncBanner(failed);
     els.syncbanner.textContent = banner;
@@ -425,7 +439,9 @@ if (typeof document !== "undefined") {
     els.servicesummary.textContent = `${healthy}/${total} healthy`;
     els.servicesummary.className = `section-status ${healthy === total ? "ok" : "warn"}`;
     const latest = state.status.latestJob;
-    els.latestjob.textContent = latest ? `${latest.vaultId}: ${latest.label} — ${latest.status}` : "No dashboard worker job yet";
+    els.latestjob.textContent = latest
+      ? `${latest.vaultId}: ${latest.label} — ${latest.status}${jobProgressLabel(latest)}`
+      : "No dashboard worker job yet";
   }
 
   function renderMetric(metric) {
@@ -439,6 +455,13 @@ if (typeof document !== "undefined") {
     const topline = element("div", "service-topline");
     topline.append(element("h3", "", service.label), element("span", "service-status", service.health?.ok ? "Healthy" : service.health?.status || "Needs attention"));
     article.append(topline, element("p", "", service.status || service.state));
+    if (service.id === "mcp-lan") {
+      const actions = element("div", "vault-actions");
+      const toggle = element("button", "button button-quiet", state.status.lan?.enabled ? "Turn LAN off" : "Turn LAN on");
+      toggle.dataset.lanToggle = state.status.lan?.enabled ? "off" : "on";
+      actions.append(toggle);
+      article.append(actions);
+    }
     return article;
   }
 
@@ -485,6 +508,21 @@ if (typeof document !== "undefined") {
     actions.append(revoke);
     card.append(identity, actions);
     return card;
+  }
+
+  async function handleLanToggle(event) {
+    const button = event.target.closest("button[data-lan-toggle]");
+    if (!button) return;
+    const action = button.dataset.lanToggle;
+    if (action === "on" && !window.confirm("Enable the LAN RAG endpoint on port 21444? A Bearer token will be required for remote clients.")) return;
+    try {
+      const result = await request("/api/lan", { method: "POST", body: JSON.stringify({ action }) });
+      if (result.token) {
+        els.lantokenvalue.textContent = result.token;
+        els.landialog.showModal();
+      }
+      await refresh();
+    } catch (error) { message(error.message, true); }
   }
 
   async function handleAgentAction(event) {

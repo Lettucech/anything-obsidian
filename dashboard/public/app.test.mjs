@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   actionDisabledReason, activeTheme, agentCreatedLabel, agentRevokeMessage, breadcrumbSegments, dashboardMetrics,
-  failedSyncs, gitAuthForRepository, lastSyncLabel, nextTheme, restrictedAccessNote, serviceTone, syncBanner, systemPowerLabel, useFolderBlockedReason, vaultActionUrl,
+  failedSyncs, gitAuthForRepository, jobProgressLabel, lastSyncLabel, nextTheme, restrictedAccessNote, serviceTone, syncBanner, systemPowerLabel, useFolderBlockedReason, vaultActionUrl,
   vaultSourcePayload,
 } from "./app.js";
 
@@ -137,4 +137,12 @@ test("failed syncs drive the alert banner", () => {
   assert.equal(syncBanner(failedSyncs(failed)), "Sync failed for: work, secret. Check the logs below or run Sync now.");
   assert.equal(syncBanner([]), "");
   assert.deepEqual(failedSyncs([{ id: "x", lastSync: null }]), []);
+});
+
+test("job progress labels parse the latest embed progress marker", () => {
+  assert.equal(jobProgressLabel(null), "");
+  assert.equal(jobProgressLabel({ status: "succeeded", logs: "Embedding progress: 5/50" }), "");
+  assert.equal(jobProgressLabel({ status: "running", logs: "" }), "");
+  assert.equal(jobProgressLabel({ status: "running", logs: "Prepared a.md\nEmbedding progress: 5/50\nPrepared b.md\nEmbedding progress: 10/50\n" }), " (10/50)");
+  assert.equal(jobProgressLabel({ status: "queued", logs: "Embedding progress: 5/50" }), " (5/50)");
 });
