@@ -46,14 +46,14 @@ export function dashboardApi({ baseUrl = process.env.AO_DASHBOARD_URL ?? DEFAULT
 
 export function registerManagementTools(server, api, { z }) {
   server.tool(
-    "ao_status",
+    "any_obs_status",
     "Full Anything Obsidian system status: services health, config, jobs history, and vault sync states.",
     {},
     async () => asJson(await api.status()),
   );
 
   server.tool(
-    "ao_vault_add",
+    "any_obs_vault_add",
     "Add a vault to management: clone a Git repository or import one already beneath the vault root. Requires the same fields as the dashboard's Add vault dialog (repository URL or import directory, commit identity, visibility).",
     {
       sourceMode: z.enum(["clone", "import"]).default("clone"),
@@ -85,7 +85,7 @@ export function registerManagementTools(server, api, { z }) {
   );
 
   server.tool(
-    "ao_vault_update",
+    "any_obs_vault_update",
     "Update one managed vault's sync, embedding, or access settings (same fields as the dashboard Edit dialog). Identity fields (id, directory, repository) cannot change.",
     {
       vaultId: z.string().min(1),
@@ -106,63 +106,63 @@ export function registerManagementTools(server, api, { z }) {
   );
 
   server.tool(
-    "ao_vault_remove",
+    "any_obs_vault_remove",
     "Remove a vault from management. Its repository, workspace, and embedding data are never deleted.",
     { vaultId: z.string().min(1) },
     async ({ vaultId }) => asJson({ removed: vaultId, result: await api.removeVault(vaultId) ?? {} }),
   );
 
   server.tool(
-    "ao_vault_sync",
-    "Trigger a Git sync (pull, commit, push) plus embedding for one vault. Returns the job record; poll ao_job_get for completion.",
+    "any_obs_vault_sync",
+    "Trigger a Git sync (pull, commit, push) plus embedding for one vault. Returns the job record; poll any_obs_job_get for completion.",
     { vaultId: z.string().min(1) },
     async ({ vaultId }) => asJson(await api.vaultAction(vaultId, "sync")),
   );
 
   server.tool(
-    "ao_vault_embed",
+    "any_obs_vault_embed",
     "Embed changed files into the vault's AnythingLLM index, or rebuild the whole index with all=true.",
     { vaultId: z.string().min(1), all: z.boolean().default(false) },
     async ({ vaultId, all }) => asJson(await api.vaultAction(vaultId, all ? "embed-all" : "embed")),
   );
 
   server.tool(
-    "ao_vault_doctor",
+    "any_obs_vault_doctor",
     "Run health checks for one managed vault (Git state, AnythingLLM workspace, embed manifest).",
     { vaultId: z.string().min(1) },
     async ({ vaultId }) => asJson(await api.vaultAction(vaultId, "doctor")),
   );
 
   server.tool(
-    "ao_job_get",
+    "any_obs_job_get",
     "Get one worker job's status and captured logs (sync/embed/doctor runs triggered here or from the dashboard).",
     { jobId: z.string().min(1) },
     async ({ jobId }) => asJson(await api.job(jobId)),
   );
 
   server.tool(
-    "ao_agent_create",
+    "any_obs_agent_create",
     "Create a named MCP agent token. The raw token is returned once; store it for the client. Add the agent name to vault allowlists to scope its access.",
     { name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "lowercase dash-separated name") },
     async ({ name }) => asJson(await api.createAgent(name)),
   );
 
   server.tool(
-    "ao_agent_revoke",
+    "any_obs_agent_revoke",
     "Revoke an MCP agent token. Clients using it lose MCP access immediately.",
     { name: z.string().min(1) },
     async ({ name }) => asJson(await api.revokeAgent(name)),
   );
 
   server.tool(
-    "ao_autostart",
+    "any_obs_autostart",
     "Turn the login auto-start / crash auto-restart services on or off (dashboard, scheduler, and the MCP endpoint). action=off stops them permanently.",
     { action: z.enum(["on", "off"]) },
     async ({ action }) => asJson(await api.setAutostart(action)),
   );
 
   server.tool(
-    "ao_lan",
+    "any_obs_lan",
     "Manage the LAN RAG MCP endpoint: turn it on or off, or set its admin Bearer token. 'on' generates and returns a token when none is configured.",
     {
       action: z.enum(["on", "off", "token"]),

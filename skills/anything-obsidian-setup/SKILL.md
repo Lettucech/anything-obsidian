@@ -97,9 +97,9 @@ Human-readable form: `anything-obsidian status`.
   back to a plain background start.
 - The dashboard URL is `http://localhost:21400` unless a `--port` was set.
 After setup, a local agent can also operate Anything Obsidian through the
-MCP management tools (`ao_*` on the loopback endpoint, e.g. `ao_status`,
-`ao_vault_add`, `ao_vault_sync`, `ao_lan`) — tokenless on loopback, never
-available on the LAN profile.
+MCP management tools (`any_obs_*` on the loopback endpoint, e.g.
+`any_obs_status`, `any_obs_vault_add`, `any_obs_vault_sync`, `any_obs_lan`)
+— tokenless on loopback, never available on the LAN profile.
 
 The installer turns autostart on by default (opt out with `--no-autostart`).
 All state lives under one data directory (`~/Library/Application Support/

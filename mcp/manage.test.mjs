@@ -92,12 +92,12 @@ test("management tools round-trip through the in-memory MCP client", async () =>
   await client.connect(clientTransport);
 
   const added = await client.callTool({
-    name: "ao_vault_add",
+    name: "any_obs_vault_add",
     arguments: { sourceMode: "import", id: "work", directory: "work", gitUserName: "A", gitUserEmail: "a@b" },
   });
   assert.deepEqual(JSON.parse(added.content[0].text), { id: "work", workspaceSlug: "work" });
 
-  const status = await client.callTool({ name: "ao_status", arguments: {} });
+  const status = await client.callTool({ name: "any_obs_status", arguments: {} });
   assert.equal(JSON.parse(status.content[0].text).systemState, "on");
   await client.close();
   await server.close();

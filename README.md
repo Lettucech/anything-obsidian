@@ -120,12 +120,18 @@ The endpoint is bound to loopback only and starts with autostart:
 http://localhost:21433/mcp
 ```
 
-It exposes RAG, read-only local vault discovery, and full management tools
-(`ao_*`) so a local agent can operate Anything Obsidian end-to-end — add,
-update, or remove vaults, trigger sync/embed/doctor jobs, manage agent
-tokens, check status, and toggle autostart or the LAN endpoint. Loopback
-callers may manage without a token: a local agent acts as the user's
-delegate. The LAN endpoint (below) never registers these tools.
+It exposes three tool domains — RAG, read-only local vault discovery, and
+full management — so a local agent can operate Anything Obsidian end-to-end:
+
+| Prefix | Domain | Tools |
+|---|---|---|
+| `obsidian_*` | Read the vault source of truth | vault list/context/directory, file list/read |
+| `anythingllm_*` | Query the derived RAG index | search chunks, answer |
+| `any_obs_*` | Manage the control plane | vault add/update/remove/sync/embed/doctor, job status, agent tokens, autostart, LAN |
+
+Loopback callers may use management tools without a token: a local agent
+acts as the user's delegate. The LAN endpoint (below) never registers the
+management tools.
 
 - `obsidian_vault_list` returns only vault id and name.
 - `obsidian_vault_context` is local-only and returns the selected vault's host

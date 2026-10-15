@@ -18,7 +18,7 @@ Use this skill when an agent must:
 
 Do not use this skill to administer the Anything Obsidian services or install
 them — use the `anything-obsidian-setup` skill for machine setup, and the
-local MCP `ao_*` management tools (or the dashboard) for runtime
+local MCP `any_obs_*` management tools (or the dashboard) for runtime
 administration such as registering a vault or changing Git sync and embedding
 configuration.
 
@@ -32,7 +32,7 @@ sources, then verify consequential claims against the source note before
 answering or editing.
 
 Vault file access over MCP is read-only: never write, patch, or upload note
-content through MCP. The local profile additionally exposes `ao_*`
+content through MCP. The local profile additionally exposes `any_obs_*`
 management tools (vault lifecycle, sync/embed jobs, agent tokens, service
 control) — those manage the system, not vault source files, and are the
 approved way for an agent to operate Anything Obsidian on the user's behalf.
