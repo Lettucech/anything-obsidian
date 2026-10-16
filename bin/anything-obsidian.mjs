@@ -527,7 +527,7 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
   }
   if (mcpLanRunning) {
     const lan = await probeMcp(21444);
-    report.mcpLan = { ...lan, url: "http://<host>:11434/mcp" };
+    report.mcpLan = { ...lan, url: "http://<host>:21444/mcp" };
   }
 
   const client = createAnythingllmClient({
@@ -698,7 +698,7 @@ async function runLan({ subcommand, argument, store, env, log, json, launchctl, 
         return 0;
       }
       log(`LAN MCP: ${enabled ? "on" : "off"}`);
-      log(`  endpoint: ${state.running ? "running" : enabled ? "registered, not running" : "not registered"} (port 11434, RAG-only)`);
+      log(`  endpoint: ${state.running ? "running" : enabled ? "registered, not running" : "not registered"} (port 21444, RAG-only)`);
       log(`  token: ${config.lanToken ? "configured" : "not set (anything-obsidian lan on generates one)"}`);
       return 0;
     }

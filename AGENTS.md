@@ -11,7 +11,7 @@ vaults with AnythingLLM RAG indexes. Two forms coexist:
 - A plain Node app, installed by `install.sh`, managed by the
   `anything-obsidian` CLI and a browser dashboard on port 21400. AnythingLLM
   is always an external client-side dependency (URL + API key in config) —
-  the app never hosts it. MCP endpoints: loopback 21433, optional LAN 11434
+  the app never hosts it. MCP endpoints: loopback 21433, optional LAN 21444
   (`lan on`, Bearer token required).
 
 There is no Docker stack, no Electron/desktop-shell plan, and no npm publish —
@@ -42,8 +42,9 @@ login session.
 
 ## Repo conventions
 
-- Pure Node ESM (`type: module`), **zero runtime dependencies** — do not add
-  packages; use `node:` builtins and the global `fetch`.
+- Pure Node ESM (`type: module`) with a minimal dependency set (the MCP SDK
+  and zod, installed by `install.sh`); reach for `node:` builtins and the
+  global `fetch` first, and think twice before adding anything else.
 - Tests: `npm test` runs `node --test` over `mcp/ dashboard/ lib/ scripts/
   bin/` (the MCP server is plain JS now).
 - Network boundaries: dashboard and local MCP bind `127.0.0.1` only (21400 /

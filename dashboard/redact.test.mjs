@@ -59,3 +59,9 @@ test("redacts nested secret object keys", () => {
     },
   );
 });
+
+test("lanToken values are redacted everywhere", () => {
+  assert.equal(redactSecretsObject({ lanToken: "super-secret" }).lanToken, "[redacted]");
+  assert.equal(redactSecretsText("lanToken: super-secret"), "lanToken: [redacted]");
+  assert.equal(redactSecretsText('"lanToken":"abc123"'), '"lanToken":"[redacted]"');
+});
