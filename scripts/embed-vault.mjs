@@ -23,7 +23,7 @@ export async function embedVault({ config, all = false }) {
     config.updateEmbeddingsPathTemplate ?? "/api/v1/workspace/{slug}/update-embeddings";
 
   if (!apiKey) {
-    throw new Error("Missing ANYTHINGLLM_API_KEY in .env.");
+    throw new Error("Missing ANYTHINGLLM_API_KEY. Re-run: anything-obsidian init");
   }
   await assertWorkspaceExists({ baseUrl, apiKey, workspaceSlug });
 

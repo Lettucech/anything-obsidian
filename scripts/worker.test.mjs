@@ -5,28 +5,28 @@ import path from "node:path";
 import test from "node:test";
 
 import { doctor } from "./doctor.mjs";
-import { loadEnvText, resolveConfig } from "./lib/env.mjs";
 import { runWorker, syncAndEmbed } from "./worker.mjs";
 
-test("parses simple env text without shell evaluation", () => {
-  assert.deepEqual(loadEnvText("A=one\nB=\"two dollars $$\"\n# comment\n"), {
-    A: "one",
-    B: "two dollars $$",
-  });
-});
-
-test("resolves only global service and worker infrastructure settings", () => {
-  const config = resolveConfig({
+test("vault config resolves service endpoints from the environment without docker defaults", async () => {
+  const { loadVaultConfig } = await import("./vault-config.mjs");
+  const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vault-config-"));
+  const env = {
+    VAULTS_ROOT: path.join(root, "v"),
+    VAULT_REGISTRY_PATH: path.join(root, "registry", "vaults.json"),
+    VAULT_SECRETS_PATH: path.join(root, "secrets"),
+    VAULT_STATE_ROOT: path.join(root, "state"),
+    ANYTHINGLLM_BASE_URL: "http://custom:3001/",
     ANYTHINGLLM_API_KEY: "key",
-    ANYTHINGLLM_BASE_URL: "http://custom:3001",
-    ANYTHINGLLM_MCP_BASE_URL: "http://mcp.special:3333",
-    VAULT_STATE_ROOT: "custom-state",
-  });
-
+  };
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  await mkdir(path.dirname(env.VAULT_REGISTRY_PATH), { recursive: true });
+  await writeFile(env.VAULT_REGISTRY_PATH, JSON.stringify({
+    vaults: [{ id: "work", name: "w", directory: "work", workspaceSlug: "work", gitUserName: "A", gitUserEmail: "a@b" }],
+  }));
+  const config = await loadVaultConfig(env, "work");
   assert.equal(config.anythingllmBaseUrl, "http://custom:3001");
-  assert.equal(config.mcpBaseUrl, "http://mcp.special:3333");
-  assert.equal(config.vaultStateRoot, "custom-state");
-  assert.equal(config.gitRemote, undefined);
+  assert.equal(config.mcpBaseUrl, "http://127.0.0.1:21433");
+  assert.equal(config.vaultStateRoot, env.VAULT_STATE_ROOT);
 });
 
 test("worker rejects unknown commands", async () => {

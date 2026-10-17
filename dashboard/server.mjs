@@ -302,7 +302,7 @@ async function verifyAnythingllmConnection(anythingllm) {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (/AnythingLLM API (401|403)/.test(detail)) {
-      throw new Error("AnythingLLM rejected the dashboard API key. Add a valid ANYTHINGLLM_API_KEY to .env, then recreate the dashboard.");
+      throw new Error("AnythingLLM rejected the configured API key. Re-run: anything-obsidian init --vaults-root <path> --url <url> --api-key <key>");
     }
     throw error;
   }

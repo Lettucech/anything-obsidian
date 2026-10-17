@@ -1,16 +1,11 @@
 # Local secrets
 .env
 .env.*
-!.env.example
 
 # AnythingLLM local runtime data
 .anything-obsidian-storage/
 .anything-obsidian-state/
 .anythingllm-storage/
-
-# MCP build/dependency output
-mcp/anythingllm/node_modules/
-mcp/anythingllm/dist/
 
 # Local RAG/vector caches, if added later
 .rag/

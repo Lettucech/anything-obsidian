@@ -219,7 +219,9 @@ RAG state according to the selected vault configuration.
 
 ## Safety notes
 
-- Keep `.env`, API keys, and LAN tokens local and out of Git.
+- Keep secrets out of Git: the API key and LAN token live only in the local
+  config file (`~/Library/Application Support/anything-obsidian/config.json`,
+  mode 0600), never in the repository.
 - The dashboard validates every vault as a direct child of the fixed `/vaults`
   mount; MCP never accepts arbitrary host paths.
 - Local raw-vault tools reject traversal, symlinks, Git metadata, unsupported

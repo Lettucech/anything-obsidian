@@ -2,14 +2,26 @@ import path from "node:path";
 
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
-import { resolveConfig } from "./lib/env.mjs";
+
+function resolveBaseConfig(env) {
+  return {
+    anythingllmBaseUrl: stripTrailingSlash(env.ANYTHINGLLM_BASE_URL ?? ""),
+    apiKey: env.ANYTHINGLLM_API_KEY ?? "",
+    mcpBaseUrl: stripTrailingSlash(env.ANYTHINGLLM_MCP_BASE_URL ?? "http://127.0.0.1:21433"),
+    vaultStateRoot: env.VAULT_STATE_ROOT ?? "",
+  };
+}
+
+function stripTrailingSlash(value) {
+  return String(value).replace(/\/+$/, "");
+}
 
 export async function loadVaultConfig(env, vaultId) {
   const registry = registryFor(env);
   const vault = await registry.get(vaultId);
   if (!vault) throw new Error(`Unknown vault: ${vaultId}`);
 
-  const base = resolveConfig(env);
+  const base = resolveBaseConfig(env);
   const credential = await secretStoreFor(env).get(vault.id);
   const stateRoot = base.vaultStateRoot;
   const stateDir = path.join(stateRoot, "manifests", vault.id);

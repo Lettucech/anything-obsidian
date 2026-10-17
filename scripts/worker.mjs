@@ -5,7 +5,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { doctor } from "./doctor.mjs";
 import { embedVault } from "./embed-vault.mjs";
-import { loadEnvFile } from "./lib/env.mjs";
 import { registryFor, loadVaultConfig } from "./vault-config.mjs";
 import { runScheduler } from "./scheduler.mjs";
 import { shouldEmbedAfterSync, syncVaultOnce } from "./watch-vault.mjs";
@@ -22,7 +21,7 @@ const defaultDeps = {
   embedVault,
   loadVaultConfig,
   loadRegistry: registryFor,
-  loadEnv: loadRuntimeEnv,
+  loadEnv: (env) => env,
   logger: createLogger(),
   sleep,
   shouldEmbedAfterSync,
@@ -84,13 +83,6 @@ export async function runWorker(argv = process.argv.slice(2), env = process.env,
       printUsage();
       return 2;
   }
-}
-
-async function loadRuntimeEnv(env) {
-  return {
-    ...(await loadEnvFile(path.join(repoRoot, ".env"))),
-    ...env,
-  };
 }
 
 async function runCommand(fn) {
