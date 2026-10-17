@@ -160,7 +160,7 @@ test("vault creation checks AnythingLLM before cloning", async () => {
   const response = await request(app, "POST", "/api/vaults", validVaultPayload());
 
   assert.equal(response.status, 500);
-  assert.match(response.body.error, /rejected the dashboard API key/);
+  assert.match(response.body.error, /rejected the configured API key/);
   assert.deepEqual(vaultStorage.cloned, []);
 });
 
