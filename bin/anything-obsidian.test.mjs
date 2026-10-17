@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
 
-import { runCli } from "./anything-obsidian.mjs";
+import { nodeVersionProblem, runCli } from "./anything-obsidian.mjs";
 import { createAppConfigStore } from "../lib/app-config.mjs";
 
 const homes = [];
@@ -496,4 +496,36 @@ test("autostart is unavailable on unsupported platforms", async () => {
     env, log: output.line, platform: "win32",
   }), 1);
   assert.match(output.lines.join("\n"), /not supported on win32/);
+});
+
+test("nodeVersionProblem accepts supported runtimes and rejects older ones", () => {
+  assert.equal(nodeVersionProblem("22.14.0"), null);
+  assert.equal(nodeVersionProblem("24.1.0"), null);
+  assert.match(nodeVersionProblem("20.11.1"), /needs Node\.js >= 22 \(found 20\.11\.1\)/);
+  assert.match(nodeVersionProblem("18.20.0"), /install\.sh installs a managed Node runtime/);
+  assert.match(nodeVersionProblem(""), /needs Node\.js >= 22/);
+  assert.match(nodeVersionProblem("nonsense"), /needs Node\.js >= 22 \(found nonsense\)/);
+});
+
+test("the CLI refuses real commands on an unsupported runtime", async () => {
+  const home = await mkdtemp(path.join(tmpdir(), "ao-cli-"));
+  homes.push(home);
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+
+  const code = await runCli(["status"], {
+    env: { ANYTHING_OBSIDIAN_HOME: home, PATH: process.env.PATH, HOME: home },
+    log: output.line,
+    nodeVersion: "18.20.0",
+  });
+
+  assert.equal(code, 1);
+  assert.match(output.lines.join("\n"), /needs Node\.js >= 22 \(found 18\.20\.0\)/);
+  assert.match(output.lines.join("\n"), /install\.sh installs a managed Node runtime/);
+});
+
+test("--help still works on an unsupported runtime", async () => {
+  const output = { lines: [], line: (l) => output.lines.push(l) };
+
+  assert.equal(await runCli(["--help"], { log: output.line, nodeVersion: "18.20.0" }), 0);
+  assert.match(output.lines.join("\n"), /Usage: anything-obsidian/);
 });

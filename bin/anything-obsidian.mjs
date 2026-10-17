@@ -55,6 +55,18 @@ Options:
 Init flags make setup non-interactive: when all of --vaults-root, --url,
 and --api-key are provided, no prompts are shown.`;
 
+export const REQUIRED_NODE_MAJOR = 22;
+
+export function nodeVersionProblem(version = process.versions.node) {
+  const major = Number.parseInt(String(version ?? "").split(".")[0], 10);
+  if (Number.isInteger(major) && major >= REQUIRED_NODE_MAJOR) return null;
+  return [
+    `Anything Obsidian needs Node.js >= ${REQUIRED_NODE_MAJOR} (found ${version || "none"}).`,
+    "install.sh installs a managed Node runtime when the system has none:",
+    "  curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh",
+  ].join("\n");
+}
+
 export async function runCli(argv = process.argv.slice(2), deps = {}) {
   const io = deps.io || { input: process.stdin, output: process.stdout };
   const env = deps.env || process.env;
@@ -67,6 +79,15 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
 
   const [command, ...rest] = argv;
   const flags = parseFlags(rest);
+
+  const wantsHelp = command === undefined || ["-h", "--help", "help"].includes(command);
+  if (!wantsHelp) {
+    const problem = nodeVersionProblem(deps.nodeVersion);
+    if (problem) {
+      log(problem);
+      return 1;
+    }
+  }
 
   switch (command) {
     case "init":
