@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
+import { configPaths, defaultConfigRoot } from "../lib/app-config.mjs";
 
 function resolveBaseConfig(env) {
   return {
@@ -50,15 +51,19 @@ export async function loadVaultConfig(env, vaultId) {
   };
 }
 
+function defaultPaths() {
+  return configPaths(defaultConfigRoot());
+}
+
 export function secretStoreFor(env) {
   return createVaultSecretStore({
-    rootPath: env.VAULT_SECRETS_PATH || "/workspace/.anything-obsidian-secrets",
+    rootPath: env.VAULT_SECRETS_PATH || defaultPaths().secretsRoot,
   });
 }
 
 export function registryFor(env) {
   return createVaultRegistry({
-    rootPath: env.VAULTS_ROOT || "/vaults",
-    registryPath: env.VAULT_REGISTRY_PATH || "/workspace/.anything-obsidian-registry/vaults.json",
+    rootPath: env.VAULTS_ROOT || "",
+    registryPath: env.VAULT_REGISTRY_PATH || defaultPaths().registryPath,
   });
 }

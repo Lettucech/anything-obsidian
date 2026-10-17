@@ -45,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/in
   1. **vaults-root** — propose `~/ObsidianVaults` (never Documents/Desktop —
      macOS permission prompts); create nothing yourself, the installer does it.
   2. **AnythingLLM base URL** — where their instance serves the API, e.g.
-     `http://localhost:11301` for a local AnythingLLM Desktop.
+     `http://localhost:3001` for a local AnythingLLM Desktop.
   3. **API key** — from AnythingLLM Settings → Developer API. Ask the user to
      paste it; never invent one.
 - Interactive humans can drop the flags entirely: the installer asks the same

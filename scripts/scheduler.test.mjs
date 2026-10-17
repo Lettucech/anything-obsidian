@@ -27,3 +27,16 @@ test("continues scheduling other vaults after one vault fails", async () => {
   assert.deepEqual(attempted, ["work", "personal"]);
   assert.match(errors[0], /work.*remote unavailable/);
 });
+
+test("scheduler runs housekeeping each wake", async () => {
+  const runs = [];
+  const registry = { list: async () => [{ id: "work", enabled: true, syncIntervalSeconds: 300 }] };
+  await runScheduler({
+    registry,
+    runVault: async () => {},
+    sleep: async () => false,
+    now: () => 0,
+    housekeeping: async () => runs.push(1),
+  });
+  assert.equal(runs.length, 1);
+});

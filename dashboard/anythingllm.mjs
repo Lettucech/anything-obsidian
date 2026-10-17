@@ -13,9 +13,6 @@ export function createAnythingllmClient({ baseUrl, apiKey, fetchImpl = fetch }) 
       const data = await request("/api/v1/workspaces", { method: "GET" });
       return Array.isArray(data?.workspaces) ? data.workspaces.map(workspace) : [];
     },
-    async workspaceExists(slug) {
-      return (await this.listWorkspaces()).some((item) => item.slug === slug);
-    },
   };
 
   async function request(apiPath, init) {

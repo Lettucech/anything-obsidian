@@ -9,6 +9,7 @@ import { registryFor, loadVaultConfig } from "./vault-config.mjs";
 import { runScheduler } from "./scheduler.mjs";
 import { shouldEmbedAfterSync, syncVaultOnce } from "./watch-vault.mjs";
 import { createSyncStatusStore, syncStatusPath } from "../lib/sync-status.mjs";
+import { rotateLogs } from "../lib/log-rotate.mjs";
 import { createNotifier } from "../lib/notify.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -28,6 +29,7 @@ const defaultDeps = {
   syncVaultOnce,
   runScheduler,
   notify: defaultNotifier.notify.bind(defaultNotifier),
+  rotateLogs,
 };
 
 export async function runWorker(argv = process.argv.slice(2), env = process.env, deps = {}) {
@@ -62,6 +64,7 @@ export async function runWorker(argv = process.argv.slice(2), env = process.env,
           },
           sleep: worker.sleep,
           logger: worker.logger,
+          housekeeping: () => worker.rotateLogs({ logsRoot: path.join(path.dirname(env.VAULT_STATE_ROOT || path.join(repoRoot, ".anything-obsidian-state")), "logs") }),
         });
         return 0;
       });

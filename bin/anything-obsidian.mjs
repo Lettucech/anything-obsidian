@@ -214,7 +214,7 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
     if (!gitOk) return 1;
 
     const vaultsRoot = await resolveVaultsRoot({ flags, prompt, env, log });
-    const anythingllmBaseUrl = flags.url || await prompt.question(`AnythingLLM base URL [http://localhost:11301] `, "http://localhost:11301");
+    const anythingllmBaseUrl = flags.url || await prompt.question(`AnythingLLM base URL [http://localhost:3001] `, "http://localhost:3001");
     const apiKey = flags["api-key"] || await prompt.question("AnythingLLM API key: ", "");
     const dashboardPort = Number(flags.port || 21400);
 

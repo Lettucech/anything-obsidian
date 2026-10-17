@@ -1,7 +1,10 @@
 # Agent MCP setup
 
-Anything Obsidian provides two read-only MCP profiles. Use the endpoint that
-matches where the agent runs; neither profile writes vault source files.
+Anything Obsidian provides two MCP profiles. Use the endpoint that matches
+where the agent runs. Neither profile offers tools that write vault source
+files; the local profile additionally exposes `any_obs_*` management tools
+(vault lifecycle, sync/embed jobs, agent tokens, service control) that proxy
+the dashboard API.
 
 ## Local agent
 
@@ -19,15 +22,21 @@ filesystem authority to make edits outside this project's MCP scope.
 non-secret sync settings, source-of-truth status, and RAG freshness boundary so
 the agent can assess the edit surface before opening that directory.
 
-Available tools:
+Read and RAG tools:
 
-- `any_obs_vault_list`
+- `any_obs_vault_list` (includes each vault's last-sync state)
 - `any_obs_vault_context`
 - `any_obs_vault_directory`
 - `any_obs_file_list`
 - `any_obs_file_read`
 - `any_obs_rag_search`
 - `any_obs_rag_answer`
+
+Management tools (local profile only): `any_obs_vault_add`,
+`any_obs_vault_update`, `any_obs_vault_remove`, `any_obs_vault_sync`,
+`any_obs_vault_embed`, `any_obs_vault_doctor`, `any_obs_job_get`,
+`any_obs_agent_create`, `any_obs_agent_revoke`, `any_obs_status`,
+`any_obs_autostart`, `any_obs_lan`.
 
 For a reusable retrieval and edit workflow, install the repository skill:
 
@@ -43,9 +52,9 @@ Its context-first flow is:
 4. For an approved edit, open the returned local directory and use normal
    filesystem and Git checks under the vault's own rules.
 
-The skill never treats an MCP write tool as authorized. If a stale MCP runtime
-advertises write, patch, upload, sync, or reindex tools, do not call them;
-report deployment drift and align the running service with the current source.
+The skill never treats an MCP write tool as authorized: there are none, and a
+stale runtime advertising write or patch tools for vault content is
+deployment drift — report it and align the service with the current source.
 
 ## Agent tokens
 

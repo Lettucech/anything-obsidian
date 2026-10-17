@@ -18,7 +18,7 @@ import { createAnythingllmClient } from "./anythingllm.mjs";
 import { createVaultStorage } from "./vault-storage.mjs";
 import { importTree } from "./import-tree.mjs";
 import { createFileJobStore } from "./job-store.mjs";
-import { createSyncStatusStore, syncStatusPath } from "../lib/sync-status.mjs";
+import { createSyncStatusStore } from "../lib/sync-status.mjs";
 import { createServiceManager } from "../lib/autostart.mjs";
 import { rotateLogs } from "../lib/log-rotate.mjs";
 import { compareVersions, currentVersionValue, fetchLatestVersion } from "../lib/update-check.mjs";
@@ -233,7 +233,7 @@ export function createDashboardServer({
       if (req.method === "GET" && url.pathname === "/api/import-tree") {
         try {
           const tree = await importTree({
-            vaultsRoot: env.VAULTS_ROOT || "/vaults",
+            vaultsRoot: env.VAULTS_ROOT || "",
             requestedPath: url.searchParams.get("path") || "",
           });
           return sendJson(res, 200, tree);

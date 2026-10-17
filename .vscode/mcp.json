@@ -2,7 +2,7 @@
   "servers": {
     "anything-obsidian": {
       "type": "http",
-      "url": "http://localhost:11333/mcp"
+      "url": "http://localhost:21433/mcp"
     }
   }
 }

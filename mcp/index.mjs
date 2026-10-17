@@ -18,6 +18,9 @@ import { dashboardApi, registerManagementTools } from "./manage.mjs";
 import { createSyncStatusStore, syncStatusPath } from "../lib/sync-status.mjs";
 import { defaultConfigRoot, configPaths } from "../lib/app-config.mjs";
 
+const { readFile } = await import("node:fs/promises");
+const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+
 const chatPathTemplate = process.env.ANYTHINGLLM_CHAT_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/chat";
 const vectorSearchPathTemplate = process.env.ANYTHINGLLM_VECTOR_SEARCH_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/vector-search";
 
@@ -33,7 +36,7 @@ export function createServer(profile = "local", identity = ANONYMOUS_IDENTITY) {
     identity,
   });
 
-  const server = new McpServer({ name: "anything-obsidian", version: "0.4.0" });
+  const server = new McpServer({ name: "anything-obsidian", version: pkg.version });
 
   const syncStatuses = createSyncStatusStore({ filePath: syncStatusPath(process.env.VAULT_STATE_ROOT || defaultPaths().stateRoot) });
 
@@ -185,7 +188,7 @@ function stripTrailingSlash(value) {
   return value.replace(/\/+$/, "");
 }
 
-export function startHttpServer(profile) {
+function startHttpServer(profile) {
   const adminToken = process.env.MCP_AUTH_TOKEN ?? "";
   if (profile === "lan" && !adminToken) throw new Error("MCP_AUTH_TOKEN is required for the LAN MCP profile");
   const bindHost = profile === "lan" ? "0.0.0.0" : "127.0.0.1";

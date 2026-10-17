@@ -5,8 +5,9 @@ Obsidian vaults and their derived AnythingLLM RAG indexes. It keeps the vault
 repository as the source of truth; AnythingLLM is rebuildable derived data.
 
 The project manages vault registration, optional Git-based sync, and
-vault-scoped indexing. Its MCP interfaces are read-only: agents never write
-vault source files, commit Git changes, or trigger indexing through MCP.
+vault-scoped indexing. Over MCP, agents never write vault source files;
+the local profile's management tools run the same configured sync and
+embedding flows the dashboard offers, never arbitrary Git commands.
 
 ## Boundaries
 
@@ -16,9 +17,10 @@ vault source files, commit Git changes, or trigger indexing through MCP.
 - **Agent-scoped MCP access:** dashboard-issued agent tokens limit a client's
   MCP visibility to the vaults whose allowlist names it. Tokenless local
   connections keep their existing access to open vaults.
-- **Optional Git sync:** the scheduler may pull, commit, and push according to
-  a vault's dashboard configuration. This is an explicitly configured
-  background operation, not an MCP capability.
+- **Optional Git sync:** the scheduler (or an agent via `any_obs_vault_sync`)
+  may pull, commit, and push according to a vault's dashboard configuration.
+  Sync follows the configured policy; no MCP tool accepts arbitrary Git
+  commands or edits note content.
 - **Derived RAG:** the worker updates a vault's AnythingLLM index after the
   configured sync workflow. It never becomes the source for vault files.
 - **No vault ownership:** removing a vault from management does not delete its
@@ -51,7 +53,7 @@ server) and never hosts AnythingLLM itself.
 
    ```bash
    curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
-     --vaults-root ~/ObsidianVaults --url http://localhost:11301 --api-key <key> --no-browser
+     --vaults-root ~/ObsidianVaults --url http://localhost:3001 --api-key <key> --no-browser
    ```
 
    Or let your AI agent do it: agents can load the
@@ -125,9 +127,9 @@ second segment names the domain:
 
 | Domain | Meaning | Tools |
 |---|---|---|
-| `any_obs_vault_*` / `any_obs_file_*` | Read the vault source of truth | vault list/context/directory, file list/read |
+| `any_obs_vault_*` / `any_obs_file_*` | Read the vault source of truth | vault list (with last-sync state)/context/directory, file list/read |
 | `any_obs_rag_*` | Query the derived RAG index (verify against source) | search, answer |
-| `any_obs_*` (management verbs) | Manage the control plane | vault add/update/remove/sync/embed/doctor, job status, agent tokens, autostart, LAN |
+| `any_obs_*` (management verbs) | Manage the control plane | vault add/update/remove/sync/embed/doctor, job status, agent tokens, status, autostart, LAN |
 
 Loopback callers may use management tools without a token: a local agent
 acts as the user's delegate. The LAN endpoint (below) never registers the
@@ -222,8 +224,8 @@ RAG state according to the selected vault configuration.
 - Keep secrets out of Git: the API key and LAN token live only in the local
   config file (`~/Library/Application Support/anything-obsidian/config.json`,
   mode 0600), never in the repository.
-- The dashboard validates every vault as a direct child of the fixed `/vaults`
-  mount; MCP never accepts arbitrary host paths.
+- The dashboard validates every vault as a direct child of the configured
+  vaults root; MCP never accepts arbitrary host paths.
 - Local raw-vault tools reject traversal, symlinks, Git metadata, unsupported
   file types, and unbounded reads.
 - LAN MCP is read-only and token-protected, but it is still an information

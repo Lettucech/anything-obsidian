@@ -2,8 +2,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-export const DEFAULT_MAX_JOBS = 50;
-export const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_JOBS = 50;
+const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 
 export function createFileJobStore({
   filePath,
