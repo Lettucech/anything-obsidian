@@ -8,7 +8,7 @@
 #
 # Layout it creates:
 #   ~/.anything-obsidian/app       the application (downloaded from GitHub)
-#   ~/.anything-obsidian/runtime   a portable Node.js, only if the system has no node >= 18
+#   ~/.anything-obsidian/runtime   a portable Node.js, only if the system has no node >= 22
 #   ~/.local/bin/anything-obsidian CLI launcher
 #
 # Data (config, secrets, registry) lives separately under the OS app-support
@@ -108,7 +108,7 @@ say ""
 find_node() {
   if command -v node >/dev/null 2>&1; then
     major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-    if [ "$major" -ge 18 ]; then command -v node; return 0; fi
+    if [ "$major" -ge 22 ]; then command -v node; return 0; fi
   fi
   for candidate in "$RUNTIME_DIR"/node-v*/bin/node; do
     if [ -x "$candidate" ]; then echo "$candidate"; return 0; fi
@@ -120,7 +120,7 @@ NODE_BIN="$(find_node || true)"
 if [ -z "$NODE_BIN" ]; then
   TARBALL="node-v$NODE_VERSION-$NODE_TARGET.tar.gz"
   NODE_URL="https://nodejs.org/dist/v$NODE_VERSION/$TARBALL"
-  say "  no node >= 18 found; downloading portable Node.js v$NODE_VERSION ($NODE_TARGET)…"
+  say "  system node is missing or older than 22 (unsupported/EOL); downloading portable Node.js v$NODE_VERSION ($NODE_TARGET)…"
   mkdir -p "$RUNTIME_DIR"
   curl -fsSL "$NODE_URL" | tar -xz -C "$RUNTIME_DIR" || die "Could not download Node.js from $NODE_URL"
   NODE_BIN="$RUNTIME_DIR/node-v$NODE_VERSION-$NODE_TARGET/bin/node"

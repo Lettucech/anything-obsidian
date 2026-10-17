@@ -29,7 +29,8 @@ embedding flows the dashboard offers, never arbitrary Git commands.
 ## Getting started (one command)
 
 The same control plane also runs as a plain Node app. The installer bootstraps
-everything — if the machine has no Node.js >= 18 it downloads a portable
+everything — if the machine has no supported Node.js (>= 22; Node 18 and
+20 are end-of-life) it downloads a portable
 runtime automatically (no Homebrew, no sudo). It talks to an existing
 AnythingLLM instance (mini shared instance, AnythingLLM Desktop, or a remote
 server) and never hosts AnythingLLM itself.

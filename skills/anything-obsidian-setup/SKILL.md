@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/in
   --vaults-root <absolute-path> --url <anythingllm-base-url> --api-key <key> [--port <n>] [--no-browser]
 ```
 
-- The installer bootstraps everything: if the machine has no node ≥ 18 it
+- The installer bootstraps everything: if the machine has no node ≥ 22 it
   downloads a portable Node into `~/.anything-obsidian/runtime/`; no
   Homebrew and no sudo are required. git must exist (on a bare macOS run
   `xcode-select --install` first).

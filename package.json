@@ -15,7 +15,7 @@
     "mcp/"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "scripts": {
     "test": "node --test $(find bin dashboard lib mcp scripts -name '*.test.mjs' 2>/dev/null)"
