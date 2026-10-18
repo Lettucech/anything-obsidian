@@ -22,11 +22,15 @@ export function gitAuthForRepository(repositoryVisibility, username, token) {
 
 export function vaultSourcePayload(form, sourceMode) {
   const importing = sourceMode === "import";
+  const importPath = String(importing ? form.get("importPath") || "" : "").trim();
   return {
     sourceMode: importing ? "import" : "clone",
     repositoryUrl: importing ? "" : form.get("repositoryUrl"),
     id: importing ? form.get("importId") : form.get("id"),
-    directory: importing ? form.get("importDirectory") : form.get("directory"),
+    // A path means "a folder the user owns"; otherwise the directory name
+    // lives beneath the vault root and anyobs manages its location.
+    directory: importing && importPath ? "" : importing ? form.get("importDirectory") : form.get("directory"),
+    importPath,
   };
 }
 
@@ -117,11 +121,19 @@ export function breadcrumbSegments(rootPath, currentPath, rootLabel = "Vault roo
 }
 
 export function useFolderBlockedReason(tree) {
-  if (!tree) return "Open a folder inside the vault root to import it";
+  if (!tree) return "Open a folder to import it";
   if (tree.canUseHere) return "";
   return tree.path === tree.root
-    ? "Open a folder inside the vault root to import it"
-    : "Only folders directly inside the vault root can be imported";
+    ? "The vault root itself cannot be imported"
+    : "That folder cannot be imported";
+}
+
+export function slugifyName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 if (typeof document !== "undefined") {
@@ -129,7 +141,7 @@ if (typeof document !== "undefined") {
   const els = Object.fromEntries([
     "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form", "sync-banner", "update-badge", "lan-dialog", "lan-token-value", "lan-done",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
-    "source-mode-field", "import-help", "import-id-field", "import-directory-field",
+    "source-mode-field", "import-help", "import-id-field", "import-directory-field", "import-path-field",
     "clone-url-field", "workspace-slug-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
     "add-vault-inline", "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
     "agents", "agent-message", "add-agent", "agent-dialog", "agent-form", "agent-form-title",
@@ -275,7 +287,7 @@ if (typeof document !== "undefined") {
       else field.value = Array.isArray(value) ? value.join("\n") : value;
     });
     if (vault) els.vaultform.elements.repositoryVisibility.value = vault.gitAuthMode === "https-token" ? "private" : "public";
-    for (const name of ["id", "directory", "workspaceMode", "workspaceSlug"]) {
+    for (const name of ["id", "directory", "importPath", "importDirectory", "workspaceMode", "workspaceSlug"]) {
       const field = els.vaultform.elements.namedItem(name); if (field) field.disabled = Boolean(vault);
     }
     els.vaultformtitle.textContent = vault ? `Edit ${vault.name}` : "Add vault";
@@ -300,9 +312,15 @@ if (typeof document !== "undefined") {
     form.elements.sourceMode.disabled = editing;
     els.importhelp.hidden = !importMode;
     els.importidfield.hidden = !importMode;
-    els.importdirectoryfield.hidden = !importMode;
+    // The path field only shows once a folder outside the root is chosen, or
+    // once the user types one; while it holds a value it replaces the
+    // directory field (an imported vault is never managed beneath the root).
+    const importedPath = String(form.elements.importPath?.value || "").trim();
+    const asImport = importMode && Boolean(importedPath);
+    els.importpathfield.hidden = !asImport;
+    els.importdirectoryfield.hidden = asImport;
     form.elements.importId.required = importMode;
-    form.elements.importDirectory.required = importMode;
+    form.elements.importDirectory.required = importMode && !asImport;
     els.importbrowse.hidden = editing || !importMode;
     if (els.importbrowse.hidden) closeImportBrowse();
     els.cloneurlfield.hidden = editing || importMode;
@@ -385,7 +403,9 @@ if (typeof document !== "undefined") {
     els.importtree.replaceChildren(...(items.length ? items : [element("li", "tree-empty", "No subdirectories here.")]));
     els.importusefolder.disabled = Boolean(useFolderBlockedReason(tree));
     els.importusefolder.title = useFolderBlockedReason(tree);
-    setBrowseNote(useFolderBlockedReason(tree) || `Importing '${tree.name}' as a vault directly beneath the vault root.`);
+    setBrowseNote(useFolderBlockedReason(tree) || (tree.importMode === "managed"
+      ? `Importing '${tree.name}' as a managed vault beneath the vault root.`
+      : `Importing '${tree.path}' as a folder you own; anyobs records the path and leaves auto-sync off.`));
   }
 
   function setBrowseNote(text, error = false) {
@@ -402,10 +422,22 @@ if (typeof document !== "undefined") {
   function useSelectedFolder() {
     const tree = state.browse.tree;
     if (!tree || useFolderBlockedReason(tree)) return;
-    els.vaultform.elements.importDirectory.value = tree.name;
-    if (!els.vaultform.elements.importId.value) els.vaultform.elements.importId.value = tree.name;
+    const form = els.vaultform;
+    const managed = tree.importMode === "managed";
+    if (managed) {
+      form.elements.importDirectory.value = tree.name;
+      form.elements.importPath.value = "";
+    } else {
+      form.elements.importPath.value = tree.path;
+      form.elements.importDirectory.value = "";
+      if (!form.elements.importId.value) form.elements.importId.value = slugifyName(tree.name);
+    }
+    if (!form.elements.importId.value) form.elements.importId.value = tree.name;
     closeImportBrowse();
-    setDialogMessage(`Directory set to '${tree.name}'.`);
+    syncFormControls();
+    setDialogMessage(managed
+      ? `Directory set to '${tree.name}' (managed beneath the vault root).`
+      : `Folder set to '${tree.path}' (yours — auto-sync stays off).`);
   }
 
   async function refresh() {

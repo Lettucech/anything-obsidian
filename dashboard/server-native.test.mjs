@@ -210,6 +210,7 @@ test("import tree lists only real subdirectories beneath the vault root", async 
   assert.equal(rootListing.body.canUseHere, false);
   assert.equal(rootListing.body.directories[0].canImport, true);
   assert.equal(rootListing.body.directories[0].importMode, "managed");
+  assert.equal(rootListing.body.importMode, null); // the root itself is never importable
   assert.equal(rootListing.body.parent, null);
 
   const nested = await request(app, "GET", `/api/import-tree?path=${encodeURIComponent(path.join(root, "personal-notes"))}`);
@@ -219,6 +220,7 @@ test("import tree lists only real subdirectories beneath the vault root", async 
   // but only as a path the user owns (imported), never as a managed vault.
   assert.equal(nested.body.directories[0].canImport, true);
   assert.equal(nested.body.directories[0].importMode, "imported");
+  assert.equal(nested.body.importMode, "managed"); // the current folder is itself a direct child
   assert.equal(nested.body.canUseHere, true);
   assert.equal(nested.body.parent, rootListing.body.root);
 });

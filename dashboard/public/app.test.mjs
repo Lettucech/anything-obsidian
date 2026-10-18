@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   actionDisabledReason, activeTheme, agentCreatedLabel, agentRevokeMessage, breadcrumbSegments, dashboardMetrics,
   failedSyncs, gitAuthForRepository, jobProgressLabel, lastSyncLabel, nextTheme, restrictedAccessNote, serviceTone, syncBanner, systemPowerLabel, useFolderBlockedReason, vaultActionUrl,
+  slugifyName,
   vaultSourcePayload,
 } from "./app.js";
 
@@ -53,15 +54,33 @@ test("vault source payload switches between cloning and importing", () => {
   const form = new Map([
     ["repositoryUrl", "https://github.com/acme/work.git"],
     ["id", null], ["directory", null],
-    ["importId", "personal"], ["importDirectory", "personal"],
+    ["importId", "personal"], ["importDirectory", "personal"], ["importPath", ""],
   ]);
 
   assert.deepEqual(vaultSourcePayload(form, "clone"), {
-    sourceMode: "clone", repositoryUrl: "https://github.com/acme/work.git", id: null, directory: null,
+    sourceMode: "clone", repositoryUrl: "https://github.com/acme/work.git", id: null, directory: null, importPath: "",
   });
   assert.deepEqual(vaultSourcePayload(form, "import"), {
-    sourceMode: "import", repositoryUrl: "", id: "personal", directory: "personal",
+    sourceMode: "import", repositoryUrl: "", id: "personal", directory: "personal", importPath: "",
   });
+});
+
+test("an imported path replaces the directory so the two never coexist", () => {
+  const form = new Map([
+    ["repositoryUrl", "https://github.com/acme/work.git"],
+    ["id", null], ["directory", null],
+    ["importId", "personal"], ["importDirectory", "personal"], ["importPath", " /Users/x/Workspace/my-vault "],
+  ]);
+
+  assert.deepEqual(vaultSourcePayload(form, "import"), {
+    sourceMode: "import", repositoryUrl: "", id: "personal", directory: "", importPath: "/Users/x/Workspace/my-vault",
+  });
+});
+
+test("slugifyName turns a folder name into a valid vault id", () => {
+  assert.equal(slugifyName("My Notes 2026"), "my-notes-2026");
+  assert.equal(slugifyName("  My_Notes!! "), "my-notes");
+  assert.equal(slugifyName(""), "");
 });
 
 test("dashboard metrics summarize vault schedules and healthy services", () => {
@@ -110,11 +129,11 @@ test("import breadcrumbs walk from the vault root to the browsed folder", () => 
   ]);
 });
 
-test("use-folder gating explains the direct-child rule", () => {
-  assert.equal(useFolderBlockedReason({ root: "/v", path: "/v", canUseHere: false }), "Open a folder inside the vault root to import it");
-  assert.equal(useFolderBlockedReason({ root: "/v", path: "/v/Work/Notes", canUseHere: false }), "Only folders directly inside the vault root can be imported");
-  assert.equal(useFolderBlockedReason({ root: "/v", path: "/v/Work", canUseHere: true }), "");
-  assert.equal(useFolderBlockedReason(null), "Open a folder inside the vault root to import it");
+test("use-folder gating blocks only the root itself", () => {
+  assert.equal(useFolderBlockedReason({ root: "/v", path: "/v", canUseHere: false }), "The vault root itself cannot be imported");
+  assert.equal(useFolderBlockedReason({ root: "/v", path: "/v/Work/Notes", canUseHere: true }), "");
+  assert.equal(useFolderBlockedReason({ root: "/v", path: "/Users/x/Workspace/my-vault", canUseHere: true }), "");
+  assert.equal(useFolderBlockedReason(null), "Open a folder to import it");
 });
 
 test("last sync labels render relative time and failure", () => {
