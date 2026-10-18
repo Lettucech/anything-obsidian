@@ -111,7 +111,7 @@
               <label id="source-mode-field" class="form-grid-wide">Add from
                 <select name="sourceMode"><option value="clone">Clone a repository</option><option value="import">Import a local repository</option></select>
               </label>
-              <p id="import-help" class="note form-grid-wide" hidden>Import an existing Git repository that is already a direct child of the configured vault root, with an origin remote and a checked-out branch. Its URL, remote, and branch are discovered from the repository itself.</p>
+              <p id="import-help" class="note form-grid-wide" hidden>Import a directory you already own: a direct child of the vault root, or any path you browse to. Git remotes are discovered when there are any; a folder without a repository imports too, and auto-sync stays off for it.</p>
               <label id="clone-url-field" class="form-grid-wide">Repository URL <input name="repositoryUrl" type="url" placeholder="https://github.com/org/notes.git" required /></label>
               <label id="import-id-field" hidden>Vault ID <input name="importId" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="e.g. personal-notes" /></label>
               <label id="import-directory-field" hidden>Directory <input name="importDirectory" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Same as Vault ID" /></label>

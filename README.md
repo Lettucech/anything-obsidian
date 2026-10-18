@@ -54,7 +54,7 @@ remote server) and never hosts AnythingLLM itself.
 
    ```bash
    curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
-     --vaults-root ~/ObsidianVaults --url http://localhost:3001 --api-key <key> --no-browser
+     --vaults-root ~/.anything-obsidian/vaults --url http://localhost:3001 --api-key <key> --no-browser
    ```
 
    Or let your AI agent do it: agents can load the
