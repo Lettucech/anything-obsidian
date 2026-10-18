@@ -107,7 +107,9 @@ test("start-bg records a scheduler pid and stop clears it", async () => {
     }
   };
   const cliDeps = () => ({
-    env: { ANYTHING_OBSIDIAN_HOME: configRoot(home) },
+    // HOME must stay inside the fixture: otherwise the autostart manager
+    // finds this machine's real LaunchAgents and the CLI takes a different path.
+    env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), HOME: home },
     killImpl,
     log: output.line,
   });
@@ -205,7 +207,7 @@ test("status --json reports an unconfigured install and exits 1", async () => {
   const log = (line) => output.lines.push(line);
 
   const exitCode = await runCli(["status", "--json"], {
-    env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: process.env.HOME },
+    env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home },
     log,
   });
 
@@ -221,11 +223,11 @@ test("status --json reports a configured install with service health", async () 
   const vaultsRoot = path.join(home, "Vaults");
   await runCli(
     ["init", "--vaults-root", vaultsRoot, "--url", url, "--api-key", "key-123"],
-    { env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: process.env.HOME }, log: output.line },
+    { env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home }, log: output.line },
   );
 
   const exitCode = await runCli(["status", "--json"], {
-    env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: process.env.HOME },
+    env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home },
     log: output.line,
   });
 
@@ -245,12 +247,12 @@ test("human status is not machine JSON and still exits 0 when healthy", async ()
   const { home, output, url } = await setup({ workspaces: [] });
   await runCli(
     ["init", "--vaults-root", path.join(home, "Vaults"), "--url", url, "--api-key", "k"],
-    { env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: process.env.HOME }, log: output.line },
+    { env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home }, log: output.line },
   );
   output.lines.length = 0;
 
   const exitCode = await runCli(["status"], {
-    env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: process.env.HOME },
+    env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home },
     log: output.line,
   });
 
@@ -264,7 +266,7 @@ test("human status is not machine JSON and still exits 0 when healthy", async ()
 test("start --bg serves the dashboard, records a pid, and stop tears it down", async () => {
   const { home, output, url } = await setup({ workspaces: [] });
   const dashboardPort = 20000 + Math.floor(Math.random() * 20000);
-  const env = { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: process.env.HOME };
+  const env = { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home };
   await runCli(
     ["init", "--vaults-root", path.join(home, "Vaults"), "--url", url, "--api-key", "k", "--port", String(dashboardPort)],
     { env, log: output.line },

@@ -35,6 +35,8 @@ function nativeEnvObject() {
     ANYTHINGLLM_BASE_URL: "http://localhost:11301",
     ANYTHINGLLM_API_KEY: "key",
     DASHBOARD_PORT: "21400",
+    MCP_PORT: "21999",
+    MCP_LAN_PORT: "21998",
   };
 }
 
@@ -204,29 +206,34 @@ test("import tree lists only real subdirectories beneath the vault root", async 
   const rootListing = await request(app, "GET", "/api/import-tree");
   assert.equal(rootListing.status, 200);
   assert.deepEqual(rootListing.body.directories.map((entry) => entry.name), ["personal-notes"]);
+  assert.equal(rootListing.body.insideRoot, true);
   assert.equal(rootListing.body.canUseHere, false);
   assert.equal(rootListing.body.directories[0].canImport, true);
+  assert.equal(rootListing.body.directories[0].importMode, "managed");
   assert.equal(rootListing.body.parent, null);
 
   const nested = await request(app, "GET", `/api/import-tree?path=${encodeURIComponent(path.join(root, "personal-notes"))}`);
   assert.equal(nested.status, 200);
   assert.deepEqual(nested.body.directories.map((entry) => entry.name), ["nested"]);
-  assert.equal(nested.body.directories[0].canImport, false);
+  // A directory deeper than a direct child of the root can still be imported,
+  // but only as a path the user owns (imported), never as a managed vault.
+  assert.equal(nested.body.directories[0].canImport, true);
+  assert.equal(nested.body.directories[0].importMode, "imported");
   assert.equal(nested.body.canUseHere, true);
   assert.equal(nested.body.parent, rootListing.body.root);
 });
 
-test("import tree rejects paths outside the vault root and missing paths", async () => {
+test("import tree browses outside the vault root and still rejects missing paths", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ao-import-tree-"));
   await mkdir(path.join(root, "vault-one"));
   const app = nativeApp({ env: { ...nativeEnvObject(), VAULTS_ROOT: root } });
 
   const outside = await request(app, "GET", `/api/import-tree?path=${encodeURIComponent("/etc")}`);
-  assert.equal(outside.status, 403);
-  assert.match(outside.body.error, /outside the vault root/);
-
-  const traversal = await request(app, "GET", `/api/import-tree?path=${encodeURIComponent(path.join(root, "vault-one", "..", "..", ".."))}`);
-  assert.equal(traversal.status, 403);
+  assert.equal(outside.status, 200);
+  assert.equal(outside.body.insideRoot, false);
+  assert.equal(outside.body.canUseHere, true);
+  assert.ok(outside.body.directories.length > 0);
+  assert.ok(outside.body.directories.every((entry) => entry.importMode === "imported"));
 
   const missing = await request(app, "GET", `/api/import-tree?path=${encodeURIComponent(path.join(root, "does-not-exist"))}`);
   assert.equal(missing.status, 404);

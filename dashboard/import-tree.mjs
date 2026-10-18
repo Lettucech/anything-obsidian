@@ -5,17 +5,19 @@ export async function importTree({ vaultsRoot, requestedPath = "", readdirImpl =
   if (!vaultsRoot) throw new Error("vaultsRoot is not configured");
   const rootReal = await realpathOr(path.resolve(vaultsRoot), "Vault root");
   const targetReal = await realpathOr(requestedPath ? path.resolve(requestedPath) : rootReal, "Path");
-  assertInside(rootReal, targetReal, "Path");
+  const insideRoot = isInside(rootReal, targetReal);
 
   const entries = await readdirImpl(targetReal, { withFileTypes: true });
   const directories = entries
     .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith("."))
     .map((entry) => {
       const entryPath = path.join(targetReal, entry.name);
+      const importMode = path.dirname(entryPath) === rootReal ? "managed" : "imported";
       return {
         name: entry.name,
         path: entryPath,
-        canImport: path.dirname(entryPath) === rootReal,
+        canImport: true,
+        importMode,
       };
     })
     .sort((left, right) => left.name.localeCompare(right.name));
@@ -25,18 +27,16 @@ export async function importTree({ vaultsRoot, requestedPath = "", readdirImpl =
     path: targetReal,
     name: path.basename(targetReal),
     parent: targetReal === rootReal ? null : path.dirname(targetReal),
-    canUseHere: targetReal !== rootReal && path.dirname(targetReal) === rootReal,
+    insideRoot,
+    canUseHere: targetReal !== rootReal && (insideRoot ? path.dirname(targetReal) === rootReal : true),
+    importMode: insideRoot ? (targetReal === rootReal ? null : path.dirname(targetReal) === rootReal ? "managed" : "imported") : "imported",
     directories,
   };
 }
 
-function assertInside(root, target, label) {
-  const relative = path.relative(root, target);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    const error = new Error(`${label} is outside the vault root`);
-    error.statusCode = 403;
-    throw error;
-  }
+function isInside(root, target) {
+  if (target === root) return true;
+  return target.startsWith(`${root}${path.sep}`);
 }
 
 async function realpathOr(target, label) {

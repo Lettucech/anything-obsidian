@@ -43,9 +43,9 @@ remote server) and never hosts AnythingLLM itself.
 
    The installer checks prerequisites, installs the app under
    `~/.anything-obsidian/`, puts `anything-obsidian` on your PATH, then asks
-   a few setup questions: a vault root (default `~/ObsidianVaults` — a
-   self-created folder avoids macOS permission prompts around Documents and
-   Desktop), the AnythingLLM base URL and Developer API key, and it tests the
+   a few setup questions: a vault root (default `~/.anything-obsidian/vaults`,
+   inside the app's own home so nothing touches Documents or Desktop), the
+   AnythingLLM base URL and Developer API key, and it tests the
    connection before saving a 0600 config under
    `~/Library/Application Support/anything-obsidian/`. When it finishes, the
    dashboard is running and your browser opens at `http://localhost:21400`.
@@ -225,8 +225,12 @@ RAG state according to the selected vault configuration.
 - Keep secrets out of Git: the API key and LAN token live only in the local
   config file (`~/Library/Application Support/anything-obsidian/config.json`,
   mode 0600), never in the repository.
-- The dashboard validates every vault as a direct child of the configured
-  vaults root; MCP never accepts arbitrary host paths.
+- Two ways to add a vault: **managed** (a directory the installer created
+  under the vaults root — anyobs owns its location) or **imported** (any
+  existing directory you point at, e.g. `~/Workspace/my-vault` — you own the
+  location and anyobs never moves or auto-syncs it). Managed entries must be
+  direct children of the vaults root; an imported entry stores its absolute
+  path and that directory becomes its own boundary for every raw-file tool.
 - Local raw-vault tools reject traversal, symlinks, Git metadata, unsupported
   file types, and unbounded reads.
 - LAN MCP is read-only and token-protected, but it is still an information

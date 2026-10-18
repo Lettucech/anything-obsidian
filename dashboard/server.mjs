@@ -274,6 +274,9 @@ export function createDashboardServer({
 function validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, request }) {
   if (!String(request.gitUserName ?? "").trim()) return "Git commit author name is required";
   if (!String(request.gitUserEmail ?? "").trim()) return "Git commit email is required";
+  // Importing a directory that already lives on this machine never contacts a
+  // remote, so clone credentials cannot be verified (or used) for it.
+  if (sourceMode === "import" && String(request.importPath ?? "").trim()) return "";
   return validateRepositoryConnection({ repositoryVisibility, gitAuth });
 }
 
@@ -347,7 +350,7 @@ async function registryUpdateLanToken(env, token) {
 
 async function statusPayload(context) {
   const { jobs, env, fetchImpl, native, anythingllm, platform, launchctl, systemctl } = context;
-  const services = await serviceSnapshot({ anythingllm, native, fetchImpl });
+  const services = await serviceSnapshot({ anythingllm, native, fetchImpl, env });
   let lanEnabled = false;
   try {
     lanEnabled = await serviceManagerFor(context).lanEnabled();
@@ -368,13 +371,17 @@ async function statusPayload(context) {
   });
 }
 
-async function serviceSnapshot({ anythingllm, native, fetchImpl }) {
+async function serviceSnapshot({ anythingllm, native, fetchImpl, env = {} }) {
+  // Ports come from the service environment so a test never probes whatever
+  // happens to be listening on the real machine's MCP ports.
+  const mcpPort = Number(env.MCP_PORT ?? 21433);
+  const mcpLanPort = Number(env.MCP_LAN_PORT ?? 21444);
   const [anythingllmHealth, schedulerStatus, gitHealth, mcpHealth, mcpLanHealth] = await Promise.all([
     probeAnythingllm(anythingllm),
     Promise.resolve(readSchedulerStatus({ pidPath: native.schedulerPidPath, killImpl: native.killImpl })),
     probeGit(native.execFileImpl || promisify(nodeExecFile)),
-    probeHttp(fetchImpl, "http://127.0.0.1:21433/health"),
-    probeHttp(fetchImpl, "http://127.0.0.1:21444/health"),
+    probeHttp(fetchImpl, `http://127.0.0.1:${mcpPort}/health`),
+    probeHttp(fetchImpl, `http://127.0.0.1:${mcpLanPort}/health`),
   ]);
   return [
     {

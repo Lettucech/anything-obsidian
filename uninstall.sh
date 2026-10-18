@@ -6,7 +6,7 @@
 # Stops the dashboard and scheduler, removes the app, the CLI launcher, and the
 # PATH entry it added. Your data (config, secrets, vault registry) is KEPT by
 # default; pass --purge-data to remove it too. Your vault folders (the actual
-# notes, e.g. ~/ObsidianVaults) are never deleted — their location is printed
+# notes, e.g. ~/.anything-obsidian/vaults) are never deleted — their location is printed
 # at the end so you can remove them yourself.
 #
 # Flags:

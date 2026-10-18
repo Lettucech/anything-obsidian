@@ -54,12 +54,13 @@ export function registerManagementTools(server, api, { z }) {
 
   server.tool(
     "any_obs_vault_add",
-    "Add a vault to management: clone a Git repository or import one already beneath the vault root. Requires the same fields as the dashboard's Add vault dialog (repository URL or import directory, commit identity, visibility).",
+    "Add a vault to management: clone a Git repository, import a directory beneath the vault root, or import any directory on this machine by passing its absolute importPath. Requires the same fields as the dashboard's Add vault dialog (repository URL or import directory, commit identity, visibility).",
     {
       sourceMode: z.enum(["clone", "import"]).default("clone"),
       repositoryUrl: z.string().optional(),
       id: z.string().optional(),
       directory: z.string().optional(),
+      importPath: z.string().optional(),
       name: z.string().optional(),
       workspaceMode: z.enum(["create", "attach"]).default("create"),
       workspaceSlug: z.string().optional(),

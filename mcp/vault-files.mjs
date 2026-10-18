@@ -15,7 +15,7 @@ export function createVaultFileService({ vaultsRoot, registryPath, hostVaultsRoo
   return {
     async listFiles(input = {}) {
       const selected = await vault(input.vaultId);
-      const root = await vaultRoot(vaultsRoot, selected.directory);
+      const root = await vaultDirectory(vaultsRoot, selected);
       const relativeDirectory = input.path ?? "";
       const directory = await existingDirectory(root, relativeDirectory);
       const maxEntries = bounded(input.maxEntries, 200, 1, MAX_LIST_FILES, "maxEntries");
@@ -49,7 +49,7 @@ export function createVaultFileService({ vaultsRoot, registryPath, hostVaultsRoo
 
     async readFile(input) {
       const selected = await vault(input.vaultId);
-      const root = await vaultRoot(vaultsRoot, selected.directory);
+      const root = await vaultDirectory(vaultsRoot, selected);
       const relativePath = sourceRelativePath(input.path);
       const target = await existingFile(root, relativePath);
       const startLine = bounded(input.startLine, 1, 1, Number.MAX_SAFE_INTEGER, "startLine");
@@ -67,12 +67,12 @@ export function createVaultFileService({ vaultsRoot, registryPath, hostVaultsRoo
 
     async directory(input = {}) {
       const selected = await vault(input.vaultId);
-      return { vaultId: selected.id, directory: hostVaultDirectory(selected.directory) };
+      return { vaultId: selected.id, directory: vaultHostDirectory(selected) };
     },
 
     async context(input = {}) {
       const selected = await vault(input.vaultId);
-      const root = await vaultRoot(vaultsRoot, selected.directory);
+      const root = await vaultDirectory(vaultsRoot, selected);
       const policyFiles = [];
       for (const candidate of ["AGENTS.md", "README.md"]) {
         if (await isRegularFile(path.join(root, candidate))) policyFiles.push(candidate);
@@ -81,7 +81,7 @@ export function createVaultFileService({ vaultsRoot, registryPath, hostVaultsRoo
       return {
         vaultId: selected.id,
         name: selected.name,
-        directory: hostVaultDirectory(selected.directory),
+        directory: vaultHostDirectory(selected),
         sourceOfTruth: "local-vault-files",
         policyFiles,
         editMode: "local-filesystem",
@@ -106,11 +106,28 @@ export function createVaultFileService({ vaultsRoot, registryPath, hostVaultsRoo
     }
     return resolved;
   }
+
+  function vaultHostDirectory(selected) {
+    if (selected.location === "imported") return path.resolve(selected.importPath);
+    return hostVaultDirectory(selected.directory);
+  }
 }
 
-async function vaultRoot(vaultsRoot, directory) {
+async function vaultDirectory(vaultsRoot, selected) {
+  if (selected.location === "imported") {
+    let target;
+    try {
+      target = await realpath(selected.importPath);
+    } catch {
+      throw new Error(`Imported vault path is not reachable: ${selected.importPath}`);
+    }
+    if (!(await stat(target)).isDirectory()) {
+      throw new Error(`Imported vault path is not a directory: ${selected.importPath}`);
+    }
+    return target;
+  }
   const root = await realpath(vaultsRoot);
-  return existingDirectory(root, directory);
+  return existingDirectory(root, selected.directory);
 }
 
 function sourceRelativePath(value) {

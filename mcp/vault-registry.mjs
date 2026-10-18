@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 export const ANONYMOUS_IDENTITY = { kind: "anonymous" };
 export const ADMIN_IDENTITY = { kind: "admin" };
@@ -48,10 +49,16 @@ function assertAccessible(vault, identity) {
 function isVaultRecord(value) {
   if (!value || typeof value !== "object") return false;
   return typeof value.id === "string" && typeof value.name === "string" && typeof value.directory === "string" &&
+    locationShape(value) &&
     typeof value.workspaceSlug === "string" && typeof value.enabled === "boolean" &&
     (value.accessMode === "open" || value.accessMode === "restricted") && Array.isArray(value.allowlist) &&
     optionalBoolean(value.gitAutoPull) && optionalBoolean(value.gitAutoPush) &&
     optionalNumber(value.syncIntervalSeconds) && optionalBoolean(value.embedAfterSync);
+}
+
+function locationShape(value) {
+  if (value.location === undefined || value.location === "managed") return true;
+  return value.location === "imported" && typeof value.importPath === "string" && path.isAbsolute(value.importPath);
 }
 
 function optionalBoolean(value) {

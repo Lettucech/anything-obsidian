@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +7,56 @@ import test from "node:test";
 
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultStorage } from "./vault-storage.mjs";
+
+test("imports a directory anywhere on disk and records its git origin when it has one", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vaults-"));
+  const imported = await mkdtemp(path.join(tmpdir(), "My Notes_2026-"));
+  const registry = createVaultRegistry({ rootPath: root, registryPath: path.join(root, "registry.json") });
+  const storage = createVaultStorage({
+    registry,
+    runGit: async (args) => {
+      if (args[0] === "remote") return "https://github.com/acme/my-notes.git";
+      if (args[0] === "branch") return "main";
+      return "";
+    },
+  });
+
+  const discovered = await storage.import({ importPath: imported, name: "My Notes" });
+
+  assert.equal(discovered.location, "imported");
+  assert.equal(discovered.importPath, imported);
+  assert.equal(discovered.name, "My Notes");
+  assert.match(discovered.directory, /^my-notes-[a-z0-9-]+$/);
+  assert.equal(discovered.repositoryUrl, "https://github.com/acme/my-notes.git");
+  assert.equal(discovered.gitBranch, "main");
+});
+
+test("imports a plain directory with no git repository and records no remote", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vaults-"));
+  const imported = await mkdtemp(path.join(tmpdir(), "Plain Notes-"));
+  const registry = createVaultRegistry({ rootPath: root, registryPath: path.join(root, "registry.json") });
+  const storage = createVaultStorage({
+    registry,
+    runGit: async () => { throw new Error("not a git repository"); },
+  });
+
+  const discovered = await storage.import({ importPath: imported });
+
+  assert.equal(discovered.location, "imported");
+  assert.equal(discovered.repositoryUrl, undefined);
+  assert.equal(discovered.gitBranch, undefined);
+});
+
+test("rejects an import path that does not exist or is not a directory", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vaults-"));
+  const registry = createVaultRegistry({ rootPath: root, registryPath: path.join(root, "registry.json") });
+  const storage = createVaultStorage({ registry, runGit: async () => "" });
+  const file = path.join(root, "a-file.md");
+  writeFileSync(file, "# not a directory\n");
+
+  await assert.rejects(() => storage.import({ importPath: path.join(root, "missing") }), /does not exist/);
+  await assert.rejects(() => storage.import({ importPath: file }), /not a directory/);
+});
 
 test("clones an HTTPS repository and discovers its origin and default branch", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vaults-"));

@@ -42,8 +42,11 @@ curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/in
   `xcode-select --install` first).
 - As an agent, prefer the non-interactive flags above. Before installing,
   collect from the user:
-  1. **vaults-root** — propose `~/ObsidianVaults` (never Documents/Desktop —
-     macOS permission prompts); create nothing yourself, the installer does it.
+  1. **vaults-root** — propose the default `~/.anything-obsidian/vaults`
+     (never Documents/Desktop — macOS permission prompts); create nothing
+     yourself, the installer does it. If the user already keeps notes in an
+     existing folder, keep this default and import that folder later with
+     `sourceMode: "import"` + its absolute `importPath`.
   2. **AnythingLLM base URL** — where their instance serves the API, e.g.
      `http://localhost:3001` for a local AnythingLLM Desktop.
   3. **API key** — from AnythingLLM Settings → Developer API. Ask the user to

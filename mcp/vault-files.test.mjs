@@ -71,6 +71,37 @@ test("rejects a source file reached through an intermediate symlink", async () =
   await assert.rejects(() => service.readFile({ vaultId: "work", path: "Linked/Secret.md" }), /escaped vault root/);
 });
 
+test("reads files from an imported vault that lives outside the vault root", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-vault-files-"));
+  const imported = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-imported-"));
+  await writeFile(path.join(imported, "Note.md"), "# Hello from my own folder\n");
+  const registryPath = path.join(root, "vaults.json");
+  await writeFile(registryPath, JSON.stringify({
+    vaults: [{
+      id: "mine",
+      name: "Mine",
+      location: "imported",
+      importPath: imported,
+      directory: "mine",
+      workspaceSlug: "mine",
+      enabled: true,
+      accessMode: "open",
+      allowlist: [],
+      gitAutoPull: false,
+      gitAutoPush: false,
+      embedAfterSync: true,
+    }],
+  }));
+  const service = createVaultFileService({ vaultsRoot: root, registryPath, hostVaultsRoot: root });
+
+  assert.deepEqual(await service.directory({ vaultId: "mine" }), { vaultId: "mine", directory: imported });
+  const read = await service.readFile({ vaultId: "mine", path: "Note.md" });
+  assert.equal(read.content, "# Hello from my own folder\n");
+
+  // The imported vault is its own boundary: nothing may reach outside it.
+  await assert.rejects(() => service.readFile({ vaultId: "mine", path: "../vaults.json" }), /escape/);
+});
+
 test("returns the configured host directory for a selected local vault", async () => {
   const { service, vaultPath } = await fixture();
   assert.deepEqual(await service.directory({ vaultId: "work" }), { vaultId: "work", directory: vaultPath });

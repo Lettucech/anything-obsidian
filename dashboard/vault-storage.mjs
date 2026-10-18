@@ -41,6 +41,13 @@ export function createVaultStorage({ registry, runGit = runGitDefault } = {}) {
       }
     },
     async import(input) {
+      const importPath = String(input.importPath ?? "").trim();
+      if (importPath) {
+        const identity = importedIdentity(input, importPath);
+        const vaultPath = registry.resolvePath(identity);
+        await assertDirectory(vaultPath);
+        return { ...identity, ...(await inspectGitRepository(vaultPath, runGit)) };
+      }
       assertSlug(input.id, "id");
       assertSlug(input.directory, "directory");
       const vaultPath = registry.resolvePath(input);
@@ -53,6 +60,36 @@ export function createVaultStorage({ registry, runGit = runGitDefault } = {}) {
       return { repositoryUrl, gitRemote: "origin", gitBranch };
     },
   };
+}
+
+function importedIdentity(input, importPath) {
+  const resolved = path.resolve(importPath);
+  const directory = slugify(path.basename(resolved));
+  assertSlug(directory, "directory");
+  return {
+    location: "imported",
+    importPath: resolved,
+    directory,
+    name: String(input.name ?? "").trim() || path.basename(resolved),
+  };
+}
+
+async function assertDirectory(vaultPath) {
+  const details = await stat(vaultPath).catch((error) => {
+    if (error?.code === "ENOENT") throw new Error(`Vault path does not exist: ${vaultPath}`);
+    throw error;
+  });
+  if (!details.isDirectory()) throw new Error(`Vault path is not a directory: ${vaultPath}`);
+}
+
+async function inspectGitRepository(vaultPath, runGit) {
+  try {
+    const repositoryUrl = (await runGit(["remote", "get-url", "origin"], vaultPath)).trim();
+    const gitBranch = (await runGit(["branch", "--show-current"], vaultPath)).trim();
+    return repositoryUrl && gitBranch ? { repositoryUrl, gitRemote: "origin", gitBranch } : {};
+  } catch {
+    return {};
+  }
 }
 
 function vaultIdentity(input, repositoryUrl) {

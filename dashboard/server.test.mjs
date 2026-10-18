@@ -132,6 +132,30 @@ test("vault creation requires an explicit automatic-commit identity and private 
   assert.deepEqual(secrets.saved, []);
 });
 
+test("vault creation imports a directory from any absolute path without clone credentials", async () => {
+  const registry = fakeRegistry();
+  const vaultStorage = fakeVaultStorage();
+  const app = createDashboardServer({
+    jobs: fakeJobs(), registry, vaultStorage, secrets: fakeSecrets(),
+    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "mine" }; } },
+    env: nativeEnv(), native: nativePaths(),
+  });
+
+  const created = await request(app, "POST", "/api/vaults", {
+    sourceMode: "import",
+    importPath: "/Users/x/Workspace/my-vault",
+    name: "My Vault",
+    id: "mine", directory: "mine", workspaceSlug: "mine",
+    workspaceMode: "create",
+    repositoryVisibility: "private",
+    gitUserName: "X Bot", gitUserEmail: "x@example.test",
+  });
+
+  assert.equal(created.status, 201);
+  assert.equal(vaultStorage.imported.length, 1);
+  assert.equal(vaultStorage.imported[0].importPath, "/Users/x/Workspace/my-vault");
+});
+
 test("private local imports also require an HTTPS credential for later sync", async () => {
   const vaultStorage = fakeVaultStorage();
   const app = createDashboardServer({
@@ -344,6 +368,10 @@ function nativeEnv() {
     VAULT_STATE_ROOT: `${root}/state`,
     AGENT_TOKENS_PATH: `${root}/agent-tokens`,
     DASHBOARD_PORT: "21400",
+    // Point the MCP health probes at ports nothing listens on, so a live
+    // anything-obsidian install on this machine cannot leak into the test.
+    MCP_PORT: "21999",
+    MCP_LAN_PORT: "21998",
     ANYTHINGLLM_BASE_URL: "http://localhost:11301",
   };
 }

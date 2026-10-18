@@ -57,6 +57,10 @@ and --api-key are provided, no prompts are shown.`;
 
 export const REQUIRED_NODE_MAJOR = 22;
 
+// Managed vaults live inside the app's own home unless the user opts to
+// import directories that already live elsewhere.
+export const MANAGED_VAULTS_ROOT = "~/.anything-obsidian/vaults";
+
 export function nodeVersionProblem(version = process.versions.node) {
   const major = Number.parseInt(String(version ?? "").split(".")[0], 10);
   if (Number.isInteger(major) && major >= REQUIRED_NODE_MAJOR) return null;
@@ -277,7 +281,7 @@ async function resolveVaultsRoot({ flags, prompt, env, log }) {
   if (flags["vaults-root"]) return expandTilde(flags["vaults-root"]);
 
   while (true) {
-    const answer = await prompt.question(`Vault root directory [~/ObsidianVaults] `, "~/ObsidianVaults");
+    const answer = await prompt.question(`Vault root directory [${MANAGED_VAULTS_ROOT}] `, MANAGED_VAULTS_ROOT);
     const vaultsRoot = expandTilde(answer.trim());
     if (!path.isAbsolute(vaultsRoot)) {
       log("Please enter an absolute path.");
