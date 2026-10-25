@@ -226,6 +226,20 @@ tail -f "$HOME/Library/Application Support/anything-obsidian/logs/scheduler.log"
 These operations are outside the MCP surface. They can modify Git or derived
 RAG state according to the selected vault configuration.
 
+### AnythingLLM compatibility
+
+any-obs uploads documents into a **single-segment** folder
+(`anything-obsidian-vault-<vaultId>`) via
+`POST /api/v1/document/upload/{folder}`. AnythingLLM builds of 2026-10-04 and
+later reject folder names containing path separators; the URL-encoded nested
+folder (`anything-obsidian-vault/<vaultId>`) an earlier any-obs sent was never
+documented behaviour and now fails with `Folder name cannot contain path
+separators`. AnythingLLM ships on `:latest` and may tighten other endpoints
+without a version gate, so after upgrading either side run
+`node scripts/worker.mjs doctor --vault <id>` (or the `any_obs_vault_doctor`
+MCP tool) — it probes the real upload path, not just workspace reachability,
+and fails loudly if the endpoint no longer accepts the configured folder.
+
 ## Safety notes
 
 - Keep secrets out of Git: the API key and LAN token live only in the local
