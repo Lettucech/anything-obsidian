@@ -1,19 +1,24 @@
-# Anything Obsidian
+# Anything Obsidian (any-obs)
 
-Anything Obsidian is a local control plane for the connection between managed
-Obsidian vaults and their derived AnythingLLM RAG indexes. It keeps the vault
-repository as the source of truth; AnythingLLM is rebuildable derived data.
+any-obs is a local bridge between your Obsidian vault directories and a
+provided AnythingLLM instance. It owns the vault side — registration
+(managed clones under a vaults root, or directories imported from anywhere
+on your disk) and optional Git-based sync — and mirrors vault content into
+the RAG index of an AnythingLLM instance you provide and run yourself
+(Docker, AnythingLLM Desktop, or a remote server). It never hosts
+AnythingLLM.
 
-The project manages vault registration, optional Git-based sync, and
-vault-scoped indexing. Over MCP, agents never write vault source files;
-the local profile's management tools run the same configured sync and
-embedding flows the dashboard offers, never arbitrary Git commands.
+The vault repository is the source of truth; the RAG index is rebuildable
+derived data. Over MCP, agents never write vault source files; the local
+profile's management tools run the same configured sync and embedding flows
+the dashboard offers, never arbitrary Git commands.
 
 ## Boundaries
 
-- **Vault management:** the dashboard clones or imports a vault beneath the
-  user-selected `HOST_VAULTS_ROOT`, creates its AnythingLLM workspace, and
-  stores only validated registry metadata.
+- **Vault management:** the dashboard clones a managed vault beneath the
+  user-selected `HOST_VAULTS_ROOT` or imports an existing directory from
+  anywhere on disk, creates its AnythingLLM workspace, and stores only
+  validated registry metadata.
 - **Agent-scoped MCP access:** dashboard-issued agent tokens limit a client's
   MCP visibility to the vaults whose allowlist names it. Tokenless local
   connections keep their existing access to open vaults.
@@ -28,12 +33,13 @@ embedding flows the dashboard offers, never arbitrary Git commands.
 
 ## Getting started (one command)
 
-The same control plane also runs as a plain Node app. The installer bootstraps
-everything — if the machine has no supported Node.js (>= 22; Node 18 and 20
-are end-of-life) it downloads a portable runtime automatically (no Homebrew,
-no sudo). The CLI itself also refuses to run on anything older. It talks to an
-existing AnythingLLM instance (mini shared instance, AnythingLLM Desktop, or a
-remote server) and never hosts AnythingLLM itself.
+any-obs runs as a plain Node app — there is no Docker stack to run for it.
+The installer bootstraps everything: if the machine has no supported Node.js
+(>= 22; Node 18 and 20 are end-of-life) it downloads a portable runtime
+automatically (no Homebrew, no sudo), and the CLI itself refuses to run on
+anything older. You provide the AnythingLLM instance (shared Docker
+deployment, AnythingLLM Desktop, or a remote server); any-obs talks to its
+API and never hosts it.
 
 1. Install and set up in one command:
 
@@ -130,7 +136,7 @@ second segment names the domain:
 |---|---|---|
 | `any_obs_vault_*` / `any_obs_file_*` | Read the vault source of truth | vault list (with last-sync state)/context/directory, file list/read |
 | `any_obs_rag_*` | Query the derived RAG index (verify against source) | search, answer |
-| `any_obs_*` (management verbs) | Manage the control plane | vault add/update/remove/sync/embed/doctor, job status, agent tokens, status, autostart, LAN |
+| `any_obs_*` (management verbs) | Manage any-obs itself | vault add/update/remove/sync/embed/doctor, job status, agent tokens, status, autostart, LAN |
 
 Loopback callers may use management tools without a token: a local agent
 acts as the user's delegate. The LAN endpoint (below) never registers the
@@ -226,9 +232,9 @@ RAG state according to the selected vault configuration.
   config file (`~/Library/Application Support/anything-obsidian/config.json`,
   mode 0600), never in the repository.
 - Two ways to add a vault: **managed** (a directory the installer created
-  under the vaults root — anyobs owns its location) or **imported** (any
+  under the vaults root — any-obs owns its location) or **imported** (any
   existing directory you point at, e.g. `~/Workspace/my-vault` — you own the
-  location and anyobs never moves or auto-syncs it). Managed entries must be
+  location and any-obs never moves or auto-syncs it). Managed entries must be
   direct children of the vaults root; an imported entry stores its absolute
   path and that directory becomes its own boundary for every raw-file tool.
 - Local raw-vault tools reject traversal, symlinks, Git metadata, unsupported

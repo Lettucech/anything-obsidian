@@ -1,6 +1,7 @@
 # Agent MCP setup
 
-Anything Obsidian provides two MCP profiles. Use the endpoint that matches
+Anything Obsidian (short name: any-obs) provides two MCP profiles. Use the
+endpoint that matches
 where the agent runs. Neither profile offers tools that write vault source
 files; the local profile additionally exposes `any_obs_*` management tools
 (vault lifecycle, sync/embed jobs, agent tokens, service control) that proxy

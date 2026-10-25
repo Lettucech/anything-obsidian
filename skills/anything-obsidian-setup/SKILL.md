@@ -24,10 +24,14 @@ about machine setup.
 
 ## What Anything Obsidian is
 
-A local control plane that syncs Git-backed Obsidian vaults and mirrors them
-into an AnythingLLM RAG index. It talks to an **existing** AnythingLLM
-instance (shared mini instance, AnythingLLM Desktop, or a remote server) — it
-never hosts AnythingLLM itself. No Docker, no admin rights, no sudo needed.
+Anything Obsidian (short name: any-obs) is a local bridge between Obsidian
+vault directories and a provided AnythingLLM instance. It registers vaults
+(cloned under a vaults root or imported from any existing directory), syncs
+them over Git when configured, and mirrors their content into the RAG index
+of an AnythingLLM the user provides and runs themselves (shared Docker
+deployment, AnythingLLM Desktop, or a remote server) — it never hosts
+AnythingLLM. The app itself is a plain Node process: no Docker, no admin
+rights, no sudo needed.
 
 ## Install (one command, zero prompts when flags are given)
 

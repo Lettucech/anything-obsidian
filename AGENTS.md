@@ -5,14 +5,15 @@ and operate Anything Obsidian on their machine.
 
 ## What this project is
 
-Anything Obsidian is a local control plane connecting Git-backed Obsidian
-vaults with AnythingLLM RAG indexes. Two forms coexist:
+Anything Obsidian (short name: any-obs) is a local bridge between Obsidian
+vault directories and a provided AnythingLLM instance: it manages vault
+registration and optional Git sync, and mirrors vault content into the
+AnythingLLM RAG index. AnythingLLM is always an external, user-provided
+dependency (URL + API key in config) — the app never hosts it.
 
-- A plain Node app, installed by `install.sh`, managed by the
-  `anything-obsidian` CLI and a browser dashboard on port 21400. AnythingLLM
-  is always an external client-side dependency (URL + API key in config) —
-  the app never hosts it. MCP endpoints: loopback 21433, optional LAN 21444
-  (`lan on`, Bearer token required).
+It ships as a plain Node app, installed by `install.sh`, managed by the
+`anything-obsidian` CLI and a browser dashboard on port 21400. MCP endpoints:
+loopback 21433, optional LAN 21444 (`lan on`, Bearer token required).
 
 There is no Docker stack, no Electron/desktop-shell plan, and no npm publish —
 distribution is `install.sh` from this repo. The root `package.json` now
@@ -53,7 +54,7 @@ login session.
   `redactSecretsObject`).
 - Vault locations come in two flavours, and the registry records which:
   `managed` entries live beneath `VAULTS_ROOT` and must be direct children of
-  it — anyobs owns that area; `imported` entries store an absolute
+  it — any-obs owns that area; `imported` entries store an absolute
   `importPath` to a directory the user already owns, never auto-sync unless
   they ask, and that directory is the boundary every raw-file tool anchors
   its traversal checks to. Never collapse the two: a managed resolve must not
