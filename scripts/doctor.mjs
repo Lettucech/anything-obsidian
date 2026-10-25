@@ -3,7 +3,10 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { embeddableVaultFiles } from "./embed-vault.mjs";
+import {
+  DEFAULT_DOCUMENT_UPLOAD_PATH_TEMPLATE,
+  embeddableVaultFiles,
+} from "./embed-vault.mjs";
 import { gitEnv } from "./watch-vault.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -35,6 +38,59 @@ export async function doctor({
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return "AnythingLLM API key can list workspaces";
+  });
+
+  // Exercises the one path the other checks cannot see: a real document
+  // upload through the configured folder template. The probe file lives in a
+  // dedicated `-doctor` folder that is purged afterwards, so repeated runs
+  // never accumulate documents next to the vault's real uploads.
+  await record(checks, "anythingllm upload probe", async () => {
+    if (!config.apiKey) throw new Error("ANYTHINGLLM_API_KEY is empty");
+    const probeFolder = `${config.documentFolder ?? "anything-obsidian-vault"}-doctor`;
+    const uploadPath = (
+      config.documentUploadPathTemplate ?? DEFAULT_DOCUMENT_UPLOAD_PATH_TEMPLATE
+    ).replace("{folder}", encodeURIComponent(probeFolder));
+    const body = new FormData();
+    body.append("file", new Blob(["# anything-obsidian doctor probe\n"]), "doctor-probe.md");
+    body.append(
+      "metadata",
+      JSON.stringify({
+        title: "doctor-probe.md",
+        docSource: "anything-obsidian doctor",
+        chunkSource: "doctor-probe",
+      }),
+    );
+    const response = await fetchImpl(`${config.anythingllmBaseUrl}${uploadPath}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+      body,
+    });
+    const text = await response.text().catch(() => "");
+    if (!response.ok) {
+      throw new Error(`document upload HTTP ${response.status}: ${text.trim() || "no detail"}`);
+    }
+    const uploaded = text ? tryJson(text) : null;
+    if (!Array.isArray(uploaded?.documents) || uploaded.documents.length === 0) {
+      throw new Error(
+        `document upload returned no documents: ${text.trim() || "empty body"}`,
+      );
+    }
+    const cleanup = await fetchImpl(
+      `${config.anythingllmBaseUrl}/api/v1/document/remove-folder`,
+      {
+        method: "DELETE",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({ name: probeFolder }),
+      },
+    ).catch((error) => ({ ok: false, status: String(error?.message ?? error) }));
+    const leftover = cleanup.ok
+      ? ""
+      : `; leftover probe folder could not be removed (HTTP ${cleanup.status})`;
+    return `Document upload accepted a probe file in folder '${probeFolder}'${leftover}`;
   });
 
   await record(checks, "git remote", async () => {
@@ -146,6 +202,14 @@ async function readManifestDefault(filePath) {
 
 function toPosix(value) {
   return value.split(path.sep).join("/");
+}
+
+function tryJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 async function record(checks, name, fn) {

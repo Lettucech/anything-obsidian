@@ -153,7 +153,15 @@ test("doctor checks vault mount and AnythingLLM with injected fetch", async () =
       },
       fetchImpl: async (url, options = {}) => {
         requests.push({ url, options });
-        return { ok: true, status: 200 };
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              success: true,
+              documents: [{ location: "anything-obsidian-vault-doctor/doctor-probe.json" }],
+            }),
+        };
       },
       runGit: async () => ({ ok: true, code: 0, stdout: "", stderr: "" }),
       readManifest: async () => ({ files: {} }),
@@ -166,17 +174,43 @@ test("doctor checks vault mount and AnythingLLM with injected fetch", async () =
         ["vault mount", true],
         ["anythingllm api docs", true],
         ["anythingllm api key", true],
+        ["anythingllm upload probe", true],
         ["git remote", true],
         ["mcp health", true],
         ["embedder probe", true],
         ["index drift", true],
       ],
     );
-    assert.deepEqual(requests, [
+    const normalized = requests.map(({ url, options }) => {
+      const normalizedOptions = { ...options };
+      if (normalizedOptions.body instanceof FormData) normalizedOptions.body = "<form-data>";
+      return { url, options: normalizedOptions };
+    });
+    assert.deepEqual(normalized, [
       { url: "http://anythingllm:3001/api/docs", options: {} },
       {
         url: "http://anythingllm:3001/api/v1/workspaces",
         options: { headers: { Authorization: "Bearer key" } },
+      },
+      {
+        url: "http://anythingllm:3001/api/v1/document/upload/anything-obsidian-vault-doctor",
+        options: {
+          method: "POST",
+          headers: { Authorization: "Bearer key" },
+          body: "<form-data>",
+        },
+      },
+      {
+        url: "http://anythingllm:3001/api/v1/document/remove-folder",
+        options: {
+          method: "DELETE",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            Authorization: "Bearer key",
+          },
+          body: JSON.stringify({ name: "anything-obsidian-vault-doctor" }),
+        },
       },
       { url: "http://mcp:3333/health", options: {} },
       {

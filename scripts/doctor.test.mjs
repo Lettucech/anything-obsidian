@@ -7,7 +7,15 @@ import test from "node:test";
 import { doctor } from "./doctor.mjs";
 
 function passingFetch() {
-  return async () => ({ ok: true, status: 200, text: async () => "" });
+  return async () => ({
+    ok: true,
+    status: 200,
+    text: async () =>
+      JSON.stringify({
+        success: true,
+        documents: [{ location: "anything-obsidian-vault-doctor/doctor-probe.json" }],
+      }),
+  });
 }
 
 function passingRunGit() {
@@ -187,6 +195,83 @@ test("doctor drift honors custom embed extensions from config", async () => {
     const drift = byName(result).get("index drift");
     assert.equal(drift.ok, false);
     assert.match(drift.message, /draw\.canvas/);
+  } finally {
+    await rm(vaultPath, { force: true, recursive: true });
+  }
+});
+
+test("doctor upload probe surfaces the AnythingLLM error detail", async () => {
+  const vaultPath = await mkdtemp(path.join(tmpdir(), "doctor-"));
+  try {
+    const result = await doctor({
+      config: baseConfig(vaultPath, { documentFolder: "anything-obsidian-vault-test" }),
+      fetchImpl: async (url, options = {}) => {
+        if (options.method === "POST" && String(url).includes("/api/v1/document/upload/")) {
+          return {
+            ok: false,
+            status: 500,
+            text: async () =>
+              JSON.stringify({ error: "Folder name cannot contain path separators." }),
+          };
+        }
+        return { ok: true, status: 200, text: async () => "" };
+      },
+      runGit: passingRunGit(),
+      readManifest: async () => ({ files: {} }),
+    });
+    const probe = byName(result).get("anythingllm upload probe");
+    assert.equal(probe.ok, false);
+    assert.match(probe.message, /HTTP 500/);
+    assert.match(probe.message, /path separators/);
+  } finally {
+    await rm(vaultPath, { force: true, recursive: true });
+  }
+});
+
+test("doctor upload probe targets the vault folder and purges its probe folder", async () => {
+  const vaultPath = await mkdtemp(path.join(tmpdir(), "doctor-"));
+  try {
+    const calls = [];
+    const result = await doctor({
+      config: baseConfig(vaultPath, { documentFolder: "anything-obsidian-vault-test" }),
+      fetchImpl: async (url, options = {}) => {
+        const target = String(url);
+        calls.push({ url: target, method: options.method ?? "GET" });
+        if (options.method === "POST" && target.includes("/api/v1/document/upload/")) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                success: true,
+                documents: [
+                  { location: "anything-obsidian-vault-test-doctor/doctor-probe.json" },
+                ],
+              }),
+          };
+        }
+        if (options.method === "DELETE" && target.includes("/api/v1/document/remove-folder")) {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ success: true }) };
+        }
+        return { ok: true, status: 200, text: async () => "" };
+      },
+      runGit: passingRunGit(),
+      readManifest: async () => ({ files: {} }),
+    });
+    const probe = byName(result).get("anythingllm upload probe");
+    assert.equal(probe.ok, true, probe.message);
+    const upload = calls.find(
+      (call) => call.method === "POST" && call.url.includes("/api/v1/document/upload/"),
+    );
+    assert.ok(upload, "expected a document upload probe");
+    assert.ok(
+      upload.url.endsWith("/anything-obsidian-vault-test-doctor"),
+      `unexpected upload URL: ${upload.url}`,
+    );
+    const cleanup = calls.find(
+      (call) => call.method === "DELETE" && call.url.includes("/api/v1/document/remove-folder"),
+    );
+    assert.ok(cleanup, "expected the probe folder to be purged");
   } finally {
     await rm(vaultPath, { force: true, recursive: true });
   }

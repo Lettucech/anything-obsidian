@@ -129,7 +129,7 @@ export function registerManagementTools(server, api, { z }) {
 
   server.tool(
     "any_obs_vault_doctor",
-    "Run health checks for one managed vault (Git state, AnythingLLM workspace, embed manifest).",
+    "Run health checks for one managed vault (Git state, AnythingLLM workspace and upload path, embed manifest).",
     { vaultId: z.string().min(1) },
     async ({ vaultId }) => asJson(await api.vaultAction(vaultId, "doctor")),
   );
