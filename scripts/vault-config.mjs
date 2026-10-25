@@ -43,7 +43,7 @@ export async function loadVaultConfig(env, vaultId) {
     gitAuthUsername: credential?.username ?? "",
     gitAuthToken: credential?.token ?? "",
     stateDir,
-    documentFolder: `anything-obsidian-vault/${vault.id}`,
+    documentFolder: `anything-obsidian-vault-${vault.id}`,
     syncIntervalSeconds: vault.syncIntervalSeconds,
     embedAfterSync: vault.embedAfterSync,
     embedExtensions: vault.embedExtensions || undefined,

@@ -31,7 +31,7 @@ test("loads a vault-scoped workspace, path, and embedding manifest directory", a
   assert.equal(config.vaultPath, path.join(root, "work"));
   assert.equal(config.workspaceSlug, "work-space");
   assert.equal(config.stateDir, "/state/manifests/work");
-  assert.equal(config.documentFolder, "anything-obsidian-vault/work");
+  assert.equal(config.documentFolder, "anything-obsidian-vault-work");
   assert.equal(config.gitAuthUsername, "oauth2");
   assert.equal(config.gitAuthToken, "work-token");
   assert.equal(config.gitAutoPull, false);

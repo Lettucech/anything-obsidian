@@ -9,6 +9,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..");
 
+// Kept single-segment on purpose: AnythingLLM rejects folder names that
+// contain path separators (its older permissive behaviour was undocumented),
+// so the {folder} value must never grow a "/" — the vault id is the only
+// variable part and registry ids are slugs.
+export const DEFAULT_DOCUMENT_UPLOAD_PATH_TEMPLATE = "/api/v1/document/upload/{folder}";
+
 export async function embedVault({ config, all = false }) {
   const baseUrl = stripTrailingSlash(config.anythingllmBaseUrl);
   const apiKey = config.apiKey;
@@ -18,7 +24,7 @@ export async function embedVault({ config, all = false }) {
   const stateDir = config.stateDir ?? path.resolve(repoRoot, ".anything-obsidian-state");
   const manifestPath = path.join(stateDir, "embed-manifest.json");
   const uploadPathTemplate =
-    config.documentUploadPathTemplate ?? "/api/v1/document/upload/{folder}";
+    config.documentUploadPathTemplate ?? DEFAULT_DOCUMENT_UPLOAD_PATH_TEMPLATE;
   const updateEmbeddingsPathTemplate =
     config.updateEmbeddingsPathTemplate ?? "/api/v1/workspace/{slug}/update-embeddings";
 
