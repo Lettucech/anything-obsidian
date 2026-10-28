@@ -177,6 +177,60 @@ function mcpTransport(baseUrl, token) {
   });
 }
 
+test("gateway: zero-env setup wizard collects credentials into the data volume and then closes", async () => {
+  // A gateway with no bootstrap secret refuses setup entirely.
+  const sealed = await startGateway({ envSecrets: false });
+  assert.equal((await fetchJson(`${sealed.baseUrl}/health`)).body.needsSetup, true);
+  assert.equal(
+    (await fetchJson(`${sealed.baseUrl}/api/setup/admin-token`, { method: "POST", headers: auth("anything") })).status,
+    401,
+  );
+
+  // Dashboard is served and reports setup pending.
+  const page = await fetch(`${sealed.baseUrl}/`);
+  assert.match(await page.text(), /any-obs gateway/);
+
+  // The operator's one-time bootstrap token (env or generated into the
+  // container log) authorizes the wizard: mint the admin credential first.
+  const fresh = await startGateway({ envSecrets: false, bootstrapToken: "bootstrap-token-9" });
+  const minted = await fetchJson(`${fresh.baseUrl}/api/setup/admin-token`, {
+    method: "POST",
+    headers: auth("bootstrap-token-9"),
+  });
+  assert.equal(minted.status, 201);
+  assert.ok(minted.body.adminToken.length > 20);
+
+  // Step 2+3: paste the AnythingLLM key; a wrong key is rejected and stored
+  // nowhere, the right key verifies against AnythingLLM and completes setup.
+  const bad = await fetchJson(`${fresh.baseUrl}/api/setup/api-key`, {
+    method: "POST",
+    headers: auth(minted.body.adminToken),
+    body: JSON.stringify({ apiKey: "wrong" }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /rejected this API key/);
+
+  const done = await fetchJson(`${fresh.baseUrl}/api/setup/api-key`, {
+    method: "POST",
+    headers: auth(minted.body.adminToken),
+    body: JSON.stringify({ apiKey: "minted-developer-key" }),
+  });
+  assert.equal(done.status, 200);
+  assert.equal(done.body.configured, true);
+  assert.equal(done.body.sharedWorkspace.slug, SHARED);
+
+  // Setup is now closed for good, and the minted admin token administers.
+  assert.equal((await fetchJson(`${fresh.baseUrl}/api/setup/admin-token`, { method: "POST", headers: auth("bootstrap-token-9") })).status, 403);
+  assert.equal((await fetchJson(`${fresh.baseUrl}/api/setup/api-key`, { method: "POST", headers: auth(minted.body.adminToken), body: JSON.stringify({ apiKey: "x" }) })).status, 403);
+  const users = await fetchJson(`${fresh.baseUrl}/api/gateway/users`, { headers: auth(minted.body.adminToken) });
+  assert.equal(users.status, 200);
+
+  // A gateway restarted on the same data volume stays configured.
+  const restarted = await startGateway({ envSecrets: false, dataDir: fresh.dataDir });
+  const health = await fetchJson(`${restarted.baseUrl}/health`);
+  assert.equal(health.body.needsSetup, false);
+});
+
 async function createUser(baseUrl, name) {
   const created = await fetchJson(`${baseUrl}/api/gateway/users`, {
     method: "POST",
@@ -197,11 +251,12 @@ async function fetchJson(url, init = {}) {
   return { status: response.status, body };
 }
 
-async function startGateway() {
-  const dataDir = await mkdtemp(path.join(tmpdir(), "any-obs-gateway-test-"));
+async function startGateway({ envSecrets = true, bootstrapToken = "", dataDir: dataDirOverride } = {}) {
+  const dataDir = dataDirOverride ?? await mkdtemp(path.join(tmpdir(), "any-obs-gateway-test-"));
   const upstream = fakeAnythingllm();
   const server = createGatewayServer({
     userStore: createUserStore({ dataDir, sharedWorkspaceSlug: SHARED }),
+    gatewayConfig: (await import("./gateway-config.mjs")).createGatewayConfig({ dataDir }),
     sourceManager: createSourceManager({
       dataDir,
       baseUrl: "http://anythingllm.test",
@@ -211,15 +266,16 @@ async function startGateway() {
       runGit: async () => "",
     }),
     anythingllmBaseUrl: "http://anythingllm.test",
-    anythingllmApiKey: "admin-key",
+    anythingllmApiKey: envSecrets ? "admin-key" : "",
     sharedWorkspaceSlug: SHARED,
-    adminToken: ADMIN_TOKEN,
+    adminToken: envSecrets ? ADMIN_TOKEN : "",
+    bootstrapToken,
     fetchImpl: upstream.fetchImpl,
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   test.after(() => server.close());
-  return { baseUrl: `http://127.0.0.1:${port}`, upstream };
+  return { baseUrl: `http://127.0.0.1:${port}`, upstream, dataDir };
 }
 
 function fakeAnythingllm() {
@@ -240,6 +296,13 @@ function fakeAnythingllm() {
     const slugMatch = parsed.pathname.match(/^\/api\/v1\/workspace\/([^/]+)\//);
     if (slugMatch) call.slug = decodeURIComponent(slugMatch[1]);
     calls.push(call);
+
+    // AnythingLLM itself rejects calls without a valid developer key —
+    // this is what the setup wizard's paste-verify relies on.
+    const bearer = String(init.headers?.Authorization ?? "");
+    if (parsed.pathname.startsWith("/api/v1/") && bearer !== "Bearer admin-key" && bearer !== "Bearer minted-developer-key") {
+      return jsonResponse(401, { error: "invalid api key" });
+    }
 
     if (parsed.pathname === "/api/v1/workspaces") return jsonResponse(200, { workspaces: state.workspaces });
     if (parsed.pathname === "/api/v1/workspace/new") {

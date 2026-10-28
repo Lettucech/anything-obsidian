@@ -1,12 +1,13 @@
 # The any-obs server stack: one shared AnythingLLM plus the IAM gateway.
 #   docker compose up -d
-# The gateway (21500) is the only service published to the LAN. AnythingLLM
-# is reachable only inside the compose network — for its admin UI use an SSH
-# tunnel (ssh -L 3001:localhost:3001 <server>) or a loopback bind below.
+# Then open http://<server>:21500 and run the setup wizard in the dashboard —
+# no .env values are required (server/.env exists only for optional
+# non-interactive overrides).
 #
-# Required environment (put in .env next to this file):
-#   ANYTHINGLLM_API_KEY  — the developer API key; the gateway is its sole holder
-#   GATEWAY_ADMIN_TOKEN  — token for gateway administration (users, sources)
+# AnythingLLM's UI is reachable for first-boot setup on the host loopback
+# only (127.0.0.1:30001): on the server itself, or via
+#   ssh -L 30001:127.0.0.1:30001 <server>
+# The dashboard's wizard walks you through this. Never bind it to the LAN.
 services:
   anythingllm:
     image: mintplexlabs/anythingllm:latest
@@ -14,8 +15,8 @@ services:
     volumes:
       - anythingllm-storage:/app/server/storage
     # Loopback-only publish so an admin can reach the UI on the server itself
-    # or over an SSH tunnel (ssh -L 30001:127.0.0.1:30001 <server>) to finish
-    # first-boot setup and mint the developer API key. Never on the LAN.
+    # or over an SSH tunnel to finish first-boot setup and mint the developer
+    # API key. Never on the LAN.
     ports:
       - "127.0.0.1:30001:3001"
 
@@ -28,8 +29,11 @@ services:
       - anythingllm
     environment:
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
-      ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY}
-      GATEWAY_ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN}
+      # Secrets are optional: the dashboard wizard collects them into the
+      # data volume. Set them here only for non-interactive deployments.
+      ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
+      GATEWAY_ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN:-}
+      GATEWAY_BOOTSTRAP_TOKEN: ${GATEWAY_BOOTSTRAP_TOKEN:-}
       GATEWAY_PORT: "21500"
       SHARED_WORKSPACE_SLUG: ${SHARED_WORKSPACE_SLUG:-shared}
     ports:

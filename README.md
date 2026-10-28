@@ -227,53 +227,41 @@ across all of them in one query, and runs the shared-source pipeline (git
 pull or directory re-read, then reindex) that is the only writer to the
 shared workspace.
 
-Bring-up is two passes, because the gateway's API key is minted by the
-AnythingLLM instance the stack itself just created:
+Bring-up is one command and one browser page — no `.env` values required:
 
-1. **Start the stack, finish AnythingLLM's first boot.**
+1. **Start the stack.**
 
    ```bash
    cd server
    docker compose up -d
    ```
 
-   AnythingLLM's UI listens on the **server's loopback only**
-   (`127.0.0.1:30001`) — it is never on the LAN. Open
-   `http://localhost:30001` on the server itself, or tunnel from your
-   machine with `ssh -L 30001:127.0.0.1:30001 <server>` and open the same
-   URL. Complete its setup wizard (it asks you to create its own admin
-   account), then go to **Settings → Developer API** and generate an API
-   key.
+   (Optional: `cp .env.example .env` only if you want to preset secrets for
+   a non-interactive deployment. Normal deployments leave it empty.)
 
-2. **Fill `server/.env` and bring the gateway up with the secrets.**
+2. **Open the gateway dashboard** at `http://<server>:21500` and follow the
+   setup wizard:
 
-   ```bash
-   cp .env.example .env
-   docker compose up -d   # recreates the gateway with the new env
-   ```
+   - **Step 1 — admin credential:** the wizard shows the gateway admin
+     token once; you sign in with it from then on. (Fresh deployments also
+     accept the one-time setup token printed to `docker compose logs
+     gateway` if you prefer proving server access first.)
+   - **Step 2 — initialize AnythingLLM:** its own UI is not on the network —
+     the wizard shows the exact command
+     (`ssh -L 30001:127.0.0.1:30001 <server>`, or open
+     `http://localhost:30001` on the server). Finish AnythingLLM's first-boot
+     wizard there and generate the developer API key
+     (Settings → Developer API).
+   - **Step 3 — connect:** paste the key. The gateway verifies it, becomes
+     its only holder (it never lives on any user's machine), and prepares
+     the shared workspace.
 
-   - `ANYTHINGLLM_API_KEY` — the key you generated in step 1. The gateway
-     becomes its only holder; user machines never see it.
-   - `GATEWAY_ADMIN_TOKEN` — this one is **yours to create**: any long
-     random secret (e.g. `openssl rand -base64 32`). It is the gateway's
-     own admin credential for managing users and shared sources.
-   - `SHARED_WORKSPACE_SLUG` — optional, defaults to `shared`.
-
-   On this pass the gateway verifies or creates the shared workspace. Verify
-   with `curl http://<server>:21500/health`.
-
-3. **Create users and connect clients.**
-
-   ```bash
-   curl -X POST http://<server>:21500/api/gateway/users \
-     -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN" \
-     -H "Content-Type: application/json" -d '{"name":"brian"}'
-   ```
-
-   The response returns the user's token **once** (store it; only its
-   SHA-256 hash is kept). See
-   `docs/superpowers/specs/2026-10-28-iam-middleware.md` for the full
-   surface (users, shared sources, refresh jobs).
+   After setup, the dashboard's tabs manage everything day to day: **Users**
+   (create a user, token shown once), **Shared sources** (register the git
+   repos or server directories that feed the shared workspace, trigger
+   refreshes, watch jobs), and the **Overview** with client and MCP
+   connection snippets. Full API surface:
+   `docs/superpowers/specs/2026-10-28-iam-middleware.md`.
 
 - **any-obs clients** connect exactly as before —
   `--url http://<server>:21500 --api-key <user-token>`. The unified workspace
