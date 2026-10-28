@@ -4,7 +4,7 @@
 //
 // Conservative by design: user tokens get exactly what a client or consumer
 // needs (entitled RAG, their own workspace lifecycle and document folders)
-// and everything else is denied. The admin token passes through for
+// and everything else is denied. The admin-plane identity passes through for
 // recovery. The gateway's own shared-source pipeline never goes through the
 // proxy — it talks to AnythingLLM directly with the admin key, keeping the
 // pipeline the only writer to the shared workspace.

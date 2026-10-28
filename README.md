@@ -20,12 +20,13 @@ loopback unless marked otherwise:
 
 | Port | Surface | Where |
 |---|---|---|
-| 21500 | IAM gateway (API, MCP, dashboard) | server stack, published |
+| 21500 | IAM gateway public plane (MCP + user API) | server stack, published on the LAN |
 | 21501 | AnythingLLM UI | server host loopback only (first-boot setup) |
 | 21502 | Client dashboard | loopback only |
 | 21503 | Client local MCP | loopback only |
 | 21504 | Client LAN MCP | opt-in, LAN, Bearer token required |
-| 21505–21510 | Reserved for future any-obs surfaces | — |
+| 21505 | Gateway admin dashboard | server host loopback only |
+| 21506–21510 | Reserved for future any-obs surfaces | — |
 
 AnythingLLM itself (inside the server stack) keeps its container port 3001
 and is never published beyond the host loopback. Ports are overridable per
@@ -259,22 +260,18 @@ Bring-up is one command and one browser page — no `.env` values required:
    (Optional: `cp .env.example .env` only if you want to preset secrets for
    a non-interactive deployment. Normal deployments leave it empty.)
 
-2. **Open the gateway dashboard** at `http://<server>:21500` and follow the
-   setup wizard:
+2. **Open the gateway admin dashboard** — it is loopback-only
+   (`http://localhost:21505` on the server, or
+   `ssh -L 21505:127.0.0.1:21505 -L 21501:127.0.0.1:21501 <server>` from your
+   machine, which tunnels AnythingLLM's UI too). Reaching it is the admin
+   credential — same trust model as the client dashboard. Follow the
+   two-step wizard:
 
-   - **Step 1 — admin credential:** first run claims the gateway: the
-     wizard generates the admin token and shows it once — copy it and
-     complete setup right away (anyone on the network could open this page
-     while it waits; deployments that want that window closed preset
-     `GATEWAY_ADMIN_TOKEN` in `server/.env`, and the wizard then demands
-     it).
-   - **Step 2 — initialize AnythingLLM:** its own UI is not on the network —
-     the wizard shows the exact command
-     (`ssh -L 21501:127.0.0.1:21501 <server>`, or open
-     `http://localhost:21501` on the server). Finish AnythingLLM's first-boot
-     wizard there and generate the developer API key
+   - **Step 1 — initialize AnythingLLM:** its UI is never on the network;
+     the wizard shows the exact tunnel command. Finish AnythingLLM's
+     first-boot wizard there and generate the developer API key
      (Settings → Developer API).
-   - **Step 3 — connect:** paste the key. The gateway verifies it, becomes
+   - **Step 2 — connect:** paste the key. The gateway verifies it, becomes
      its only holder (it never lives on any user's machine), and prepares
      the shared workspace.
 

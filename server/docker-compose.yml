@@ -1,13 +1,16 @@
 # The any-obs server stack: one shared AnythingLLM plus the IAM gateway.
 #   docker compose up -d
-# Then open http://<server>:21500 and run the setup wizard in the dashboard —
+# Then open the gateway admin dashboard and run the setup wizard —
 # no .env values are required (server/.env exists only for optional
 # non-interactive overrides).
 #
-# AnythingLLM's UI is reachable for first-boot setup on the host loopback
-# only (127.0.0.1:21501): on the server itself, or via
-#   ssh -L 21501:127.0.0.1:21501 <server>
-# The dashboard's wizard walks you through this. Never bind it to the LAN.
+# Two planes, same trust model as the client (loopback dashboard, LAN service):
+#   :21500 public  — MCP + user API, published on the LAN, user token required
+#   :21505 admin   — dashboard + setup + management, HOST LOOPBACK ONLY
+#                    (reach it on the server or ssh -L 21505:127.0.0.1:21505;
+#                    server access is the admin credential)
+# AnythingLLM's UI is likewise loopback-only on 127.0.0.1:21501 for
+# first-boot setup (ssh -L 21501:127.0.0.1:21501).
 services:
   anythingllm:
     image: mintplexlabs/anythingllm:latest
@@ -33,15 +36,19 @@ services:
       - anythingllm
     environment:
       ANYTHINGLLM_BASE_URL: http://anythingllm:3001
-      # Secrets are optional: the dashboard wizard collects them into the
-      # data volume. Set them here only for non-interactive deployments.
+      # The API key is optional: the dashboard wizard collects it into the
+      # data volume. Set it here only for non-interactive deployments.
       ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
-      GATEWAY_ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN:-}
-      GATEWAY_BOOTSTRAP_TOKEN: ${GATEWAY_BOOTSTRAP_TOKEN:-}
       GATEWAY_PORT: "21500"
+      GATEWAY_ADMIN_PORT: "21505"
+      # Inside the container both planes bind all interfaces; the loopback
+      # restriction on the admin plane is enforced by the host publish below.
+      GATEWAY_BIND: 0.0.0.0
+      GATEWAY_ADMIN_BIND: 0.0.0.0
       SHARED_WORKSPACE_SLUG: ${SHARED_WORKSPACE_SLUG:-shared}
     ports:
       - "21500:21500"
+      - "127.0.0.1:21505:21505"
     volumes:
       - gateway-data:/data
 

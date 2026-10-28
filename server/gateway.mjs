@@ -1,18 +1,22 @@
 #!/usr/bin/env node
-// The any-obs gateway: IAM front door for a shared AnythingLLM. Holds the
-// single admin API key, issues per-user tokens, enforces entitlements on
-// every proxied call, fans searches out across entitled workspaces, serves
-// a token-gated RAG-only MCP endpoint, and runs the shared-source pipeline
-// that is the only writer to the shared workspace.
+// The any-obs gateway: IAM front door for a shared AnythingLLM. It runs two
+// planes with the same trust model as the client (loopback dashboard, LAN
+// service):
 //
-// Ports and posture: the gateway is the only compose service published to
-// the LAN (default 21500). AnythingLLM itself is never published; its chat
-// UI stays reachable only from the server host.
+//   public plane (21500, published): MCP endpoint, fan-out search, and the
+//     user-token-authenticated AnythingLLM proxy. Every call needs a user
+//     token; no dashboard, no admin surface lives here.
+//   admin plane (21505, host loopback only): the dashboard, its setup
+//     wizard, user/source management, and a full passthrough proxy for
+//     recovery. Reaching it requires server access (SSH/physical), which
+//     IS the admin proof — the same "loopback caller is the user's
+//     delegate" rule the client dashboard has always used.
+//
+// The gateway remains the sole holder of the AnythingLLM developer key.
 import { createServer } from "node:http";
-import { randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -26,55 +30,53 @@ import { createSourceManager } from "./sources.mjs";
 import { joinUrl, stripTrailingSlash } from "./http-utils.mjs";
 
 export const DEFAULT_GATEWAY_PORT = 21500;
+export const DEFAULT_GATEWAY_ADMIN_PORT = 21505;
 const pkg = await readPackageInfo();
-const dashboardRoot = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "dashboard");
+const dashboardRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "dashboard");
 
 export function createGatewayServer({
+  plane = "public",
   env = process.env,
   userStore,
   sourceManager,
-  gatewayConfig = createGatewayConfig({ dataDir: env.GATEWAY_DATA_DIR ? path.resolve(env.GATEWAY_DATA_DIR) : path.join(env.HOME ?? ".", ".anything-obsidian-gateway") }),
+  gatewayConfig = createGatewayConfig({ dataDir: defaultDataDir(env) }),
   anythingllmBaseUrl = env.ANYTHINGLLM_BASE_URL ?? "",
   anythingllmApiKey = env.ANYTHINGLLM_API_KEY ?? "",
   sharedWorkspaceSlug = env.SHARED_WORKSPACE_SLUG ?? "shared",
-  adminToken = env.GATEWAY_ADMIN_TOKEN ?? "",
-  bootstrapToken = env.GATEWAY_BOOTSTRAP_TOKEN ?? "",
   fetchImpl = fetch,
 }) {
+  if (plane !== "public" && plane !== "admin") throw new Error(`Unknown gateway plane: ${plane}`);
   const baseUrl = stripTrailingSlash(anythingllmBaseUrl);
-  // Wizard-collected secrets live in the data volume; both are cached here
-  // at boot and refreshed whenever setup writes them, so token checks stay
-  // synchronous.
-  let configuredAdminToken = "";
+  // The wizard-collected API key lives in the data volume; cached here so
+  // token/key checks stay synchronous.
   let configuredApiKey = "";
   void gatewayConfig.load().then((state) => {
-    configuredAdminToken = state.adminToken;
     configuredApiKey = state.apiKey;
   }).catch(() => {});
 
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://gateway");
+      const identity = plane === "admin"
+        ? { kind: "admin" } // loopback reach is the proof
+        : publicIdentity(req.headers.authorization);
 
       if (req.method === "GET" && url.pathname === "/health") {
         return await sendHealth(res);
       }
 
-      if (url.pathname === "/api/setup/state" && req.method === "GET") {
+      if (url.pathname.startsWith("/api/setup/") && plane !== "admin") {
+        return sendJson(res, 404, { error: "Not found" });
+      }
+      if (plane === "admin" && url.pathname === "/api/setup/state" && req.method === "GET") {
         return sendJson(res, 200, await setupState());
       }
-
-      if (url.pathname === "/api/setup/admin-token") {
-        return await handleSetupAdminToken(req, res);
-      }
-
-      if (url.pathname === "/api/setup/api-key") {
+      if (plane === "admin" && url.pathname === "/api/setup/api-key") {
         return await handleSetupApiKey(req, res);
       }
 
-      const identity = resolveIdentity(req.headers.authorization);
-
       if (url.pathname === "/mcp") {
+        if (plane !== "public") return sendJson(res, 404, { error: "Not found" });
         if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
         if (!identity) return sendJson(res, 401, { error: "Bearer token required" });
         const body = await readRawBody(req);
@@ -97,7 +99,7 @@ export function createGatewayServer({
         return await handleProxy({ req, res, url, identity });
       }
 
-      if (req.method === "GET") {
+      if (plane === "admin" && req.method === "GET") {
         return await serveDashboard(res, url.pathname);
       }
 
@@ -110,131 +112,46 @@ export function createGatewayServer({
     }
   });
 
-  async function serveDashboard(res, pathname) {
-    const file = pathname === "/" ? "index.html" : pathname.replace(/^\/dashboard\/?/, "").replace(/^\/+/, "");
-    if (!file || file.includes("..")) return serveDashboardFile(res, "index.html");
-    return serveDashboardFile(res, file);
-  }
-
-  async function serveDashboardFile(res, file) {
-    let body;
-    try {
-      const { readFile } = await import("node:fs/promises");
-      body = await readFile(path.join(dashboardRoot, file));
-    } catch {
-      return sendJson(res, 404, { error: "Not found" });
-    }
-    res.writeHead(200, { "content-type": file.endsWith(".js") ? "text/javascript; charset=utf-8" : file.endsWith(".css") ? "text/css; charset=utf-8" : "text/html; charset=utf-8" });
-    res.end(body);
+  function publicIdentity(header) {
+    const match = /^Bearer\s+(.+)$/i.exec(String(header ?? ""));
+    return match ? userStore.verify(match[1].trim()) : null;
   }
 
   function apiKeyActive() {
-    // Env wins for non-interactive deployments; the wizard-collected key is
-    // the default path.
     return anythingllmApiKey || configuredApiKey;
   }
 
-  function adminTokenActive() {
-    return adminToken || configuredAdminToken;
-  }
-
-  function resolveIdentity(header) {
-    const match = /^Bearer\s+(.+)$/i.exec(String(header ?? ""));
-    if (!match) return null;
-    const token = match[1].trim();
-    const activeAdmin = adminTokenActive();
-    if (activeAdmin && token === activeAdmin) return { kind: "admin" };
-    return userStore.verify(token);
-  }
-
   async function sendHealth(res) {
-    const state = await gatewayConfig.load();
     return sendJson(res, 200, {
       ok: true,
       name: "any-obs-gateway",
+      plane,
       version: pkg.version,
       sharedWorkspace: sharedWorkspaceSlug,
-      configured: Boolean((anythingllmApiKey && adminToken) || (state.apiKey && state.adminToken)),
-      needsSetup: await needsSetup(),
+      configured: Boolean(apiKeyActive()),
       users: (await userStore.list()).length,
     });
   }
 
   async function needsSetup() {
-    if (anythingllmApiKey && adminToken) return false;
-    return !(await gatewayConfig.configured());
+    return !apiKeyActive();
   }
 
   async function setupState() {
-    const needs = await needsSetup();
-    const envBased = Boolean(anythingllmApiKey && adminToken);
-    const state = await gatewayConfig.load();
     return {
-      needsSetup: needs,
+      needsSetup: await needsSetup(),
       anythingllmBaseUrl: baseUrl,
       anythingllmUiUrl: "http://localhost:21501",
       sharedWorkspace: sharedWorkspaceSlug,
-      hasAdminCredential: Boolean(adminToken || state.adminToken),
-      hasApiKey: Boolean(anythingllmApiKey || state.apiKey),
-      // Hardened deployments preset a credential; the wizard then demands
-      // it. Otherwise first-run runs as an open claim window.
-      credentialRequired: Boolean(adminToken || bootstrapToken),
-      envBased,
+      hasApiKey: Boolean(apiKeyActive()),
     };
   }
 
-  // The setup endpoints only exist while the gateway is unconfigured; once
-  // the wizard completes they disappear (403) so they can never re-open the
-  // front door on a running deployment.
-  async function guardSetup() {
-    if (!(await needsSetup())) throw httpError(403, "Gateway is already configured; setup is closed");
-  }
-
-  function presentedBearer(req) {
-    const match = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization ?? ""));
-    return match?.[1]?.trim() ?? "";
-  }
-
-  // First contact follows the self-hosted claim model by default: with no
-  // preset credential the first dashboard visitor mints the admin token, so
-  // a fresh deployment should complete setup immediately. Operators who
-  // want the window closed can preset GATEWAY_ADMIN_TOKEN (or a bootstrap
-  // token) and the wizard demands it instead.
-  function setupAuthorized(req) {
-    if (!adminTokenActive() && !bootstrapToken) return true;
-    const presented = presentedBearer(req);
-    if (!presented) return false;
-    if (adminTokenActive() && presented === adminTokenActive()) return true;
-    return Boolean(bootstrapToken) && presented === bootstrapToken;
-  }
-
-  async function handleSetupAdminToken(req, res) {
-    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
-    await guardSetup();
-
-    // An env-preset admin token is the credential; the caller must prove
-    // they hold it before anything is handed back.
-    if (adminToken) {
-      if (!setupAuthorized(req)) throw httpError(401, "Bearer token required (the preset gateway admin or bootstrap token)");
-      return sendJson(res, 200, { adminToken, stored: false });
-    }
-
-    const state = await gatewayConfig.load();
-    // Once minted, the credential is never displayed again — a later
-    // visitor of the same wizard learns only that it is claimed.
-    if (state.adminToken) return sendJson(res, 200, { alreadyClaimed: true });
-
-    if (!setupAuthorized(req)) throw httpError(401, "Bearer token required (the preset gateway admin or bootstrap token)");
-    const generated = randomBytes(24).toString("base64url");
-    await gatewayConfig.save({ adminToken: generated });
-    configuredAdminToken = generated;
-    return sendJson(res, 201, { adminToken: generated, stored: true });
-  }
-
+  // The setup endpoint only exists while the gateway has no key; once the
+  // wizard completes it disappears (403) so it can never re-open.
   async function handleSetupApiKey(req, res) {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
-    await guardSetup();
-    if (!setupAuthorized(req)) throw httpError(401, "Bearer token required (the preset gateway admin or bootstrap token)");
+    if (!(await needsSetup())) throw httpError(403, "Gateway is already configured; setup is closed");
     const body = await maybeJson(req);
     const candidate = stripTrailingSlash(String(body?.apiKey ?? "").trim());
     if (!candidate) throw httpError(400, "apiKey is required");
@@ -243,53 +160,45 @@ export function createGatewayServer({
     const probe = await fetchImpl(`${baseUrl}/api/v1/workspaces`, {
       headers: { Accept: "application/json", Authorization: `Bearer ${candidate}` },
     });
-    if (!probe.ok) {
-      throw httpError(400, `AnythingLLM rejected this API key (HTTP ${probe.status})`);
-    }
+    if (!probe.ok) throw httpError(400, `AnythingLLM rejected this API key (HTTP ${probe.status})`);
 
     await gatewayConfig.save({ apiKey: candidate });
     configuredApiKey = candidate;
     const workspace = await ensureSharedWorkspace({
       baseUrl, apiKey: candidate, slug: sharedWorkspaceSlug, fetchImpl,
     });
-    return sendJson(res, 200, {
-      configured: true,
-      sharedWorkspace: workspace,
-    });
+    return sendJson(res, 200, { configured: true, sharedWorkspace: workspace });
   }
 
   async function handleGatewayApi({ req, res, url, identity, body }) {
-    const requireIdentity = () => {
-      if (!identity) throw httpError(401, "Bearer token required");
-      return identity;
-    };
-    const requireAdmin = () => {
-      const who = requireIdentity();
-      if (who.kind !== "admin") throw httpError(403, "Gateway admin token required");
-      return who;
+    const adminOnly = () => {
+      // Admin routes exist on the admin plane only; reaching it means
+      // server access, which is the credential.
+      if (plane !== "admin") throw httpError(404, "Not found");
+      return { kind: "admin" };
     };
 
     if (url.pathname === "/api/gateway/users") {
       if (req.method === "GET") {
-        requireAdmin();
+        adminOnly();
         return sendJson(res, 200, { users: await userStore.list() });
       }
       if (req.method === "POST") {
-        requireAdmin();
+        adminOnly();
         const created = await userStore.create(body);
         return sendJson(res, 201, created);
       }
     }
     const userMatch = url.pathname.match(/^\/api\/gateway\/users\/([a-z0-9-]+)$/);
     if (userMatch && req.method === "DELETE") {
-      requireAdmin();
+      adminOnly();
       const removed = await userStore.remove(userMatch[1]);
       return removed ? sendJson(res, 200, { removed: true }) : sendJson(res, 404, { error: "User was not found" });
     }
 
     if (url.pathname === "/api/gateway/search" && req.method === "POST") {
-      const who = requireIdentity();
-      const entitlements = await entitlementsFor(who);
+      if (!identity) throw httpError(401, "Bearer token required");
+      const entitlements = await entitlementsFor(identity);
       return sendJson(res, 200, await fanoutSearch({
         query: String(body?.query ?? ""),
         topN: clampTopN(body?.topN),
@@ -303,30 +212,30 @@ export function createGatewayServer({
 
     if (url.pathname === "/api/gateway/sources") {
       if (req.method === "GET") {
-        requireIdentity();
+        if (!identity) throw httpError(401, "Bearer token required");
         return sendJson(res, 200, { sources: await sourceManager.list() });
       }
       if (req.method === "POST") {
-        requireAdmin();
+        adminOnly();
         return sendJson(res, 201, await sourceManager.create(body));
       }
     }
     const sourceMatch = url.pathname.match(/^\/api\/gateway\/sources\/([a-z0-9-]+)$/);
     if (sourceMatch && req.method === "DELETE") {
-      requireAdmin();
+      adminOnly();
       const removed = await sourceManager.remove(sourceMatch[1]);
       return removed ? sendJson(res, 200, { removed: true }) : sendJson(res, 404, { error: "Source was not found" });
     }
     const refreshMatch = url.pathname.match(/^\/api\/gateway\/sources\/([a-z0-9-]+)\/refresh$/);
     if (refreshMatch && req.method === "POST") {
-      requireIdentity();
+      if (!identity) throw httpError(401, "Bearer token required");
       const source = await sourceManager.get(refreshMatch[1]);
       if (!source) return sendJson(res, 404, { error: "Source was not found" });
       return sendJson(res, 202, sourceManager.requestRefresh(source.id));
     }
     const jobMatch = url.pathname.match(/^\/api\/gateway\/jobs\/([a-z0-9-]+)$/);
     if (jobMatch && req.method === "GET") {
-      requireIdentity();
+      if (!identity) throw httpError(401, "Bearer token required");
       const job = sourceManager.job(jobMatch[1]);
       return job ? sendJson(res, 200, job) : sendJson(res, 404, { error: "Job was not found" });
     }
@@ -335,7 +244,8 @@ export function createGatewayServer({
   }
 
   async function handleProxy({ req, res, url, identity }) {
-    const entitlements = identity ? await entitlementsFor(identity) : null;
+    if (!identity) return sendJson(res, 401, { error: "Bearer token required" });
+    const entitlements = await entitlementsFor(identity);
     let bodyJson = null;
     if (req.method === "DELETE" && url.pathname === "/api/v1/document/remove-folder") {
       bodyJson = await maybeJson(req);
@@ -375,7 +285,7 @@ export function createGatewayServer({
     if (decision.action === "create-workspace" && upstream.ok) {
       const data = safeJson(buffer.toString("utf8"));
       const slug = data?.workspace?.slug ?? data?.slug;
-      if (slug) await userStore.recordOwnership(slug, identity.name);
+      if (slug && identity.kind === "user") await userStore.recordOwnership(slug, identity.name);
     }
 
     res.writeHead(upstream.status, {
@@ -476,10 +386,28 @@ export function createGatewayServer({
     }
     return { read: [], write: [] };
   }
+
+  async function serveDashboard(res, pathname) {
+    const file = pathname === "/" ? "index.html" : pathname.replace(/^\/dashboard\/?/, "").replace(/^\/+/, "");
+    if (!file || file.includes("..")) return serveDashboardFile(res, "index.html");
+    return serveDashboardFile(res, file);
+  }
+
+  async function serveDashboardFile(res, file) {
+    let body;
+    try {
+      const { readFile } = await import("node:fs/promises");
+      body = await readFile(path.join(dashboardRoot, file));
+    } catch {
+      return sendJson(res, 404, { error: "Not found" });
+    }
+    res.writeHead(200, { "content-type": file.endsWith(".js") ? "text/javascript; charset=utf-8" : file.endsWith(".css") ? "text/css; charset=utf-8" : "text/html; charset=utf-8" });
+    res.end(body);
+  }
 }
 
-// The shared workspace is gateway state, not user state: make sure it exists
-// once at boot. Never deletes anything.
+// The shared workspace is gateway state: make sure it exists once a key is
+// available. Never deletes anything.
 export async function ensureSharedWorkspace({ baseUrl, apiKey, slug, name = "any-obs shared", fetchImpl = fetch }) {
   const root = stripTrailingSlash(baseUrl);
   const listResponse = await fetchImpl(`${root}/api/v1/workspaces`, {
@@ -501,6 +429,12 @@ export async function ensureSharedWorkspace({ baseUrl, apiKey, slug, name = "any
   const created = safeJson(createText)?.workspace;
   if (!created?.slug) throw new Error("AnythingLLM returned an invalid workspace");
   return { slug: created.slug, name: created.name ?? created.slug, created: true };
+}
+
+function defaultDataDir(env) {
+  return env.GATEWAY_DATA_DIR
+    ? path.resolve(env.GATEWAY_DATA_DIR)
+    : path.join(env.HOME ?? ".", ".anything-obsidian-gateway");
 }
 
 function httpError(status, message) {
@@ -576,12 +510,7 @@ if (import.meta.url === entryUrl()) {
     console.error("ANYTHINGLLM_BASE_URL is required (inside compose this is http://anythingllm:3001)");
     process.exit(1);
   }
-  if (!env.ANYTHINGLLM_API_KEY && !env.GATEWAY_ADMIN_TOKEN && !env.GATEWAY_BOOTSTRAP_TOKEN) {
-    console.error("[any-obs-gateway] unconfigured — the setup dashboard is in its first-run claim window: the first visitor mints the admin credential, so complete setup now (or preset GATEWAY_ADMIN_TOKEN before deploy to require it)");
-  }
-  const dataDir = env.GATEWAY_DATA_DIR
-    ? path.resolve(env.GATEWAY_DATA_DIR)
-    : path.join(env.HOME ?? ".", ".anything-obsidian-gateway");
+  const dataDir = defaultDataDir(env);
   const sharedWorkspaceSlug = env.SHARED_WORKSPACE_SLUG ?? "shared";
   const gatewayConfig = createGatewayConfig({ dataDir });
   const userStore = createUserStore({ dataDir, sharedWorkspaceSlug });
@@ -591,49 +520,39 @@ if (import.meta.url === entryUrl()) {
     apiKey: env.ANYTHINGLLM_API_KEY ?? "",
     sharedWorkspaceSlug,
   });
-
-  const bootstrap = async () => {
-    // Env-provided secrets win (non-interactive deploys); otherwise the
-    // dashboard wizard collects them into the data volume.
-    if (!env.ANYTHINGLLM_API_KEY || !env.GATEWAY_ADMIN_TOKEN) {
-      const state = await gatewayConfig.load();
-      if (state.adminToken && state.apiKey) {
-        console.error("[any-obs-gateway] credentials loaded from the data volume");
-        if (!env.ANYTHINGLLM_API_KEY) {
-          const probe = await ensureSharedWorkspace({
-            baseUrl: env.ANYTHINGLLM_BASE_URL,
-            apiKey: state.apiKey,
-            slug: sharedWorkspaceSlug,
-          }).catch((error) => ({ error }));
-          if (probe?.error) console.error(`[any-obs-gateway] shared workspace not verified yet: ${probe.error?.message ?? probe.error}`);
-          else console.error(`[any-obs-gateway] shared workspace '${probe.slug}' ready`);
-        }
-        return;
-      }
-      console.error("[any-obs-gateway] not configured yet — open the dashboard and run the setup wizard");
-      return;
-    }
-    const workspace = await ensureSharedWorkspace({
-      baseUrl: env.ANYTHINGLLM_BASE_URL,
-      apiKey: env.ANYTHINGLLM_API_KEY,
-      slug: sharedWorkspaceSlug,
-    }).catch((error) => ({ error }));
-    if (workspace?.error) console.error(`[any-obs-gateway] shared workspace not verified yet: ${workspace.error?.message ?? workspace.error}`);
-    else console.error(`[any-obs-gateway] shared workspace '${workspace.slug}' ready`);
-  };
-  bootstrap();
-
-  const port = Number(env.GATEWAY_PORT ?? DEFAULT_GATEWAY_PORT);
-  createGatewayServer({
+  const shared = {
     userStore,
     sourceManager,
     gatewayConfig,
     anythingllmBaseUrl: env.ANYTHINGLLM_BASE_URL,
     anythingllmApiKey: env.ANYTHINGLLM_API_KEY ?? "",
     sharedWorkspaceSlug,
-    adminToken: env.GATEWAY_ADMIN_TOKEN ?? "",
-  }).listen(port, env.GATEWAY_BIND ?? "0.0.0.0", () => {
-    console.error(`[any-obs-gateway] listening on ${env.GATEWAY_BIND ?? "0.0.0.0"}:${port} (shared workspace: ${sharedWorkspaceSlug})`);
+  };
+
+  const bootstrap = async () => {
+    const state = await gatewayConfig.load();
+    const key = env.ANYTHINGLLM_API_KEY || state.apiKey;
+    if (!key) {
+      console.error(`[any-obs-gateway] no AnythingLLM key yet — open the admin dashboard (loopback :${env.GATEWAY_ADMIN_PORT ?? DEFAULT_GATEWAY_ADMIN_PORT}) and run the setup wizard`);
+      return;
+    }
+    try {
+      const workspace = await ensureSharedWorkspace({ baseUrl: env.ANYTHINGLLM_BASE_URL, apiKey: key, slug: sharedWorkspaceSlug });
+      console.error(`[any-obs-gateway] shared workspace '${workspace.slug}' ready`);
+    } catch (error) {
+      console.error(`[any-obs-gateway] shared workspace not verified yet: ${error?.message ?? error}`);
+    }
+  };
+  bootstrap();
+
+  const port = Number(env.GATEWAY_PORT ?? DEFAULT_GATEWAY_PORT);
+  createGatewayServer({ ...shared, plane: "public" }).listen(port, env.GATEWAY_BIND ?? "0.0.0.0", () => {
+    console.error(`[any-obs-gateway] public plane on ${env.GATEWAY_BIND ?? "0.0.0.0"}:${port} (MCP + user API; user token required)`);
+  });
+
+  const adminPort = Number(env.GATEWAY_ADMIN_PORT ?? DEFAULT_GATEWAY_ADMIN_PORT);
+  createGatewayServer({ ...shared, plane: "admin" }).listen(adminPort, env.GATEWAY_ADMIN_BIND ?? "127.0.0.1", () => {
+    console.error(`[any-obs-gateway] admin plane on ${env.GATEWAY_ADMIN_BIND ?? "127.0.0.1"}:${adminPort} (dashboard + setup; loopback reach is the credential)`);
   });
 
   setInterval(() => {

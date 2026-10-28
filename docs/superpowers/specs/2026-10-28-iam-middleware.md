@@ -30,20 +30,27 @@ Design decisions settled in discussion (2026-10-28):
 
 ## Identity model
 
-- One **gateway admin token** (env `GATEWAY_ADMIN_TOKEN`) manages users,
-  sources, and gets full passthrough for recovery.
-- **Users** are named principals (`lowercase-dash`), each with a bearer token
-  (shown once, stored SHA-256). Entitlements:
-  - read: the shared workspace plus every workspace recorded as *owned* by
-    that user — ownership is captured when the user's token creates a
-    workspace through the proxy, which is how an any-obs client's unified
-    workspace becomes the user's personal workspace with zero client changes;
-  - write: owned workspaces and their vault pipeline document folders only.
-    The shared workspace is never user-writable — the gateway's own pipeline
-    is its only writer (it talks to AnythingLLM directly with the admin key,
-    never through the proxy).
-- Personal workspaces are not pre-provisioned: pure consumers (no local
-  any-obs) need only the shared workspace.
+There is **no gateway admin token**: the gateway runs two planes with the
+client's own trust model (loopback dashboard, LAN service).
+
+- **Public plane** (21500, published on the LAN): MCP endpoint, fan-out
+  search, and the user-token-authenticated AnythingLLM proxy. Every call
+  needs a **user token** (named principals, `lowercase-dash`, shown once,
+  stored SHA-256). Entitlements: read = the shared workspace plus
+  workspaces recorded as *owned* by that user — ownership is captured when
+  the user's token creates a workspace through the proxy, which is how an
+  any-obs client's unified workspace becomes the user's personal workspace
+  with zero client changes; write = owned workspaces and their vault
+  pipeline document folders only. The shared workspace is never
+  user-writable — the gateway's own pipeline is its only writer (it talks to
+  AnythingLLM directly with the admin key, never through the proxy). No
+  dashboard, setup, or admin surface exists on this plane.
+- **Admin plane** (21505, host loopback only): the dashboard, its setup
+  wizard, user/source management, and a full passthrough proxy for
+  recovery. Reaching it requires server access (SSH/physical), which is the
+  credential — the same "loopback caller is the user's delegate" rule the
+  client dashboard has always used. Personal workspaces are not
+  pre-provisioned: pure consumers need only the shared workspace.
 
 ## Proxy rules (`server/proxy-rules.mjs`)
 
@@ -57,12 +64,11 @@ Pure decisions per request; the gateway enforces them:
   slug is readable by the caller.
 - `POST /api/v1/document/upload/{folder}` and
   `DELETE /api/v1/document/remove-folder` → allowed iff the folder is one the
-  caller may write (own `anything-obsidian-vault-*` folders; the shared
-  folder only for `sharedWriter`).
+  caller may write (own `anything-obsidian-vault-*` folders).
 - `POST /api/v1/workspace/{slug}/update-embeddings` → allowed iff the slug is
   writable by the caller.
-- Everything else → user tokens are denied (conservative v1); the admin token
-  passes through.
+- Everything else → user tokens are denied (conservative v1); the admin
+  plane's passthrough identity carries recovery traffic.
 
 ## Fan-out search (`server/fanout.mjs`, `/api/gateway/search`)
 
@@ -83,18 +89,21 @@ workspace, one level up). Cross-workspace synthesized answers stay v2;
   interval, and requestable over the API/MCP — an agent's request queues an
   early run, it is never a synchronous heavy call.
 
-## Gateway surface (`server/gateway.mjs`, default port 21500)
+## Gateway surface
 
-- `GET /health` — no auth.
-- Admin API (`GATEWAY_ADMIN_TOKEN`): users create/list/delete, sources
-  create/list/delete, job status.
-- `POST /api/gateway/search` — token auth, fan-out search.
-- `POST /api/gateway/sources/{id}/refresh` — queues a pipeline job.
-- `/mcp` — token-gated MCP (streamable HTTP): `any_obs_rag_search`
-  (fan-out), `any_obs_rag_answer` (one workspace), `any_obs_shared_refresh`
-  (queue job), `any_obs_job_get`. No filesystem tools, ever.
-- Everything else under `/api/` — proxied to AnythingLLM under the proxy
-  rules with the admin key.
+- Public plane (default port 21500, published):
+  - `GET /health` — no auth.
+  - `POST /api/gateway/search` — user token, fan-out search.
+  - `POST /api/gateway/sources/{id}/refresh`, `GET /api/gateway/jobs/{id}` —
+    user token, queue a pipeline job / watch it.
+  - `/mcp` — token-gated MCP (streamable HTTP): `any_obs_rag_search`
+    (fan-out), `any_obs_rag_answer` (one workspace), `any_obs_shared_refresh`
+    (queue job), `any_obs_job_get`. No filesystem tools, ever.
+  - Everything else under `/api/` — proxied to AnythingLLM under the proxy
+    rules with the admin key.
+- Admin plane (default port 21505, host loopback only): the dashboard, the
+  setup wizard (`/api/setup/api-key` — exists only while unconfigured),
+  users and sources CRUD, and full-proxy passthrough for recovery.
 
 ## Deployment (`server/docker-compose.yml`)
 
@@ -102,9 +111,10 @@ workspace, one level up). Cross-workspace synthesized answers stay v2;
   (`127.0.0.1:21501`) so an admin can finish first-boot setup and mint the
   developer API key on the server itself or over an SSH tunnel; never on the
   LAN.
-- `gateway`: builds from `server/Dockerfile`, published on the LAN, volumes
-  for AnythingLLM storage, gateway data (users/sources/jobs/manifests), and
-  shared-source clones.
+- `gateway`: builds from `server/Dockerfile`; the public plane publishes on
+  the LAN (21500), the admin plane publishes on the host loopback only
+  (21505). Volumes for AnythingLLM storage, gateway data
+  (key/users/sources/jobs/manifests), and shared-source clones.
 
 ## Known v1 limits
 

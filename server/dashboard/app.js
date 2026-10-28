@@ -1,18 +1,14 @@
-const TOKEN_STORAGE_KEY = "any-obs-gateway-admin";
-
 const els = {
   headline: document.querySelector("#headline"),
   status: document.querySelector("#status-line"),
   view: document.querySelector("#view"),
 };
 
-let adminToken = window.localStorage.getItem(TOKEN_STORAGE_KEY) || "";
-
 boot();
 
 async function boot() {
-  const state = await request("/api/setup/state", { method: "GET", auth: false }).catch(() => null);
-  if (!state) return renderFatal("The gateway is not reachable. Is the server stack running?");
+  const state = await request("/api/setup/state", { method: "GET" }).catch(() => null);
+  if (!state) return renderFatal("The gateway admin plane is not reachable. Are you on the server, or tunneled to it?");
   if (state.needsSetup) return renderWizard(state);
   return renderDashboard(state);
 }
@@ -24,66 +20,19 @@ function renderWizard(state) {
   let step = 1;
   const wizard = element("div", "wizard");
 
-  const steps = [
-    wizardAdminStep,
-    wizardAnythingllmStep,
-    wizardApiKeyStep,
-  ];
+  const steps = [wizardAnythingllmStep, wizardApiKeyStep];
 
   function render() {
     wizard.replaceChildren(steps[step - 1]());
   }
 
-  function wizardAdminStep() {
-    const card = element("section", "card");
-    card.append(
-      stepBadge(1),
-      element("h2", "", "Create the gateway admin credential"),
-      state.credentialRequired
-        ? element("p", "note", "This deployment requires a preset credential: paste the gateway admin (or bootstrap) token you configured before deploy.")
-        : element("p", "note", "First run claims the gateway: the admin token is generated and shown once — copy it now. Anyone on this network could reach this page, so complete setup immediately after deploy (or redeploy with GATEWAY_ADMIN_TOKEN preset to require it)."),
-    );
-    const form = element("form", "");
-    const bootstrap = element("input", "", "");
-    bootstrap.type = "password";
-    if (state.credentialRequired) {
-      bootstrap.placeholder = "Preset admin or bootstrap token";
-      form.append(bootstrap);
-    }
-    form.append(element("button", "button button-primary", state.credentialRequired ? "Verify and continue" : "Generate admin token"));
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      try {
-        const result = await request("/api/setup/admin-token", {
-          method: "POST",
-          auth: false,
-          ...(state.credentialRequired ? { token: bootstrap.value.trim() } : {}),
-        });
-        if (result.alreadyClaimed) {
-          card.querySelector(".error")?.remove();
-          card.append(element("p", "error", "The admin credential was already claimed in another session and cannot be shown again. If you lost it, redeploy the data volume or restart with GATEWAY_ADMIN_TOKEN preset."));
-          return;
-        }
-        adminToken = result.adminToken;
-        window.localStorage.setItem(TOKEN_STORAGE_KEY, adminToken);
-        step = 2;
-        render();
-      } catch (error) {
-        card.querySelector(".error")?.remove();
-        card.append(element("p", "error", error.message));
-      }
-    });
-    card.append(form);
-    return card;
-  }
-
   function wizardAnythingllmStep() {
     const card = element("section", "card");
-    const tunnelCommand = `ssh -L 21501:127.0.0.1:21501 ${window.location.hostname}`;
+    const tunnelCommand = `ssh -L 21505:127.0.0.1:21505 -L 21501:127.0.0.1:21501 ${window.location.hostname}`;
     card.append(
-      stepBadge(2),
+      stepBadge(1),
       element("h2", "", "Initialize AnythingLLM, then mint its API key"),
-      element("p", "note", "AnythingLLM's own UI is not on the network. Open it from the server itself, or tunnel once from your machine:"),
+      element("p", "note", "AnythingLLM's own UI is not on the network — neither is this dashboard. Open both from the server itself, or tunnel once from your machine (this dashboard included):"),
     );
     const pre = element("pre", "command", tunnelCommand);
     const copy = element("button", "button button-quiet", "Copy");
@@ -94,11 +43,11 @@ function renderWizard(state) {
     pre.append(copy);
     card.append(
       pre,
-      html("p", "note", `Open <code>${state.anythingllmUiUrl}</code> on the server (or the tunnel on your machine), finish AnythingLLM's first-boot wizard, then go to <strong>Settings → Developer API</strong> and generate an API key.`),
+      html("p", "note", `Open <code>${state.anythingllmUiUrl}</code> (on the server, or through the tunnel), finish AnythingLLM's first-boot wizard, then go to <strong>Settings → Developer API</strong> and generate an API key.`),
     );
     const next = element("button", "button button-primary", "I have the API key");
     next.addEventListener("click", () => {
-      step = 3;
+      step = 2;
       render();
     });
     card.append(next);
@@ -108,7 +57,7 @@ function renderWizard(state) {
   function wizardApiKeyStep() {
     const card = element("section", "card");
     card.append(
-      stepBadge(3),
+      stepBadge(2),
       element("h2", "", "Connect the gateway to AnythingLLM"),
       element("p", "note", "Paste the developer API key. The gateway verifies it, becomes its only holder, and prepares the shared workspace."),
     );
@@ -121,9 +70,8 @@ function renderWizard(state) {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        const result = await request("/api/setup/api-key", { method: "POST", body: JSON.stringify({ apiKey: input.value }) });
+        await request("/api/setup/api-key", { method: "POST", body: JSON.stringify({ apiKey: input.value }) });
         window.location.reload();
-        return result;
       } catch (error) {
         card.querySelector(".error")?.remove();
         card.append(element("p", "error", error.message));
@@ -142,30 +90,8 @@ function renderWizard(state) {
 
 async function renderDashboard(state) {
   els.headline.textContent = "any-obs gateway";
-  if (!adminToken) return renderSignIn(state);
   renderTabs(state);
   await renderOverview(state);
-}
-
-function renderSignIn(state) {
-  const card = element("section", "card");
-  card.append(
-    element("h2", "", "Sign in"),
-    element("p", "note", "Paste the gateway admin token you created during setup."),
-  );
-  const form = element("form", "");
-  const input = element("input", "", "");
-  input.type = "password";
-  input.placeholder = "Gateway admin token";
-  form.append(input);
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    adminToken = input.value.trim();
-    window.localStorage.setItem(TOKEN_STORAGE_KEY, adminToken);
-    renderDashboard(state);
-  });
-  card.append(form);
-  els.view.replaceChildren(card);
 }
 
 function renderTabs(state) {
@@ -175,12 +101,10 @@ function renderTabs(state) {
     ["Users", renderUsers],
     ["Shared sources", renderSources],
   ];
-  let current = "Overview";
   const buttons = new Map();
   for (const [label, render] of views) {
     const button = element("button", "tab", label);
     button.addEventListener("click", () => {
-      current = label;
       for (const [other, node] of buttons) node.classList.toggle("active", other === label);
       render(state);
     });
@@ -189,11 +113,6 @@ function renderTabs(state) {
   }
   buttons.get("Overview").classList.add("active");
   els.view.replaceChildren(tabs);
-  renderTabs.refresh = (label, view) => {
-    current = label;
-    for (const [other, node] of buttons) node.classList.toggle("active", other === label);
-    view(state);
-  };
 }
 
 async function renderOverview(state) {
@@ -201,7 +120,7 @@ async function renderOverview(state) {
   card.append(element("h2", "", "Overview"));
   const grid = element("div", "grid");
   try {
-    const health = await request("/health", { method: "GET", auth: false });
+    const health = await request("/health", { method: "GET" });
     grid.append(
       metric("Status", health.ok ? "Running" : "Down"),
       metric("Shared workspace", health.sharedWorkspace),
@@ -213,12 +132,11 @@ async function renderOverview(state) {
   }
   card.append(grid);
   card.append(
-    html("p", "note", `<strong>Connect an any-obs client:</strong> <code>anything-obsidian init --url ${window.location.origin} --api-key &lt;user-token&gt;</code>`),
-    html("p", "note", `<strong>Connect an agent (MCP):</strong> <code>${window.location.origin}/mcp</code> with a user token as Bearer.`),
+    html("p", "note", `<strong>Connect an any-obs client:</strong> <code>anything-obsidian init --url ${window.location.protocol}//${window.location.hostname}:21500 --api-key &lt;user-token&gt;</code>`),
+    html("p", "note", `<strong>Connect an agent (MCP):</strong> <code>${window.location.protocol}//${window.location.hostname}:21500/mcp</code> with a user token as Bearer.`),
     html("p", "note", `<strong>AnythingLLM UI</strong> stays off the network: open <code>${state.anythingllmUiUrl}</code> on the server, or <code>ssh -L 21501:127.0.0.1:21501 ${window.location.hostname}</code>.`),
   );
   els.status.textContent = "";
-  els.view.querySelector(".card:last-of-type")?.remove();
   els.view.append(card);
 }
 
@@ -251,8 +169,6 @@ async function renderUsers() {
   card.append(form);
   const list = element("div", "list");
   card.append(list);
-  els.view.querySelector("nav.tabs").after(card);
-  els.view.querySelector(".card:last-of-type")?.remove();
   els.view.append(card);
 
   async function fillList() {
@@ -305,7 +221,7 @@ async function renderSources() {
   card.append(form);
   const list = element("div", "list");
   card.append(list);
-  els.view.querySelector("nav.tabs").after(card);
+  els.view.append(card);
 
   async function fill() {
     const { sources } = await request("/api/gateway/sources");
@@ -359,7 +275,7 @@ async function pollJob(jobId, mount) {
 /* ---------- helpers ---------- */
 
 function stepBadge(n) {
-  return element("span", "badge", `Step ${n} of 3`);
+  return element("span", "badge", `Step ${n} of 2`);
 }
 
 function metric(label, value) {
@@ -387,14 +303,12 @@ function renderFatal(message) {
   els.view.replaceChildren(element("p", "error", message));
 }
 
-async function request(path, { method = "GET", body, auth = true, token } = {}) {
-  const bearer = token ?? (auth ? adminToken : "");
+async function request(path, { method = "GET", body } = {}) {
   const response = await fetch(path, {
     method,
     ...(body !== undefined ? { body } : {}),
     headers: {
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
     },
   });
   const data = await response.json().catch(() => ({}));

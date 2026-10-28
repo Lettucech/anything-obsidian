@@ -1,6 +1,6 @@
 // Gateway IAM: a named-user directory with hashed bearer tokens and
-// workspace ownership. The gateway admin token is checked by the caller
-// (env comparison); this store only knows user principals.
+// workspace ownership. There is no admin credential to check here — the
+// admin plane is host-loopback and reaching it is the proof.
 //
 // Ownership is minted when a user's token creates a workspace through the
 // proxy — that is how an any-obs client's unified workspace becomes the
