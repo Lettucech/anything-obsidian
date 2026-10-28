@@ -147,19 +147,18 @@ async function renderUsers() {
   const name = element("input", "", "");
   name.placeholder = "user-name (lowercase-dash)";
   name.required = true;
-  form.append(name, element("button", "button button-primary", "Create user"));
+  const role = element("select", "", "");
+  role.innerHTML = ["member", "admin", "reader"].map((value) =>
+    `<option value="${value}">${value}</option>`,
+  ).join("");
+  const roleHelp = element("span", "muted", "member: shared + own workspaces · admin: also manages the gateway with this token · reader: search only");
+  form.append(name, role, element("button", "button button-primary", "Create user"), roleHelp);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      const created = await request("/api/gateway/users", { method: "POST", body: JSON.stringify({ name: name.value }) });
+      const created = await request("/api/gateway/users", { method: "POST", body: JSON.stringify({ name: name.value, role: role.value }) });
       name.value = "";
-      const reveal = element("section", "card");
-      reveal.append(
-        element("h2", "", `Token for '${created.user.name}' — shown once`),
-        html("pre", "command", created.token),
-        element("p", "note", "Give it to the user for their any-obs client or MCP agent. It cannot be shown again."),
-      );
-      card.after(reveal);
+      revealToken(created.token, `Token for '${created.user.name}' (${created.user.role})`);
       await fillList();
     } catch (error) {
       card.querySelector(".error")?.remove();
@@ -177,19 +176,57 @@ async function renderUsers() {
       const row = element("div", "row item");
       row.append(
         element("code", "", user.name),
+        roleSelect(user),
         element("span", "muted", new Date(user.createdAt).toLocaleDateString()),
       );
-      const revoke = element("button", "button button-quiet button-danger", "Revoke");
-      revoke.addEventListener("click", async () => {
-        if (!window.confirm(`Revoke '${user.name}'? Clients using this token lose access immediately.`)) return;
-        await request(`/api/gateway/users/${encodeURIComponent(user.name)}`, { method: "DELETE" });
-        await fillList();
+      const reset = element("button", "button button-quiet", "Reset token");
+      reset.addEventListener("click", async () => {
+        if (!window.confirm(`Reset the token for '${user.name}'? Their old token stops working immediately.`)) return;
+        const result = await request(`/api/gateway/users/${encodeURIComponent(user.name)}/reset-token`, { method: "POST" });
+        revealToken(result.token, `New token for '${user.name}' (${result.user.role})`);
       });
-      row.append(revoke);
+      row.append(reset, revokeButton(user, fillList));
       return row;
     }) : [element("p", "note", "No users yet — create one for each person or agent.")]));
   }
+
+  function roleSelect(user) {
+    const select = element("select", "", "");
+    select.innerHTML = ["member", "admin", "reader"].map((value) =>
+      `<option value="${value}"${value === user.role ? " selected" : ""}>${value}</option>`,
+    ).join("");
+    select.addEventListener("change", async () => {
+      try {
+        await request(`/api/gateway/users/${encodeURIComponent(user.name)}`, { method: "PATCH", body: JSON.stringify({ role: select.value }) });
+      } catch (error) {
+        select.value = user.role;
+        window.alert(error.message);
+      }
+    });
+    return select;
+  }
+
+  function revokeButton(user, refresh) {
+    const revoke = element("button", "button button-quiet button-danger", "Revoke");
+    revoke.addEventListener("click", async () => {
+      if (!window.confirm(`Revoke '${user.name}'? Clients using this token lose access immediately.`)) return;
+      await request(`/api/gateway/users/${encodeURIComponent(user.name)}`, { method: "DELETE" });
+      await refresh();
+    });
+    return revoke;
+  }
   await fillList();
+}
+
+function revealToken(token, title) {
+  const reveal = element("section", "card");
+  reveal.append(
+    element("h2", "", `${title} — shown once`),
+    html("pre", "command", token),
+    element("p", "note", "Copy it now: it cannot be shown again."),
+  );
+  els.view.append(reveal);
+  window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
 }
 
 async function renderSources() {

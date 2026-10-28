@@ -10,6 +10,15 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const USER_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const ROLES = ["admin", "member", "reader"];
+
+export function normalizeRole(value) {
+  const role = String(value ?? "member");
+  if (!ROLES.includes(role)) {
+    throw new Error(`Role must be one of: ${ROLES.join(", ")}`);
+  }
+  return role;
+}
 
 export function hashToken(token) {
   return createHash("sha256").update(String(token)).digest("hex");
@@ -31,6 +40,7 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
       if (!USER_NAME_PATTERN.test(name)) {
         throw new Error("User name must be lowercase dash-separated text");
       }
+      const role = normalizeRole(input?.role);
       const state = await read();
       if (state.users.some((user) => user.name === name)) {
         throw new Error(`User already exists: ${name}`);
@@ -38,12 +48,31 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
       const token = randomBytes(24).toString("base64url");
       const user = {
         name,
+        role,
         tokenHash: hashToken(token),
         createdAt: new Date().toISOString(),
       };
       state.users.push(user);
       await write(state);
-      return { user: { name, createdAt: user.createdAt }, token };
+      return { user: { name, role, createdAt: user.createdAt }, token };
+    },
+    async updateRole(name, input) {
+      const role = normalizeRole(input);
+      const state = await read();
+      const user = state.users.find((candidate) => candidate.name === name);
+      if (!user) return null;
+      user.role = role;
+      await write(state);
+      return { name, role, createdAt: user.createdAt };
+    },
+    async resetToken(name) {
+      const state = await read();
+      const user = state.users.find((candidate) => candidate.name === name);
+      if (!user) return null;
+      const token = randomBytes(24).toString("base64url");
+      user.tokenHash = hashToken(token);
+      await write(state);
+      return { user: { name: user.name, role: user.role, createdAt: user.createdAt }, token };
     },
     async remove(name) {
       const state = await read();
@@ -72,10 +101,13 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
       return name;
     },
     async entitlements(name) {
+      const state = await read();
+      const user = state.users.find((candidate) => candidate.name === name);
       const owned = await this.ownedWorkspaces(name);
       return {
         read: unique([sharedWorkspaceSlug, ...owned]),
-        write: owned,
+        // Readers never write — not their own folders, not embeddings.
+        write: user?.role === "reader" ? [] : owned,
       };
     },
   };
@@ -87,7 +119,7 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
     for (const user of state.users) {
       const candidate = Buffer.from(user.tokenHash, "hex");
       if (candidate.length === digest.length && timingSafeEqual(candidate, digest)) {
-        return { kind: "user", name: user.name };
+        return { kind: "user", name: user.name, role: user.role ?? "member" };
       }
     }
     return null;
@@ -118,7 +150,9 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
     return {
       version: 1,
       users: Array.isArray(parsed?.users)
-        ? parsed.users.filter((user) => typeof user?.name === "string" && typeof user?.tokenHash === "string")
+        ? parsed.users
+          .filter((user) => typeof user?.name === "string" && typeof user?.tokenHash === "string")
+          .map((user) => ({ ...user, role: ROLES.includes(user.role) ? user.role : "member" }))
         : [],
       workspaces: parsed?.workspaces && typeof parsed.workspaces === "object" ? parsed.workspaces : {},
     };

@@ -13,7 +13,9 @@ export const VAULT_FOLDER_PATTERN = /^anything-obsidian-vault-[a-z0-9]+(?:-[a-z0
 
 export async function decide({ method, pathname, identity, body, entitlements }) {
   const isUser = identity?.kind === "user";
-  const isAdmin = identity?.kind === "admin";
+  // A user token with the admin role is admin-equivalent: delegated
+  // operations without SSH, still gated by a token the operator issued.
+  const isAdmin = identity?.kind === "admin" || identity?.role === "admin";
   if (!identity) return deny(401, "Bearer token required");
   if (!isUser && !isAdmin) return deny(403, "Unknown identity");
 
@@ -24,6 +26,7 @@ export async function decide({ method, pathname, identity, body, entitlements })
 
   if (pathname === "/api/v1/workspace/new" && method === "POST") {
     if (isAdmin) return { action: "proxy" };
+    if (identity.role === "reader") return deny(403, "Reader tokens cannot create workspaces");
     return { action: "create-workspace" };
   }
 
@@ -45,6 +48,7 @@ export async function decide({ method, pathname, identity, body, entitlements })
   if (upload && method === "POST") {
     const folder = decodeURIComponent(upload[1]);
     if (isAdmin) return { action: "proxy" };
+    if (identity.role === "reader") return deny(403, "Reader tokens cannot upload documents");
     if (!VAULT_FOLDER_PATTERN.test(folder)) return deny(403, `Folder is not a vault pipeline folder: ${folder}`);
     return { action: "proxy" };
   }
@@ -52,6 +56,7 @@ export async function decide({ method, pathname, identity, body, entitlements })
   if (pathname === "/api/v1/document/remove-folder" && method === "DELETE") {
     const folder = String(body?.name ?? "");
     if (isAdmin) return { action: "proxy" };
+    if (identity.role === "reader") return deny(403, "Reader tokens cannot remove documents");
     if (!VAULT_FOLDER_PATTERN.test(folder)) return deny(403, `Folder is not a vault pipeline folder: ${folder}`);
     return { action: "proxy" };
   }

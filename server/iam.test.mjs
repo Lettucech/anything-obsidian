@@ -16,8 +16,9 @@ test("users are created with a once-shown token and verified by hash", async () 
 
   const { user, token } = await store.create({ name: "brian" });
   assert.equal(user.name, "brian");
+  assert.equal(user.role, "member");
   assert.ok(token.length > 20);
-  assert.deepEqual(store.verify(token), { kind: "user", name: "brian" });
+  assert.deepEqual(store.verify(token), { kind: "user", name: "brian", role: "member" });
   assert.equal(store.verify("wrong-token"), null);
   assert.equal(store.verify(""), null);
 
@@ -57,6 +58,51 @@ test("entitlements are the shared workspace for reads and owned workspaces for w
 
   // Ownership is minted once; a second claim is a no-op.
   assert.equal(await store.recordOwnership("any-obs-brian-01", "someone-else"), "brian");
+});
+
+test("users carry a role that can change after creation", async () => {
+  const store = await setup();
+  const { user, token } = await store.create({ name: "brian", role: "admin" });
+  assert.equal(user.role, "admin");
+  assert.deepEqual(store.verify(token), { kind: "user", name: "brian", role: "admin" });
+
+  await assert.rejects(() => store.create({ name: "x", role: "wizard" }), /Role must be one of/);
+  assert.equal((await store.create({ name: "plain" })).user.role, "member");
+
+  const updated = await store.updateRole("brian", "reader");
+  assert.deepEqual(updated, { name: "brian", role: "reader", createdAt: user.createdAt });
+  assert.deepEqual(store.verify(token), { kind: "user", name: "brian", role: "reader" });
+  assert.equal(await store.updateRole("ghost", "admin"), null);
+  await assert.rejects(() => store.updateRole("brian", "nope"), /Role must be one of/);
+});
+
+test("resetting a token invalidates the old one immediately", async () => {
+  const store = await setup();
+  const { token } = await store.create({ name: "scout" });
+
+  const reset = await store.resetToken("scout");
+  assert.notEqual(reset.token, token);
+  assert.ok(reset.token.length > 20);
+  assert.equal(store.verify(token), null);
+  assert.deepEqual(store.verify(reset.token), { kind: "user", name: "scout", role: "member" });
+  assert.equal(await store.resetToken("ghost"), null);
+});
+
+test("readers never receive write entitlements", async () => {
+  const store = await setup();
+  await store.create({ name: "reader-1", role: "reader" });
+  await store.recordOwnership("any-obs-reader-01", "reader-1");
+  assert.deepEqual(await store.entitlements("reader-1"), {
+    read: ["shared", "any-obs-reader-01"],
+    write: [],
+  });
+
+  await store.create({ name: "member-1" });
+  await store.recordOwnership("any-obs-member-01", "member-1");
+  assert.deepEqual(await store.entitlements("member-1"), {
+    read: ["shared", "any-obs-member-01"],
+    write: ["any-obs-member-01"],
+  });
 });
 
 test("token hashes are sha-256 of the raw token", async () => {

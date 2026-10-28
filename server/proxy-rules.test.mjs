@@ -82,3 +82,28 @@ test("anything else is admin passthrough and user denial", async () => {
   assert.match(denied.reason, /User tokens cannot call this endpoint/);
   assert.equal((await decideAs(USER, "DELETE", "/api/v1/document/abc")).action, "deny");
 });
+
+test("an admin-role user token is admin-equivalent", async () => {
+  const delegated = { kind: "user", name: "ops", role: "admin" };
+  assert.deepEqual(await decideAs(delegated, "GET", "/api/v1/workspaces", undefined, { read: ["*"], write: ["*"] }), { action: "proxy" });
+  assert.deepEqual(await decideAs(delegated, "POST", "/api/v1/system/anything", undefined, { read: [], write: [] }), { action: "proxy" });
+  assert.deepEqual(await decideAs(delegated, "POST", "/api/v1/workspace/new"), { action: "proxy" });
+});
+
+test("readers can read entitled workspaces but never create or write", async () => {
+  const reader = { kind: "user", name: "bot", role: "reader" };
+  const readerEntitlements = { read: ["shared"], write: [] };
+
+  assert.deepEqual(
+    await decideAs(reader, "POST", "/api/v1/workspace/shared/vector-search", undefined, readerEntitlements),
+    { action: "proxy" },
+  );
+  const create = await decideAs(reader, "POST", "/api/v1/workspace/new", undefined, readerEntitlements);
+  assert.equal(create.action, "deny");
+  assert.match(create.reason, /Reader tokens cannot create workspaces/);
+  const embed = await decideAs(reader, "POST", "/api/v1/workspace/shared/update-embeddings", undefined, readerEntitlements);
+  assert.equal(embed.action, "deny");
+  assert.match(embed.reason, /not writable/);
+  const upload = await decideAs(reader, "POST", "/api/v1/document/upload/anything-obsidian-vault-x", undefined, readerEntitlements);
+  assert.equal(upload.action, "deny");
+});

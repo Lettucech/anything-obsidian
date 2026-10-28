@@ -52,6 +52,23 @@ client's own trust model (loopback dashboard, LAN service).
   client dashboard has always used. Personal workspaces are not
   pre-provisioned: pure consumers need only the shared workspace.
 
+### Roles
+
+Users carry a role, set at creation and changeable any time
+(`PATCH /api/gateway/users/{name}`); tokens can be replaced
+(`POST /api/gateway/users/{name}/reset-token` — the old token dies on the
+spot, for lost-token recovery).
+
+- **member** (default): read shared + owned workspaces, write own. The
+  regular any-obs client user.
+- **admin**: member powers plus delegated administration — over the
+  *public* plane their token opens the user/source management routes and
+  full proxy passthrough (operations without SSH, still gated by a token
+  the operator issued). Break-glass remains the loopback admin plane.
+- **reader**: search/answer only. No workspace creation, no uploads, no
+  embedding writes — the LAN consumer agent with the smallest blast
+  radius if the token leaks.
+
 ## Proxy rules (`server/proxy-rules.mjs`)
 
 Pure decisions per request; the gateway enforces them:

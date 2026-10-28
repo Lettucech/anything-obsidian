@@ -198,16 +198,90 @@ test("MCP on the public plane is token-gated with the four RAG/pipeline tools", 
   await client.close();
 });
 
+test("roles: set at create, change later, delegate admin over the public plane", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  const { userToken: memberToken } = await createUser(adminUrl, publicUrl, "member-1", "member");
+  const { userToken: adminToken } = await createUser(adminUrl, publicUrl, "ops", "admin");
+
+  // A member token sees nothing administrative on the public plane.
+  assert.equal((await fetchJson(`${publicUrl}/api/gateway/users`, { headers: { Authorization: `Bearer ${memberToken}` } })).status, 404);
+
+  // An admin-role token manages users over the public plane: create with a
+  // role, change it, and pass through the proxy without SSH.
+  const delegated = await fetchJson(`${publicUrl}/api/gateway/users`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ name: "bot", role: "reader" }),
+  });
+  assert.equal(delegated.status, 201);
+  assert.equal(delegated.body.user.role, "reader");
+
+  const patched = await fetchJson(`${publicUrl}/api/gateway/users/bot`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ role: "member" }),
+  });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.body.role, "member");
+  assert.equal((await fetchJson(`${publicUrl}/api/v1/admin/anything`, {
+    method: "POST", headers: { Authorization: `Bearer ${adminToken}` },
+  })).status, 200);
+  const badRole = await fetchJson(`${publicUrl}/api/gateway/users/bot`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ role: "wizard" }),
+  });
+  assert.equal(badRole.status, 500);
+  assert.match(badRole.body.error, /Role must be one of/);
+});
+
+test("readers get search but not workspace creation through the proxy", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  const { userToken } = await createUser(adminUrl, publicUrl, "bot", "reader");
+  const auth = { Authorization: `Bearer ${userToken}` };
+
+  const search = await fetchJson(`${publicUrl}/api/gateway/search`, {
+    method: "POST", headers: auth, body: JSON.stringify({ query: "anything" }),
+  });
+  assert.equal(search.status, 200);
+
+  const create = await fetchJson(`${publicUrl}/api/v1/workspace/new`, {
+    method: "POST", headers: auth, body: JSON.stringify({ name: "any-obs-bot-01" }),
+  });
+  assert.equal(create.status, 403);
+  assert.match(create.body.error, /Reader tokens cannot create workspaces/);
+});
+
+test("resetting a token kills the old one on the spot", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  const { userToken } = await createUser(adminUrl, publicUrl, "brian", "member");
+
+  const reset = await fetchJson(`${adminUrl}/api/gateway/users/brian/reset-token`, { method: "POST" });
+  assert.equal(reset.status, 200);
+  assert.ok(reset.body.token.length > 20);
+
+  const stale = await fetchJson(`${publicUrl}/api/gateway/search`, {
+    method: "POST", headers: { Authorization: `Bearer ${userToken}` }, body: JSON.stringify({ query: "x" }),
+  });
+  assert.equal(stale.status, 401);
+
+  const fresh = await fetchJson(`${publicUrl}/api/gateway/search`, {
+    method: "POST", headers: { Authorization: `Bearer ${reset.body.token}` }, body: JSON.stringify({ query: "x" }),
+  });
+  assert.equal(fresh.status, 200);
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/users/ghost/reset-token`, { method: "POST" })).status, 404);
+});
+
 function mcpTransport(baseUrl, token) {
   return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
   });
 }
 
-async function createUser(adminUrl, publicUrl, name) {
+async function createUser(adminUrl, publicUrl, name, role = "member") {
   const created = await fetchJson(`${adminUrl}/api/gateway/users`, {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, role }),
   });
   assert.equal(created.status, 201);
   return { userToken: created.body.token };

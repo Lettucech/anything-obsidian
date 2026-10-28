@@ -174,10 +174,11 @@ export function createGatewayServer({
 
   async function handleGatewayApi({ req, res, url, identity, body }) {
     const adminOnly = () => {
-      // Admin routes exist on the admin plane only; reaching it means
-      // server access, which is the credential.
-      if (plane !== "admin") throw httpError(404, "Not found");
-      return { kind: "admin" };
+      // The admin plane is loopback (server access is the credential); over
+      // the public plane only a user token carrying the admin role gets in.
+      if (plane === "admin") return { kind: "admin" };
+      if (identity?.kind === "user" && identity.role === "admin") return identity;
+      throw httpError(404, "Not found");
     };
 
     if (url.pathname === "/api/gateway/users") {
@@ -196,6 +197,17 @@ export function createGatewayServer({
       adminOnly();
       const removed = await userStore.remove(userMatch[1]);
       return removed ? sendJson(res, 200, { removed: true }) : sendJson(res, 404, { error: "User was not found" });
+    }
+    if (userMatch && req.method === "PATCH") {
+      adminOnly();
+      const updated = await userStore.updateRole(userMatch[1], body?.role);
+      return updated ? sendJson(res, 200, updated) : sendJson(res, 404, { error: "User was not found" });
+    }
+    const resetMatch = url.pathname.match(/^\/api\/gateway\/users\/([a-z0-9-]+)\/reset-token$/);
+    if (resetMatch && req.method === "POST") {
+      adminOnly();
+      const reset = await userStore.resetToken(resetMatch[1]);
+      return reset ? sendJson(res, 200, reset) : sendJson(res, 404, { error: "User was not found" });
     }
 
     if (url.pathname === "/api/gateway/search" && req.method === "POST") {

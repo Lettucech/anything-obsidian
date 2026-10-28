@@ -276,7 +276,9 @@ Bring-up is one command and one browser page — no `.env` values required:
      the shared workspace.
 
    After setup, the dashboard's tabs manage everything day to day: **Users**
-   (create a user, token shown once), **Shared sources** (register the git
+   (create with a role — `member` runs an any-obs client, `admin` may also
+   manage the gateway with their token, `reader` is search-only — change
+   roles later, reset a lost token), **Shared sources** (register the git
    repos or server directories that feed the shared workspace, trigger
    refreshes, watch jobs), and the **Overview** with client and MCP
    connection snippets. Full API surface:
