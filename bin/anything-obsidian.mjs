@@ -573,6 +573,7 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
       registryPath: store.paths.registryPath,
     });
     report.vaults = (await registry.list()).length;
+    report.workspace = (await registry.getWorkspace())?.slug ?? null;
   } catch {
     report.vaults = null;
   }
@@ -604,6 +605,7 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
     log(`  ✓ config: ${value.config.path}`);
     log(`      vault root: ${value.config.vaultsRoot}`);
     log(`      vaults managed: ${value.vaults ?? "unknown"}`);
+    log(`      RAG workspace: ${value.workspace ?? "not created yet (appears with the first vault)"}`);
     log(`  ${mark(value.anythingllm.ok)} AnythingLLM: ${value.anythingllm.ok ? `${value.config.anythingllmBaseUrl} (${value.anythingllm.workspaces ?? 0} workspaces)` : value.anythingllm.detail}`);
     const dashboard = value.dashboard;
     log(`  ${mark(dashboard.healthy)} Dashboard: ${dashboard.healthy ? `running at ${dashboard.url}` : dashboard.running ? `starting or unhealthy (pid ${dashboard.pid})` : "not running"}`);

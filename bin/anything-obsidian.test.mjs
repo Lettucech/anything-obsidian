@@ -240,6 +240,7 @@ test("status --json reports a configured install with service health", async () 
   assert.equal(report.dashboard.running, false);
   assert.equal(report.scheduler.running, false);
   assert.equal(report.vaults, 0);
+  assert.equal(report.workspace, null);
   assert.match(report.git, /^git /);
 });
 

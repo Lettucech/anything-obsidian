@@ -33,6 +33,11 @@ deployment, AnythingLLM Desktop, or a remote server) — it never hosts
 AnythingLLM. The app itself is a plain Node process: no Docker, no admin
 rights, no sudo needed.
 
+All vaults of one install embed into a single unified AnythingLLM workspace
+(created automatically with the first vault, or attachable to an existing
+one) — agents search it once and results name the owning vault. RAG search
+never requires picking a vault first.
+
 ## Install (one command, zero prompts when flags are given)
 
 ```sh
@@ -64,6 +69,13 @@ curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/in
 anything-obsidian update   # re-downloads the app + dependencies, keeps all data
 ```
 
+On the first sync or embed after updating to a release with the unified
+workspace (0.3.0+), an existing install migrates automatically: the unified
+workspace is created, and every vault re-embeds once. That first sync is
+slow and uploads everything — expected, not a fault. Check
+`status --json` → `workspace` afterwards; it holds the unified workspace
+slug once the first vault exists.
+
 ## Verify (do this after every install or change)
 
 ```sh
@@ -72,6 +84,12 @@ anything-obsidian status --json
 
 Exit code `0` plus `"ok": true` means: config present, git found, AnythingLLM
 reachable. Check these fields:
+
+- `workspace: null` with `vaults: 0` → normal fresh install; the unified RAG
+  workspace appears with the first added vault. `workspace: null` with
+  `vaults` ≥ 1 → the unified workspace was never initialised (vault add
+  failed midway or an old install never ran a sync since updating); adding
+  any vault or running one sync/embed creates it.
 
 - `anythingllm.ok: false` with `AnythingLLM API 401/403` → the API key is
   wrong; re-run `anything-obsidian init --vaults-root … --url … --api-key …`
