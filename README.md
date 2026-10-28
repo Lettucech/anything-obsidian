@@ -17,8 +17,9 @@ the dashboard offers, never arbitrary Git commands.
 
 - **Vault management:** the dashboard clones a managed vault beneath the
   user-selected `HOST_VAULTS_ROOT` or imports an existing directory from
-  anywhere on disk, creates its AnythingLLM workspace, and stores only
-  validated registry metadata.
+  anywhere on disk, and stores only validated registry metadata. All vaults
+  of one instance embed into a single shared AnythingLLM workspace created
+  on first use.
 - **Agent-scoped MCP access:** dashboard-issued agent tokens limit a client's
   MCP visibility to the vaults whose allowlist names it. Tokenless local
   connections keep their existing access to open vaults.
@@ -29,7 +30,8 @@ the dashboard offers, never arbitrary Git commands.
 - **Derived RAG:** the worker updates a vault's AnythingLLM index after the
   configured sync workflow. It never becomes the source for vault files.
 - **No vault ownership:** removing a vault from management does not delete its
-  repository, workspace, or embedding data.
+  repository or the user's files. Its derived chunks leave the shared index
+  (so they stop appearing in searches); the workspace itself stays.
 
 ## Getting started (one command)
 
@@ -149,8 +151,11 @@ management tools.
   vault, so a local agent with filesystem authority can edit it directly.
 - `any_obs_file_list` and `any_obs_file_read` inspect raw Markdown and
   Canvas source files with vault-relative paths and bounded reads.
-- `any_obs_rag_search` and `any_obs_rag_answer` query the derived RAG
-  index.
+- `any_obs_rag_search` and `any_obs_rag_answer` query the unified RAG index
+  across every managed vault at once — no need to know which vault holds the
+  answer first. Search results are tagged with their `vaultId` and
+  vault-relative path (map straight to `any_obs_file_read`), and `vaultId`
+  optionally filters results to one vault.
 
 Vault file content stays read-only over MCP — there are no tools for
 writing, patching, or uploading notes. Management tools change how the

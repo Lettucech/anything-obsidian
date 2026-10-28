@@ -45,8 +45,8 @@ portable workflow.
 
 ## Establish the vault context
 
-1. Call `any_obs_vault_list`. When more than one vault is available, select an
-   explicit `vaultId`; never search across vaults implicitly.
+1. Call `any_obs_vault_list` to see the managed vaults. File operations and
+   edits always target one explicit `vaultId`.
 2. On the local profile, call `any_obs_vault_context` before substantial
    retrieval or any proposed edit. Inspect its policy files, source directory,
    edit boundary, sync settings, and RAG freshness warning.
@@ -64,7 +64,10 @@ have been established through an authorized path.
 ## Retrieve and verify knowledge
 
 - Prefer `any_obs_rag_search` to discover candidate notes and source
-  passages. Use `any_obs_rag_answer` only when a synthesized answer is useful.
+  passages. The index is unified across every managed vault: search first,
+  then read each result's `vaultId` and vault-relative path to pick the vault
+  to work in — no need to guess where the knowledge lives. Use
+  `any_obs_rag_answer` only when a synthesized answer is useful.
 - Use `any_obs_file_list` to inspect the actual vault structure and
   `any_obs_file_read` to verify the current source text.
 - Preserve the source path and any relevant date, revision, decision state, or

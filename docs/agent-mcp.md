@@ -23,6 +23,13 @@ filesystem authority to make edits outside this project's MCP scope.
 non-secret sync settings, source-of-truth status, and RAG freshness boundary so
 the agent can assess the edit surface before opening that directory.
 
+RAG is unified across the instance: both `any_obs_rag_*` tools query one
+shared index covering every managed vault, so an agent never has to know
+which vault holds the answer before searching. Search results carry each
+chunk's `vaultId` and vault-relative path (mapping straight to
+`any_obs_file_read` in the owning vault), and the optional `vaultId` argument
+filters results to one vault.
+
 Read and RAG tools:
 
 - `any_obs_vault_list` (includes each vault's last-sync state)
@@ -47,9 +54,11 @@ npx skills add Lettucech/anything-obsidian --skill anything-obsidian-vault-workf
 
 Its context-first flow is:
 
-1. Select one explicit vault with `any_obs_vault_list`.
+1. List vaults with `any_obs_vault_list`; file operations and edits always
+   target one explicit `vaultId`.
 2. Call `any_obs_vault_context` and read the returned policy files.
-3. Use RAG to discover candidates and raw file reads to verify source truth.
+3. Use unified RAG search to discover candidates (results name the owning
+   vault) and raw file reads to verify source truth.
 4. For an approved edit, open the returned local directory and use normal
    filesystem and Git checks under the vault's own rules.
 

@@ -60,8 +60,17 @@ login session.
   its traversal checks to. Never collapse the two: a managed resolve must not
   accept an absolute path, and an imported resolve must not be re-joined onto
   the root.
-- Removing a vault from management never deletes its repository, workspace,
-  or the user's files — preserve this rule everywhere, including scripts.
+- One unified AnythingLLM workspace per instance (registry top-level
+  `workspace`), namespaced `any-obs-<host>-<suffix>` so instances sharing one
+  AnythingLLM never collide. All vaults embed into it; upload chunk sources
+  carry `<vaultId>/<vault-relative path>` so unified RAG results map back to
+  the owning vault. Document folders stay per vault
+  (`anything-obsidian-vault-<vaultId>`, single segment).
+- Removing a vault from management never deletes its repository, the unified
+  workspace, or the user's files — preserve this rule everywhere, including
+  scripts. Its derived chunks and document folder do leave the unified index
+  (manifest-driven purge on removal); that is required to keep the shared
+  index truthful.
 
 ## Data directories (never delete casually)
 
