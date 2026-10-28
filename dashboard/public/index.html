@@ -111,14 +111,18 @@
               <label id="source-mode-field" class="form-grid-wide">Add from
                 <select name="sourceMode"><option value="clone">Clone a repository</option><option value="import">Import a local repository</option></select>
               </label>
-              <p id="import-help" class="note form-grid-wide" hidden>Import a directory you already own: a direct child of the vault root, or any path you browse to. Git remotes are discovered when there are any; a folder without a repository imports too, and auto-sync stays off for it.</p>
+              <p id="import-help" class="note form-grid-wide" hidden>Import a directory you already own: paste any absolute folder path below (e.g. /Users/you/Workspace/my-vault — it stays where it is and auto-sync stays off), or browse. A direct child of the vault root can also be imported as managed. Git remotes are discovered when there are any.</p>
               <label id="clone-url-field" class="form-grid-wide">Repository URL <input name="repositoryUrl" type="url" placeholder="https://github.com/org/notes.git" required /></label>
               <label id="import-id-field" hidden>Vault ID <input name="importId" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="e.g. personal-notes" /></label>
               <label id="import-directory-field" hidden>Directory <input name="importDirectory" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Same as Vault ID" /></label>
               <label id="import-path-field" hidden>Folder path <input name="importPath" placeholder="Any folder you own, e.g. /Users/you/Workspace/my-vault" /></label>
               <div id="import-browse" class="form-grid-wide" hidden>
-                <button id="import-browse-toggle" class="button button-secondary" type="button">Browse vault root…</button>
+                <button id="import-browse-toggle" class="button button-secondary" type="button">Browse folders…</button>
                 <div id="import-tree-panel" class="import-tree" hidden>
+                  <div class="row">
+                    <input id="import-path-jump" placeholder="Jump to any absolute path, e.g. /Users/you/Workspace" aria-label="Jump to path" />
+                    <button id="import-jump" class="button button-quiet" type="button">Go</button>
+                  </div>
                   <nav id="import-breadcrumb" class="breadcrumb" aria-label="Vault root path"></nav>
                   <ul id="import-tree" class="tree-list"></ul>
                   <p id="import-tree-note" class="browse-note"></p>

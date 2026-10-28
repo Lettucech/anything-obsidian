@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  actionDisabledReason, activeTheme, agentCreatedLabel, agentRevokeMessage, breadcrumbSegments, dashboardMetrics,
+  absoluteCrumbs, actionDisabledReason, activeTheme, agentCreatedLabel, agentRevokeMessage, breadcrumbSegments, dashboardMetrics,
   failedSyncs, gitAuthForRepository, jobProgressLabel, lastSyncLabel, nextTheme, restrictedAccessNote, serviceTone, syncBanner, systemPowerLabel, useFolderBlockedReason, vaultActionUrl,
   slugifyName,
   vaultSourcePayload,
@@ -130,6 +130,18 @@ test("import breadcrumbs walk from the vault root to the browsed folder", () => 
     { name: "Work", path: "/v/Work" },
     { name: "Notes", path: "/v/Work/Notes" },
   ]);
+});
+
+test("breadcrumbs outside the vault root walk from the filesystem root", () => {
+  assert.deepEqual(absoluteCrumbs("/Users/brian/Workspace/my-vault"), [
+    { name: "/", path: "/" },
+    { name: "Users", path: "/Users" },
+    { name: "brian", path: "/Users/brian" },
+    { name: "Workspace", path: "/Users/brian/Workspace" },
+    { name: "my-vault", path: "/Users/brian/Workspace/my-vault" },
+  ]);
+  assert.deepEqual(absoluteCrumbs("/"), [{ name: "/", path: "/" }]);
+  assert.deepEqual(absoluteCrumbs(""), [{ name: "/", path: "/" }]);
 });
 
 test("use-folder gating blocks only the root itself", () => {

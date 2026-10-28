@@ -121,6 +121,19 @@ export function breadcrumbSegments(rootPath, currentPath, rootLabel = "Vault roo
   return crumbs;
 }
 
+// Breadcrumbs for a path outside the vault root: walk from the filesystem
+// root so every level is navigable.
+export function absoluteCrumbs(currentPath) {
+  const crumbs = [{ name: "/", path: "/" }];
+  const segments = String(currentPath ?? "").split("/").filter(Boolean);
+  let accumulated = "";
+  for (const segment of segments) {
+    accumulated = `${accumulated}/${segment}`;
+    crumbs.push({ name: segment, path: accumulated });
+  }
+  return crumbs;
+}
+
 export function useFolderBlockedReason(tree) {
   if (!tree) return "Open a folder to import it";
   if (tree.canUseHere) return "";
@@ -147,7 +160,7 @@ if (typeof document !== "undefined") {
     "add-vault-inline", "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
     "agents", "agent-message", "add-agent", "agent-dialog", "agent-form", "agent-form-title",
     "agent-create-fields", "agent-token-reveal", "agent-token-value", "agent-submit", "cancel-agent", "agent-dialog-message",
-    "import-browse", "import-browse-toggle", "import-tree-panel", "import-breadcrumb", "import-tree", "import-tree-note", "import-use-folder", "import-refresh-tree",
+    "import-browse", "import-browse-toggle", "import-tree-panel", "import-breadcrumb", "import-tree", "import-tree-note", "import-use-folder", "import-refresh-tree", "import-path-jump", "import-jump",
   ].map((id) => [id.replaceAll("-", ""), document.querySelector(`#${id}`)]));
 
   const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
@@ -170,6 +183,7 @@ if (typeof document !== "undefined") {
   els.vaultform.addEventListener("submit", saveVault);
   els.testvaultconnection.addEventListener("click", testVaultConnection);
   els.vaultform.addEventListener("change", syncFormControls);
+  els.vaultform.elements.importPath?.addEventListener("input", syncFormControls);
   els.vaultdialog.addEventListener("close", () => { state.editingId = null; state.createdVaultId = null; });
   els.addagent.addEventListener("click", showAgentForm);
   els.cancelagent.addEventListener("click", hideAgentForm);
@@ -178,6 +192,13 @@ if (typeof document !== "undefined") {
   els.agentdialog.addEventListener("close", () => { state.createdAgentName = null; });
   els.importbrowsetoggle.addEventListener("click", toggleImportBrowse);
   els.importrefreshtree.addEventListener("click", () => loadImportTree(state.browse.path));
+  els.importjumptree.addEventListener("click", () => jumpToPath());
+  els.importpathjump.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      jumpToPath();
+    }
+  });
   els.importtree.addEventListener("click", handleBrowseNavigation);
   els.importbreadcrumb.addEventListener("click", handleBrowseNavigation);
   els.importusefolder.addEventListener("click", useSelectedFolder);
@@ -311,13 +332,13 @@ if (typeof document !== "undefined") {
     form.elements.sourceMode.disabled = editing;
     els.importhelp.hidden = !importMode;
     els.importidfield.hidden = !importMode;
-    // The path field only shows once a folder outside the root is chosen, or
-    // once the user types one; while it holds a value it replaces the
+    // The path field is always available in import mode: any folder the user
+    // owns, anywhere on disk. While it holds a value it replaces the
     // directory field (an imported vault is never managed beneath the root).
     const importedPath = String(form.elements.importPath?.value || "").trim();
     const asImport = importMode && Boolean(importedPath);
-    els.importpathfield.hidden = !asImport;
-    els.importdirectoryfield.hidden = asImport;
+    els.importpathfield.hidden = !importMode;
+    els.importdirectoryfield.hidden = importMode && Boolean(importedPath);
     form.elements.importId.required = importMode;
     form.elements.importDirectory.required = importMode && !asImport;
     els.importbrowse.hidden = editing || !importMode;
@@ -382,13 +403,17 @@ if (typeof document !== "undefined") {
   }
 
   function renderImportTree(tree) {
-    els.importbreadcrumb.replaceChildren(...breadcrumbSegments(tree.root, tree.path).map((crumb) => {
+    const crumbs = tree.insideRoot
+      ? breadcrumbSegments(tree.root, tree.path)
+      : absoluteCrumbs(tree.path);
+    els.importbreadcrumb.replaceChildren(...crumbs.map((crumb) => {
       const crumbButton = element("button", "crumb", crumb.name);
       crumbButton.type = "button";
       crumbButton.dataset.browsePath = crumb.path;
       if (crumb.path === tree.path) crumbButton.classList.add("current");
       return crumbButton;
     }));
+    els.importpathjump.value = tree.path;
     const items = tree.directories.map((entry) => {
       const item = element("li", "");
       const button = element("button", "tree-item", entry.name);
@@ -414,6 +439,11 @@ if (typeof document !== "undefined") {
     const button = event.target.closest("button[data-browse-path]");
     if (!button) return;
     await loadImportTree(button.dataset.browsePath);
+  }
+
+  function jumpToPath() {
+    const target = String(els.importpathjump.value || "").trim();
+    if (target) loadImportTree(target);
   }
 
   function useSelectedFolder() {
