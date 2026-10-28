@@ -47,15 +47,17 @@ export function createGatewayServer({
 }) {
   if (plane !== "public" && plane !== "admin") throw new Error(`Unknown gateway plane: ${plane}`);
   const baseUrl = stripTrailingSlash(anythingllmBaseUrl);
-  // The wizard-collected API key lives in the data volume; cached here so
-  // token/key checks stay synchronous.
+  // The wizard-collected API key lives in the data volume; it is cached at
+  // boot and refreshed whenever setup writes it. configReady is awaited at
+  // the top of every request so no handler can race the initial load.
   let configuredApiKey = "";
-  void gatewayConfig.load().then((state) => {
+  const configReady = gatewayConfig.load().then((state) => {
     configuredApiKey = state.apiKey;
   }).catch(() => {});
 
   return createServer(async (req, res) => {
     try {
+      await configReady;
       const url = new URL(req.url || "/", "http://gateway");
       const identity = plane === "admin"
         ? { kind: "admin" } // loopback reach is the proof
