@@ -12,6 +12,10 @@ services:
   anythingllm:
     image: mintplexlabs/anythingllm:latest
     restart: unless-stopped
+    environment:
+      # The official image warns (and may not persist data) without this —
+      # it must point at the mounted volume.
+      STORAGE_DIR: /app/server/storage
     volumes:
       - anythingllm-storage:/app/server/storage
     # Loopback-only publish so an admin can reach the UI on the server itself
