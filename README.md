@@ -227,17 +227,54 @@ across all of them in one query, and runs the shared-source pipeline (git
 pull or directory re-read, then reindex) that is the only writer to the
 shared workspace.
 
-```bash
-cd server
-cp .env.example .env    # fill ANYTHINGLLM_API_KEY and GATEWAY_ADMIN_TOKEN
-docker compose up -d    # gateway on :21500; AnythingLLM stays unpublished
-```
+Bring-up is two passes, because the gateway's API key is minted by the
+AnythingLLM instance the stack itself just created:
 
-- **AnythingLLM's own UI is not exposed**: reach it from the server itself or
-  via an SSH tunnel. The gateway is the only published port.
-- **Users** (admin token): `POST /api/gateway/users {"name":"brian"}` returns
-  a once-shown token. See `docs/superpowers/specs/2026-10-28-iam-middleware.md`
-  for the full surface (users, shared sources, refresh jobs).
+1. **Start the stack, finish AnythingLLM's first boot.**
+
+   ```bash
+   cd server
+   docker compose up -d
+   ```
+
+   AnythingLLM's UI listens on the **server's loopback only**
+   (`127.0.0.1:30001`) — it is never on the LAN. Open
+   `http://localhost:30001` on the server itself, or tunnel from your
+   machine with `ssh -L 30001:127.0.0.1:30001 <server>` and open the same
+   URL. Complete its setup wizard (it asks you to create its own admin
+   account), then go to **Settings → Developer API** and generate an API
+   key.
+
+2. **Fill `server/.env` and bring the gateway up with the secrets.**
+
+   ```bash
+   cp .env.example .env
+   docker compose up -d   # recreates the gateway with the new env
+   ```
+
+   - `ANYTHINGLLM_API_KEY` — the key you generated in step 1. The gateway
+     becomes its only holder; user machines never see it.
+   - `GATEWAY_ADMIN_TOKEN` — this one is **yours to create**: any long
+     random secret (e.g. `openssl rand -base64 32`). It is the gateway's
+     own admin credential for managing users and shared sources.
+   - `SHARED_WORKSPACE_SLUG` — optional, defaults to `shared`.
+
+   On this pass the gateway verifies or creates the shared workspace. Verify
+   with `curl http://<server>:21500/health`.
+
+3. **Create users and connect clients.**
+
+   ```bash
+   curl -X POST http://<server>:21500/api/gateway/users \
+     -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN" \
+     -H "Content-Type: application/json" -d '{"name":"brian"}'
+   ```
+
+   The response returns the user's token **once** (store it; only its
+   SHA-256 hash is kept). See
+   `docs/superpowers/specs/2026-10-28-iam-middleware.md` for the full
+   surface (users, shared sources, refresh jobs).
+
 - **any-obs clients** connect exactly as before —
   `--url http://<server>:21500 --api-key <user-token>`. The unified workspace
   their client creates is recorded as that user's personal workspace.

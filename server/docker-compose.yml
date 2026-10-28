@@ -13,7 +13,11 @@ services:
     restart: unless-stopped
     volumes:
       - anythingllm-storage:/app/server/storage
-    # No ports published on purpose: the gateway is the only front door.
+    # Loopback-only publish so an admin can reach the UI on the server itself
+    # or over an SSH tunnel (ssh -L 30001:127.0.0.1:30001 <server>) to finish
+    # first-boot setup and mint the developer API key. Never on the LAN.
+    ports:
+      - "127.0.0.1:30001:3001"
 
   gateway:
     build:
