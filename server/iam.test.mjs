@@ -1,0 +1,68 @@
+import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+import { createUserStore, hashToken } from "./iam.mjs";
+
+async function setup() {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "any-obs-gateway-iam-"));
+  return createUserStore({ dataDir, sharedWorkspaceSlug: "shared" });
+}
+
+test("users are created with a once-shown token and verified by hash", async () => {
+  const store = await setup();
+
+  const { user, token } = await store.create({ name: "brian" });
+  assert.equal(user.name, "brian");
+  assert.ok(token.length > 20);
+  assert.deepEqual(store.verify(token), { kind: "user", name: "brian" });
+  assert.equal(store.verify("wrong-token"), null);
+  assert.equal(store.verify(""), null);
+
+  const listed = await store.list();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].tokenHash, undefined);
+  assert.equal(listed[0].name, "brian");
+
+  await assert.rejects(() => store.create({ name: "brian" }), /User already exists/);
+  await assert.rejects(() => store.create({ name: "Bad Name" }), /lowercase dash-separated/);
+});
+
+test("removed users lose token access; workspaces stay owned", async () => {
+  const store = await setup();
+  const { token } = await store.create({ name: "scout" });
+  await store.recordOwnership("any-obs-mine-01", "scout");
+
+  assert.deepEqual(await store.remove("scout"), { name: "scout" });
+  assert.equal(store.verify(token), null);
+  assert.equal(await store.remove("scout"), null);
+  // Derived data is not the user's to take down.
+  assert.deepEqual(await store.ownedWorkspaces("scout"), ["any-obs-mine-01"]);
+});
+
+test("entitlements are the shared workspace for reads and owned workspaces for writes", async () => {
+  const store = await setup();
+  await store.create({ name: "brian" });
+
+  assert.deepEqual(await store.entitlements("brian"), { read: ["shared"], write: [] });
+
+  await store.recordOwnership("any-obs-brian-01", "brian");
+  await store.recordOwnership("any-obs-brian-02", "brian");
+  assert.deepEqual(await store.entitlements("brian"), {
+    read: ["shared", "any-obs-brian-01", "any-obs-brian-02"],
+    write: ["any-obs-brian-01", "any-obs-brian-02"],
+  });
+
+  // Ownership is minted once; a second claim is a no-op.
+  assert.equal(await store.recordOwnership("any-obs-brian-01", "someone-else"), "brian");
+});
+
+test("token hashes are sha-256 of the raw token", async () => {
+  const store = await setup();
+  const { token } = await store.create({ name: "hash-check" });
+  // verify() agreeing with hashToken() is the observable contract.
+  assert.match(hashToken(token), /^[a-f0-9]{64}$/);
+  assert.notEqual(hashToken(token), token);
+});

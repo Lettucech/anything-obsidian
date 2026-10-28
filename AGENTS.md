@@ -15,8 +15,15 @@ It ships as a plain Node app, installed by `install.sh`, managed by the
 `anything-obsidian` CLI and a browser dashboard on port 21400. MCP endpoints:
 loopback 21433, optional LAN 21444 (`lan on`, Bearer token required).
 
-There is no Docker stack, no Electron/desktop-shell plan, and no npm publish —
-distribution is `install.sh` from this repo. The root `package.json` now
+The client stays native forever — no Docker, no Electron/desktop-shell plan,
+no npm publish. A second deployable exists for shared deployments: the
+**server stack** under `server/` (AnythingLLM + the IAM gateway, run with
+`docker compose`); the gateway is the sole holder of the AnythingLLM admin
+key, per-user tokens scope every client, and its shared-source pipeline is
+the only writer to the shared workspace. See
+`docs/superpowers/specs/2026-10-28-iam-middleware.md`.
+
+The root `package.json` now
 carries real dependencies (MCP SDK, zod); `install.sh` runs `npm ci --omit=dev`
 and `anything-obsidian update` refreshes both app and dependencies.
 

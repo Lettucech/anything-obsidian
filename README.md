@@ -217,6 +217,37 @@ export MCP_ALLOWED_HOSTS=obsidian-host.local,192.168.1.10
 Keep the dashboard and AnythingLLM management UI on loopback. A LAN bearer
 token grants access to RAG results, which may contain source content.
 
+## Shared deployments (server stack)
+
+For one AnythingLLM shared by several people or agents, run the server stack:
+the IAM **gateway** is the only front door — it holds the single admin API
+key, issues per-user tokens, filters every proxied call to the workspaces
+each user may read (the shared workspace plus their own), fans searches out
+across all of them in one query, and runs the shared-source pipeline (git
+pull or directory re-read, then reindex) that is the only writer to the
+shared workspace.
+
+```bash
+cd server
+cp .env.example .env    # fill ANYTHINGLLM_API_KEY and GATEWAY_ADMIN_TOKEN
+docker compose up -d    # gateway on :21500; AnythingLLM stays unpublished
+```
+
+- **AnythingLLM's own UI is not exposed**: reach it from the server itself or
+  via an SSH tunnel. The gateway is the only published port.
+- **Users** (admin token): `POST /api/gateway/users {"name":"brian"}` returns
+  a once-shown token. See `docs/superpowers/specs/2026-10-28-iam-middleware.md`
+  for the full surface (users, shared sources, refresh jobs).
+- **any-obs clients** connect exactly as before —
+  `--url http://<server>:21500 --api-key <user-token>`. The unified workspace
+  their client creates is recorded as that user's personal workspace.
+- **Agents without a local any-obs** use the token-gated MCP endpoint at
+  `http://<server>:21500/mcp`: `any_obs_rag_search` (fan-out),
+  `any_obs_rag_answer`, `any_obs_shared_refresh`, `any_obs_job_get`.
+- **Shared knowledge** enters the index only through registered sources
+  (git repositories or server directories) refreshed by the pipeline —
+  schedule them with an interval or queue a refresh on demand.
+
 ## Operations
 
 The dashboard is the normal interface for vault registration, per-vault sync

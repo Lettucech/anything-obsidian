@@ -1,0 +1,38 @@
+# The any-obs server stack: one shared AnythingLLM plus the IAM gateway.
+#   docker compose up -d
+# The gateway (21500) is the only service published to the LAN. AnythingLLM
+# is reachable only inside the compose network — for its admin UI use an SSH
+# tunnel (ssh -L 3001:localhost:3001 <server>) or a loopback bind below.
+#
+# Required environment (put in .env next to this file):
+#   ANYTHINGLLM_API_KEY  — the developer API key; the gateway is its sole holder
+#   GATEWAY_ADMIN_TOKEN  — token for gateway administration (users, sources)
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    restart: unless-stopped
+    volumes:
+      - anythingllm-storage:/app/server/storage
+    # No ports published on purpose: the gateway is the only front door.
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - anythingllm
+    environment:
+      ANYTHINGLLM_BASE_URL: http://anythingllm:3001
+      ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY}
+      GATEWAY_ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN}
+      GATEWAY_PORT: "21500"
+      SHARED_WORKSPACE_SLUG: ${SHARED_WORKSPACE_SLUG:-shared}
+    ports:
+      - "21500:21500"
+    volumes:
+      - gateway-data:/data
+
+volumes:
+  anythingllm-storage:
+  gateway-data:

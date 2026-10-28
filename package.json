@@ -18,7 +18,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test \"mcp/**/*.test.mjs\" \"dashboard/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"scripts/**/*.test.mjs\" \"bin/**/*.test.mjs\""
+    "test": "node --test \"mcp/**/*.test.mjs\" \"dashboard/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"scripts/**/*.test.mjs\" \"bin/**/*.test.mjs\" \"server/**/*.test.mjs\""
   },
   "license": "MIT",
   "private": true,
