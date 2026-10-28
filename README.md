@@ -262,10 +262,12 @@ Bring-up is one command and one browser page — no `.env` values required:
 2. **Open the gateway dashboard** at `http://<server>:21500` and follow the
    setup wizard:
 
-   - **Step 1 — admin credential:** the wizard shows the gateway admin
-     token once; you sign in with it from then on. (Fresh deployments also
-     accept the one-time setup token printed to `docker compose logs
-     gateway` if you prefer proving server access first.)
+   - **Step 1 — admin credential:** first run claims the gateway: the
+     wizard generates the admin token and shows it once — copy it and
+     complete setup right away (anyone on the network could open this page
+     while it waits; deployments that want that window closed preset
+     `GATEWAY_ADMIN_TOKEN` in `server/.env`, and the wizard then demands
+     it).
    - **Step 2 — initialize AnythingLLM:** its own UI is not on the network —
      the wizard shows the exact command
      (`ssh -L 21501:127.0.0.1:21501 <server>`, or open

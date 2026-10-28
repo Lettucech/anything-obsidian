@@ -39,17 +39,31 @@ function renderWizard(state) {
     card.append(
       stepBadge(1),
       element("h2", "", "Create the gateway admin credential"),
-      element("p", "note", "First prove you run this server: paste the one-time setup token printed to <code>docker compose logs gateway</code> (or the bootstrap token you configured). The admin token you get back is shown once — copy it."),
+      state.credentialRequired
+        ? element("p", "note", "This deployment requires a preset credential: paste the gateway admin (or bootstrap) token you configured before deploy.")
+        : element("p", "note", "First run claims the gateway: the admin token is generated and shown once — copy it now. Anyone on this network could reach this page, so complete setup immediately after deploy (or redeploy with GATEWAY_ADMIN_TOKEN preset to require it)."),
     );
     const form = element("form", "");
     const bootstrap = element("input", "", "");
     bootstrap.type = "password";
-    bootstrap.placeholder = "One-time setup token (from the container log)";
-    form.append(bootstrap);
+    if (state.credentialRequired) {
+      bootstrap.placeholder = "Preset admin or bootstrap token";
+      form.append(bootstrap);
+    }
+    form.append(element("button", "button button-primary", state.credentialRequired ? "Verify and continue" : "Generate admin token"));
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        const result = await request("/api/setup/admin-token", { method: "POST", auth: false, token: bootstrap.value.trim() });
+        const result = await request("/api/setup/admin-token", {
+          method: "POST",
+          auth: false,
+          ...(state.credentialRequired ? { token: bootstrap.value.trim() } : {}),
+        });
+        if (result.alreadyClaimed) {
+          card.querySelector(".error")?.remove();
+          card.append(element("p", "error", "The admin credential was already claimed in another session and cannot be shown again. If you lost it, redeploy the data volume or restart with GATEWAY_ADMIN_TOKEN preset."));
+          return;
+        }
         adminToken = result.adminToken;
         window.localStorage.setItem(TOKEN_STORAGE_KEY, adminToken);
         step = 2;

@@ -42,12 +42,14 @@ export function createGatewayServer({
   fetchImpl = fetch,
 }) {
   const baseUrl = stripTrailingSlash(anythingllmBaseUrl);
-  // The wizard-collected admin credential lives in the data volume; it is
-  // cached here at boot and refreshed whenever setup writes it, so token
-  // checks stay synchronous.
+  // Wizard-collected secrets live in the data volume; both are cached here
+  // at boot and refreshed whenever setup writes them, so token checks stay
+  // synchronous.
   let configuredAdminToken = "";
+  let configuredApiKey = "";
   void gatewayConfig.load().then((state) => {
     configuredAdminToken = state.adminToken;
+    configuredApiKey = state.apiKey;
   }).catch(() => {});
 
   return createServer(async (req, res) => {
@@ -129,7 +131,7 @@ export function createGatewayServer({
   function apiKeyActive() {
     // Env wins for non-interactive deployments; the wizard-collected key is
     // the default path.
-    return anythingllmApiKey || "";
+    return anythingllmApiKey || configuredApiKey;
   }
 
   function adminTokenActive() {
@@ -174,6 +176,9 @@ export function createGatewayServer({
       sharedWorkspace: sharedWorkspaceSlug,
       hasAdminCredential: Boolean(adminToken || state.adminToken),
       hasApiKey: Boolean(anythingllmApiKey || state.apiKey),
+      // Hardened deployments preset a credential; the wizard then demands
+      // it. Otherwise first-run runs as an open claim window.
+      credentialRequired: Boolean(adminToken || bootstrapToken),
       envBased,
     };
   }
@@ -190,28 +195,36 @@ export function createGatewayServer({
     return match?.[1]?.trim() ?? "";
   }
 
-  // First contact needs *some* secret: the operator's env admin token, or
-  // the one-time bootstrap token (generated at boot and printed to the
-  // container log when not provided).
+  // First contact follows the self-hosted claim model by default: with no
+  // preset credential the first dashboard visitor mints the admin token, so
+  // a fresh deployment should complete setup immediately. Operators who
+  // want the window closed can preset GATEWAY_ADMIN_TOKEN (or a bootstrap
+  // token) and the wizard demands it instead.
   function setupAuthorized(req) {
+    if (!adminTokenActive() && !bootstrapToken) return true;
     const presented = presentedBearer(req);
     if (!presented) return false;
-    const activeAdmin = adminTokenActive();
-    if (activeAdmin && presented === activeAdmin) return true;
-    const bootstrap = String(bootstrapToken ?? "");
-    return Boolean(bootstrap) && presented === bootstrap;
+    if (adminTokenActive() && presented === adminTokenActive()) return true;
+    return Boolean(bootstrapToken) && presented === bootstrapToken;
   }
 
   async function handleSetupAdminToken(req, res) {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
     await guardSetup();
-    if (!setupAuthorized(req)) throw httpError(401, "Bearer token required (the gateway bootstrap or admin token)");
 
-    // The wizard asks for a credential even in env-based setups; there the
-    // env token is the credential and nothing changes on disk.
-    if (adminToken) return sendJson(res, 200, { adminToken, stored: false });
+    // An env-preset admin token is the credential; the caller must prove
+    // they hold it before anything is handed back.
+    if (adminToken) {
+      if (!setupAuthorized(req)) throw httpError(401, "Bearer token required (the preset gateway admin or bootstrap token)");
+      return sendJson(res, 200, { adminToken, stored: false });
+    }
+
     const state = await gatewayConfig.load();
-    if (state.adminToken) return sendJson(res, 200, { adminToken: state.adminToken, stored: true });
+    // Once minted, the credential is never displayed again — a later
+    // visitor of the same wizard learns only that it is claimed.
+    if (state.adminToken) return sendJson(res, 200, { alreadyClaimed: true });
+
+    if (!setupAuthorized(req)) throw httpError(401, "Bearer token required (the preset gateway admin or bootstrap token)");
     const generated = randomBytes(24).toString("base64url");
     await gatewayConfig.save({ adminToken: generated });
     configuredAdminToken = generated;
@@ -221,7 +234,7 @@ export function createGatewayServer({
   async function handleSetupApiKey(req, res) {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
     await guardSetup();
-    if (!setupAuthorized(req)) throw httpError(401, "Bearer token required (the gateway bootstrap or admin token)");
+    if (!setupAuthorized(req)) throw httpError(401, "Bearer token required (the preset gateway admin or bootstrap token)");
     const body = await maybeJson(req);
     const candidate = stripTrailingSlash(String(body?.apiKey ?? "").trim());
     if (!candidate) throw httpError(400, "apiKey is required");
@@ -235,6 +248,7 @@ export function createGatewayServer({
     }
 
     await gatewayConfig.save({ apiKey: candidate });
+    configuredApiKey = candidate;
     const workspace = await ensureSharedWorkspace({
       baseUrl, apiKey: candidate, slug: sharedWorkspaceSlug, fetchImpl,
     });
@@ -562,9 +576,8 @@ if (import.meta.url === entryUrl()) {
     console.error("ANYTHINGLLM_BASE_URL is required (inside compose this is http://anythingllm:3001)");
     process.exit(1);
   }
-  if (!env.ANYTHINGLLM_API_KEY && !env.GATEWAY_BOOTSTRAP_TOKEN) {
-    env.GATEWAY_BOOTSTRAP_TOKEN = randomBytes(24).toString("base64url");
-    console.error(`[any-obs-gateway] one-time setup token (also visible in the dashboard wizard): ${env.GATEWAY_BOOTSTRAP_TOKEN}`);
+  if (!env.ANYTHINGLLM_API_KEY && !env.GATEWAY_ADMIN_TOKEN && !env.GATEWAY_BOOTSTRAP_TOKEN) {
+    console.error("[any-obs-gateway] unconfigured — the setup dashboard is in its first-run claim window: the first visitor mints the admin credential, so complete setup now (or preset GATEWAY_ADMIN_TOKEN before deploy to require it)");
   }
   const dataDir = env.GATEWAY_DATA_DIR
     ? path.resolve(env.GATEWAY_DATA_DIR)

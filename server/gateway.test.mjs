@@ -177,58 +177,77 @@ function mcpTransport(baseUrl, token) {
   });
 }
 
-test("gateway: zero-env setup wizard collects credentials into the data volume and then closes", async () => {
-  // A gateway with no bootstrap secret refuses setup entirely.
-  const sealed = await startGateway({ envSecrets: false });
-  assert.equal((await fetchJson(`${sealed.baseUrl}/health`)).body.needsSetup, true);
-  assert.equal(
-    (await fetchJson(`${sealed.baseUrl}/api/setup/admin-token`, { method: "POST", headers: auth("anything") })).status,
-    401,
-  );
-
-  // Dashboard is served and reports setup pending.
-  const page = await fetch(`${sealed.baseUrl}/`);
+test("gateway: zero-env setup wizard claims, verifies, and closes", async () => {
+  // Zero-env default = the self-hosted claim model: the first visitor
+  // mints the admin credential with no prior secret.
+  const claimed = await startGateway({ envSecrets: false });
+  assert.equal((await fetchJson(`${claimed.baseUrl}/health`)).body.needsSetup, true);
+  const page = await fetch(`${claimed.baseUrl}/`);
   assert.match(await page.text(), /any-obs gateway/);
 
-  // The operator's one-time bootstrap token (env or generated into the
-  // container log) authorizes the wizard: mint the admin credential first.
-  const fresh = await startGateway({ envSecrets: false, bootstrapToken: "bootstrap-token-9" });
-  const minted = await fetchJson(`${fresh.baseUrl}/api/setup/admin-token`, {
+  const mint = await fetchJson(`${claimed.baseUrl}/api/setup/admin-token`, { method: "POST" });
+  assert.equal(mint.status, 201);
+  assert.ok(mint.body.adminToken.length > 20);
+
+  // Once minted, the credential is never displayed again — a later visitor
+  // of the same wizard learns only that it is claimed.
+  const replay = await fetchJson(`${claimed.baseUrl}/api/setup/admin-token`, { method: "POST" });
+  assert.equal(replay.status, 200);
+  assert.deepEqual(replay.body, { alreadyClaimed: true });
+
+  // Hardened deployments preset a credential; the wizard then demands it.
+  const hardened = await startGateway({ envSecrets: false, bootstrapToken: "bootstrap-token-9" });
+  assert.equal(
+    (await fetchJson(`${hardened.baseUrl}/api/setup/admin-token`, { method: "POST", headers: auth("wrong") })).status,
+    401,
+  );
+  const hardenedMint = await fetchJson(`${hardened.baseUrl}/api/setup/admin-token`, {
     method: "POST",
     headers: auth("bootstrap-token-9"),
   });
-  assert.equal(minted.status, 201);
-  assert.ok(minted.body.adminToken.length > 20);
+  assert.equal(hardenedMint.status, 201);
+  assert.notEqual(hardenedMint.body.adminToken, mint.body.adminToken);
 
-  // Step 2+3: paste the AnythingLLM key; a wrong key is rejected and stored
-  // nowhere, the right key verifies against AnythingLLM and completes setup.
-  const bad = await fetchJson(`${fresh.baseUrl}/api/setup/api-key`, {
+  // The pasted developer key is rejected if wrong, stored after AnythingLLM
+  // verifies it, and actually used by the gateway afterwards.
+  const bad = await fetchJson(`${claimed.baseUrl}/api/setup/api-key`, {
     method: "POST",
-    headers: auth(minted.body.adminToken),
+    headers: auth(mint.body.adminToken),
     body: JSON.stringify({ apiKey: "wrong" }),
   });
   assert.equal(bad.status, 400);
   assert.match(bad.body.error, /rejected this API key/);
 
-  const done = await fetchJson(`${fresh.baseUrl}/api/setup/api-key`, {
+  const done = await fetchJson(`${claimed.baseUrl}/api/setup/api-key`, {
     method: "POST",
-    headers: auth(minted.body.adminToken),
+    headers: auth(mint.body.adminToken),
     body: JSON.stringify({ apiKey: "minted-developer-key" }),
   });
   assert.equal(done.status, 200);
   assert.equal(done.body.configured, true);
   assert.equal(done.body.sharedWorkspace.slug, SHARED);
 
-  // Setup is now closed for good, and the minted admin token administers.
-  assert.equal((await fetchJson(`${fresh.baseUrl}/api/setup/admin-token`, { method: "POST", headers: auth("bootstrap-token-9") })).status, 403);
-  assert.equal((await fetchJson(`${fresh.baseUrl}/api/setup/api-key`, { method: "POST", headers: auth(minted.body.adminToken), body: JSON.stringify({ apiKey: "x" }) })).status, 403);
-  const users = await fetchJson(`${fresh.baseUrl}/api/gateway/users`, { headers: auth(minted.body.adminToken) });
-  assert.equal(users.status, 200);
+  // Setup is now closed for good; the minted admin administers; a user's
+  // search flows through the wizard-collected key (not just the env one).
+  assert.equal((await fetchJson(`${claimed.baseUrl}/api/setup/admin-token`, { method: "POST" })).status, 403);
+  assert.equal((await fetchJson(`${claimed.baseUrl}/api/setup/api-key`, { method: "POST", headers: auth(mint.body.adminToken), body: JSON.stringify({ apiKey: "x" }) })).status, 403);
+  const user = await fetchJson(`${claimed.baseUrl}/api/gateway/users`, {
+    method: "POST",
+    headers: auth(mint.body.adminToken),
+    body: JSON.stringify({ name: "brian" }),
+  });
+  assert.equal(user.status, 201);
+  const search = await fetchJson(`${claimed.baseUrl}/api/gateway/search`, {
+    method: "POST",
+    headers: auth(user.body.token),
+    body: JSON.stringify({ query: "anything" }),
+  });
+  assert.equal(search.status, 200);
+  assert.deepEqual(search.body.results.map((chunk) => chunk.workspace), [SHARED]);
 
   // A gateway restarted on the same data volume stays configured.
-  const restarted = await startGateway({ envSecrets: false, dataDir: fresh.dataDir });
-  const health = await fetchJson(`${restarted.baseUrl}/health`);
-  assert.equal(health.body.needsSetup, false);
+  const restarted = await startGateway({ envSecrets: false, dataDir: claimed.dataDir });
+  assert.equal((await fetchJson(`${restarted.baseUrl}/health`)).body.needsSetup, false);
 });
 
 async function createUser(baseUrl, name) {
