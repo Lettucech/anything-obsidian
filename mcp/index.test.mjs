@@ -91,8 +91,7 @@ test("obsidian_vault_list is filtered by caller identity", async () => {
   }
 });
 
-test("vault_list entries carry the last sync outcome without error details", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-list-"));
+test("vault_list entries carry the last sync outcome without error details", async () => {  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-list-"));
   const registryPath = path.join(root, "vaults.json");
   const stateRoot = path.join(root, "state");
   await mkdir(stateRoot, { recursive: true });
@@ -130,3 +129,123 @@ test("vault_list entries carry the last sync outcome without error details", asy
     else process.env.VAULT_STATE_ROOT = previousState;
   }
 });
+
+test("rag tools query the unified workspace with attribution and access filtering", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-rag-"));
+  const registryPath = path.join(root, "vaults.json");
+  await writeFile(registryPath, JSON.stringify({
+    workspace: { slug: "any-obs-test-01", name: "Anything Obsidian" },
+    vaults: [
+      { id: "work", name: "Work", directory: "work", enabled: true, accessMode: "open", allowlist: [] },
+      { id: "secret", name: "Secret", directory: "secret", enabled: true, accessMode: "restricted", allowlist: ["scout"] },
+    ],
+  }));
+
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        results: [
+          { score: 0.9, chunkSource: "work/notes/a.md" },
+          { score: 0.8, chunkSource: "secret/notes/s.md" },
+          { score: 0.7, chunkSource: "work/notes/b.md" },
+        ],
+      }),
+    };
+  };
+
+  const previous = captureEnv({
+    VAULT_REGISTRY_PATH: registryPath,
+    ANYTHINGLLM_BASE_URL: "http://anythingllm.test",
+    ANYTHINGLLM_API_KEY: "key",
+  });
+  try {
+    const [client, server] = await connect("local", ANONYMOUS_IDENTITY);
+
+    const search = JSON.parse((await client.callTool({
+      name: "any_obs_rag_search",
+      arguments: { query: "meeting notes" },
+    })).content[0].text);
+    assert.deepEqual(requests.at(-1).url, "http://anythingllm.test/api/v1/workspace/any-obs-test-01/vector-search");
+    // The restricted vault is invisible to an anonymous caller even though
+    // its chunks live in the shared index.
+    assert.deepEqual(search.results.map((chunk) => [chunk.vaultId, chunk.vaultPath]), [
+      ["work", "notes/a.md"],
+      ["work", "notes/b.md"],
+    ]);
+    assert.deepEqual(search.vaultAttribution, { attributed: 2, dropped: 1 });
+
+    const filtered = JSON.parse((await client.callTool({
+      name: "any_obs_rag_search",
+      arguments: { query: "meeting notes", vaultId: "work" },
+    })).content[0].text);
+    assert.deepEqual(filtered.results.map((chunk) => chunk.vaultPath), ["notes/a.md", "notes/b.md"]);
+
+    const denied = await client.callTool({
+      name: "any_obs_rag_search",
+      arguments: { query: "anything", vaultId: "secret" },
+    });
+    assert.equal(denied.isError, true);
+    assert.match(denied.content[0].text, /restricted and this caller has no access/);
+
+    const answer = JSON.parse((await client.callTool({
+      name: "any_obs_rag_answer",
+      arguments: { question: "what changed?" },
+    })).content[0].text);
+    assert.deepEqual(requests.at(-1).url, "http://anythingllm.test/api/v1/workspace/any-obs-test-01/chat");
+    assert.equal(answer.results.length, 3);
+
+    await client.close();
+    await server.close();
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(previous);
+  }
+});
+
+test("rag tools explain themselves when no unified workspace is configured yet", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-rag-empty-"));
+  const registryPath = path.join(root, "vaults.json");
+  await writeFile(registryPath, JSON.stringify({ vaults: [] }));
+
+  const previous = captureEnv({ VAULT_REGISTRY_PATH: registryPath });
+  try {
+    const [client, server] = await connect("local", ANONYMOUS_IDENTITY);
+    const result = await client.callTool({ name: "any_obs_rag_search", arguments: { query: "anything" } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /No unified workspace is configured yet/);
+    await client.close();
+    await server.close();
+  } finally {
+    restoreEnv(previous);
+  }
+});
+
+async function connect(profile, identity) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createServer(profile, identity);
+  const client = new Client({ name: "anything-obsidian-test-client", version: "0.1.0" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  return [client, server];
+}
+
+function captureEnv(overrides) {
+  const previous = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    previous[key] = process.env[key];
+    process.env[key] = value;
+  }
+  return previous;
+}
+
+function restoreEnv(previous) {
+  for (const [key, value] of Object.entries(previous)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}

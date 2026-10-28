@@ -76,6 +76,7 @@ export function dashboardMetrics(status, vaults) {
   const services = status.services ?? [];
   return [
     { label: "Managed vaults", value: vaults.length },
+    { label: "RAG workspace", value: status.workspace?.slug || "Not set up yet" },
     { label: "Scheduled sync", value: vaults.filter((vault) => vault.enabled).length },
     { label: "Healthy services", value: `${services.filter((service) => service.running && service.health?.ok).length}/${services.length}` },
   ];
@@ -142,7 +143,7 @@ if (typeof document !== "undefined") {
     "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form", "sync-banner", "update-badge", "lan-dialog", "lan-token-value", "lan-done",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
     "source-mode-field", "import-help", "import-id-field", "import-directory-field", "import-path-field",
-    "clone-url-field", "workspace-slug-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
+    "clone-url-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
     "add-vault-inline", "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
     "agents", "agent-message", "add-agent", "agent-dialog", "agent-form", "agent-form-title",
     "agent-create-fields", "agent-token-reveal", "agent-token-value", "agent-submit", "cancel-agent", "agent-dialog-message",
@@ -193,7 +194,7 @@ if (typeof document !== "undefined") {
     const { vaultId, action } = button.dataset;
     if (action === "edit") return showForm(state.vaults.find((vault) => vault.id === vaultId));
     if (action === "remove") {
-      if (!window.confirm(`Remove '${vaultId}' from management? Its repository and workspace will remain.`)) return;
+      if (!window.confirm(`Remove '${vaultId}' from management? Its repository and files stay on disk; its indexed chunks leave the shared RAG workspace.`)) return;
       await request(`/api/vaults/${encodeURIComponent(vaultId)}`, { method: "DELETE" });
       message(`Removed '${vaultId}' from management.`);
     } else {
@@ -213,7 +214,7 @@ if (typeof document !== "undefined") {
     try {
       if (editing) {
         delete input.id; delete input.directory; delete input.sourceMode; delete input.repositoryUrl;
-        delete input.repositoryVisibility; delete input.workspaceMode; delete input.workspaceSlug;
+        delete input.repositoryVisibility;
         if (!input.gitAuth.token) delete input.gitAuth;
         const saved = await request(`/api/vaults/${encodeURIComponent(state.editingId)}`, { method: "PATCH", body: JSON.stringify(input) });
         hideForm();
@@ -263,7 +264,6 @@ if (typeof document !== "undefined") {
       ...vaultSourcePayload(form, form.get("sourceMode")),
       repositoryVisibility: form.get("repositoryVisibility"),
       name: form.get("name"),
-      workspaceMode: form.get("workspaceMode"), workspaceSlug: form.get("workspaceSlug"),
       gitAutoPull: form.get("gitAutoPull") === "on", gitAutoPush: form.get("gitAutoPush") === "on",
       gitUserName: form.get("gitUserName"), gitUserEmail: form.get("gitUserEmail"),
       gitPushUrl: form.get("gitPushUrl"), gitCommitMessagePrefix: form.get("gitCommitMessagePrefix"),
@@ -287,7 +287,7 @@ if (typeof document !== "undefined") {
       else field.value = Array.isArray(value) ? value.join("\n") : value;
     });
     if (vault) els.vaultform.elements.repositoryVisibility.value = vault.gitAuthMode === "https-token" ? "private" : "public";
-    for (const name of ["id", "directory", "importPath", "importDirectory", "workspaceMode", "workspaceSlug"]) {
+    for (const name of ["id", "directory", "importPath", "importDirectory"]) {
       const field = els.vaultform.elements.namedItem(name); if (field) field.disabled = Boolean(vault);
     }
     els.vaultformtitle.textContent = vault ? `Edit ${vault.name}` : "Add vault";
@@ -302,7 +302,6 @@ if (typeof document !== "undefined") {
     const completed = Boolean(state.createdVaultId);
     const importMode = !editing && form.elements.sourceMode.value === "import";
     const privateRepository = form.elements.repositoryVisibility.value === "private";
-    const attachWorkspace = form.elements.workspaceMode.value === "attach";
     const restricted = form.elements.accessMode.value === "restricted";
 
     els.vaultsource.hidden = false;
@@ -327,8 +326,6 @@ if (typeof document !== "undefined") {
     form.elements.repositoryUrl.required = !editing && !importMode;
     els.privateauthfields.hidden = !privateRepository;
     for (const name of ["gitAuthUsername", "gitAuthToken"]) form.elements[name].required = !editing && privateRepository;
-    els.workspaceslugfield.hidden = !attachWorkspace || editing;
-    form.elements.workspaceSlug.required = attachWorkspace && !editing;
     els.allowlistfield.hidden = !restricted;
     els.vaultsubmit.textContent = editing ? "Save vault" : importMode ? "Import and add vault" : "Clone and add vault";
     els.vaultsubmit.hidden = completed;
@@ -507,7 +504,7 @@ if (typeof document !== "undefined") {
     if (vault.gitAuthMode === "https-token") pills.append(element("span", "vault-pill private", "Private"));
     header.append(identity, pills);
     const details = element("dl", "vault-details");
-    details.append(vaultDetail("Repository", `${vault.gitRemote}/${vault.gitBranch}`), vaultDetail("Workspace", vault.workspaceSlug), vaultDetail("Sync", `Every ${vault.syncIntervalSeconds}s`), vaultDetail("Last sync", lastSyncLabel(vault.lastSync)));
+    details.append(vaultDetail("Repository", `${vault.gitRemote}/${vault.gitBranch}`), vaultDetail("Sync", `Every ${vault.syncIntervalSeconds}s`), vaultDetail("Last sync", lastSyncLabel(vault.lastSync)));
     if (vault.lastSync?.status === "failed") card.classList.add("sync-failed");
     card.append(header, details);
     if (vault.accessMode === "restricted") card.append(element("p", "note", restrictedAccessNote(vault.allowlist)));

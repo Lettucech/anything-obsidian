@@ -15,6 +15,17 @@ export async function loadVaults(registryPath) {
   }
 }
 
+export async function loadWorkspace(registryPath) {
+  try {
+    const raw = JSON.parse(await readFile(registryPath, "utf8"));
+    const workspace = raw?.workspace;
+    return workspace && typeof workspace.slug === "string" && workspace.slug ? workspace : null;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 export function resolveVault(vaults, vaultId, identity = ANONYMOUS_IDENTITY) {
   const enabled = vaults.filter((vault) => vault.enabled);
   if (vaultId) {
@@ -50,7 +61,7 @@ function isVaultRecord(value) {
   if (!value || typeof value !== "object") return false;
   return typeof value.id === "string" && typeof value.name === "string" && typeof value.directory === "string" &&
     locationShape(value) &&
-    typeof value.workspaceSlug === "string" && typeof value.enabled === "boolean" &&
+    typeof value.enabled === "boolean" &&
     (value.accessMode === "open" || value.accessMode === "restricted") && Array.isArray(value.allowlist) &&
     optionalBoolean(value.gitAutoPull) && optionalBoolean(value.gitAutoPush) &&
     optionalNumber(value.syncIntervalSeconds) && optionalBoolean(value.embedAfterSync);

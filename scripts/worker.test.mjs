@@ -21,12 +21,14 @@ test("vault config resolves service endpoints from the environment without docke
   const { mkdir, writeFile } = await import("node:fs/promises");
   await mkdir(path.dirname(env.VAULT_REGISTRY_PATH), { recursive: true });
   await writeFile(env.VAULT_REGISTRY_PATH, JSON.stringify({
-    vaults: [{ id: "work", name: "w", directory: "work", workspaceSlug: "work", gitUserName: "A", gitUserEmail: "a@b" }],
+    workspace: { slug: "any-obs-custom-01", name: "Anything Obsidian" },
+    vaults: [{ id: "work", name: "w", directory: "work", gitUserName: "A", gitUserEmail: "a@b" }],
   }));
   const config = await loadVaultConfig(env, "work");
   assert.equal(config.anythingllmBaseUrl, "http://custom:3001");
   assert.equal(config.mcpBaseUrl, "http://127.0.0.1:21433");
   assert.equal(config.vaultStateRoot, env.VAULT_STATE_ROOT);
+  assert.equal(config.workspaceSlug, "any-obs-custom-01");
 });
 
 test("worker rejects unknown commands", async () => {

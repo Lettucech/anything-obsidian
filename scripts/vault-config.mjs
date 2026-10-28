@@ -3,6 +3,8 @@ import path from "node:path";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
 import { configPaths, defaultConfigRoot } from "../lib/app-config.mjs";
+import { ensureUnifiedWorkspace, vaultDocumentFolder } from "../lib/unified-workspace.mjs";
+import { createAnythingllmClient } from "../dashboard/anythingllm.mjs";
 
 function resolveBaseConfig(env) {
   return {
@@ -24,14 +26,28 @@ export async function loadVaultConfig(env, vaultId) {
 
   const base = resolveBaseConfig(env);
   const credential = await secretStoreFor(env).get(vault.id);
-  const stateRoot = base.vaultStateRoot;
+  const stateRoot = base.vaultStateRoot || defaultPaths().stateRoot;
   const stateDir = path.join(stateRoot, "manifests", vault.id);
+
+  // Headless callers (scheduler, worker commands) must survive the legacy
+  // per-vault registry without a dashboard round-trip.
+  let workspace = await registry.getWorkspace();
+  if (!workspace) {
+    ({ workspace } = await ensureUnifiedWorkspace({
+      registry,
+      anythingllm: createAnythingllmClient({
+        baseUrl: base.anythingllmBaseUrl,
+        apiKey: base.apiKey,
+      }),
+      stateRoot,
+    }));
+  }
 
   return {
     ...base,
     vaultId: vault.id,
     vaultPath: registry.resolvePath(vault),
-    workspaceSlug: vault.workspaceSlug,
+    workspaceSlug: workspace.slug,
     gitRemote: vault.gitRemote,
     gitBranch: vault.gitBranch,
     gitAutoPull: vault.gitAutoPull,
@@ -43,7 +59,7 @@ export async function loadVaultConfig(env, vaultId) {
     gitAuthUsername: credential?.username ?? "",
     gitAuthToken: credential?.token ?? "",
     stateDir,
-    documentFolder: `anything-obsidian-vault-${vault.id}`,
+    documentFolder: vaultDocumentFolder(vault.id),
     syncIntervalSeconds: vault.syncIntervalSeconds,
     embedAfterSync: vault.embedAfterSync,
     embedExtensions: vault.embedExtensions || undefined,

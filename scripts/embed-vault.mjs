@@ -61,6 +61,7 @@ export async function embedVault({ config, all = false }) {
       rel,
       baseUrl,
       apiKey,
+      vaultId: config.vaultId,
       documentFolder,
       uploadPathTemplate,
     });
@@ -112,6 +113,7 @@ async function uploadFile({
   rel,
   baseUrl,
   apiKey,
+  vaultId,
   documentFolder,
   uploadPathTemplate,
 }) {
@@ -119,15 +121,18 @@ async function uploadFile({
     baseUrl,
     uploadPathTemplate.replace("{folder}", encodeURIComponent(documentFolder)),
   );
+  // The vaultId prefix is what makes unified-workspace search results
+  // attributable: RAG hits map straight back to the owning vault's files.
+  const source = vaultId ? `${vaultId}/${rel}` : rel;
   const body = new FormData();
   const blob = new Blob([await readFile(file)]);
   body.append("file", blob, path.basename(file));
   body.append(
     "metadata",
     JSON.stringify({
-      title: rel,
+      title: source,
       docSource: "anything-obsidian vault",
-      chunkSource: rel,
+      chunkSource: source,
     }),
   );
 

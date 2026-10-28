@@ -10,13 +10,14 @@ import { createDashboardServer } from "./server.mjs";
 import { createAgentTokenStore } from "../lib/agent-tokens.mjs";
 import { createSyncStatusStore } from "../lib/sync-status.mjs";
 
-test("vault routes clone a repository and create its managed workspace", async () => {
+test("vault routes clone a repository and initialise the unified workspace", async () => {
   const registry = fakeRegistry();
+  const workspaceNames = [];
   const anythingllm = {
     async listWorkspaces() { return []; },
     async createWorkspace({ name }) {
-      assert.equal(name, "Work");
-      return { id: 1, name, slug: "work" };
+      workspaceNames.push(name);
+      return { id: 1, name, slug: "unified" };
     },
   };
   const secrets = fakeSecrets();
@@ -28,8 +29,13 @@ test("vault routes clone a repository and create its managed workspace", async (
 
   assert.equal(created.status, 201);
   assert.equal(created.body.id, "work");
-  assert.equal(created.body.workspaceSlug, "work");
+  assert.equal(created.body.workspaceSlug, undefined);
   assert.equal(created.body.gitBranch, "main");
+  // One namespaced workspace per instance, shared by every vault.
+  assert.equal(workspaceNames.length, 1);
+  assert.match(workspaceNames[0], /^any-obs-/);
+  assert.equal((await registry.getWorkspace()).slug, "unified");
+  assert.deepEqual((await request(app, "GET", "/api/workspace")).body, { workspace: { slug: "unified", name: workspaceNames[0] } });
   assert.equal(vaultStorage.cloned[0].repositoryUrl, "https://github.com/acme/work.git");
   assert.deepEqual(vaultStorage.cloned[0].gitAuth, { mode: "https-token", username: "oauth2", token: "work-secret" });
   assert.deepEqual(secrets.saved, [{ id: "work", auth: { mode: "https-token", username: "oauth2", token: "work-secret" } }]);
@@ -37,44 +43,71 @@ test("vault routes clone a repository and create its managed workspace", async (
   assert.equal((await request(app, "GET", "/api/vaults")).body.vaults.length, 1);
 });
 
-test("vault routes import a local repository, attach a workspace, and remove only its registry record", async () => {
+test("vault routes import a local repository into an attached workspace and purge its index on removal", async () => {
   const registry = fakeRegistry();
   const anythingllm = {
     async listWorkspaces() { return [{ id: 2, name: "Personal", slug: "personal" }]; },
   };
   const secrets = fakeSecrets();
-  const app = createDashboardServer({ jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), secrets, env: nativeEnv(), native: nativePaths() });
+  const purge = fakeFetch();
+  const app = createDashboardServer({
+    jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), secrets,
+    fetchImpl: purge.fetchImpl, env: nativeEnv(), native: nativePaths(),
+  });
+
+  const attached = await request(app, "POST", "/api/workspace/attach", { slug: "personal" });
+  assert.equal(attached.status, 200);
+  assert.equal(attached.body.workspace.slug, "personal");
 
   const created = await request(app, "POST", "/api/vaults", {
     sourceMode: "import", id: "personal", name: "Personal", directory: "personal",
-    workspaceMode: "attach", workspaceSlug: "personal", repositoryVisibility: "public",
+    repositoryVisibility: "public",
     gitUserName: "Personal Bot", gitUserEmail: "personal@example.test",
   });
   assert.equal(created.status, 201);
   assert.equal((await request(app, "DELETE", "/api/vaults/personal")).status, 204);
   assert.deepEqual(secrets.removed, ["personal"]);
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body.vaults, []);
+  // Removal leaves the workspace alone but clears the vault's derived data.
+  assert.equal((await registry.getWorkspace()).slug, "personal");
+  assert.deepEqual(purge.calls.map(({ url, init }) => ({ url, method: init.method })), [
+    { url: "http://localhost:11301/api/v1/document/remove-folder", method: "DELETE" },
+  ]);
 });
 
-test("vault creation falls back to the vault id when an import has no display name", async () => {
+test("workspace attach rejects unknown slugs", async () => {
+  const app = createDashboardServer({
+    jobs: fakeJobs(), registry: fakeRegistry(),
+    anythingllm: { async listWorkspaces() { return [{ slug: "known" }] } },
+    vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
+  });
+
+  assert.equal((await request(app, "POST", "/api/workspace/attach", { slug: "" })).status, 400);
+  const missing = await request(app, "POST", "/api/workspace/attach", { slug: "nope" });
+  assert.equal(missing.status, 400);
+  assert.match(missing.body.error, /Workspace was not found/);
+});
+
+test("vault creation falls back to a namespaced unified workspace name", async () => {
   const createdWorkspaces = [];
   const app = createDashboardServer({
     jobs: fakeJobs(), registry: fakeRegistry(),
     anythingllm: {
       async listWorkspaces() { return []; },
-      async createWorkspace({ name }) { createdWorkspaces.push(name); return { id: 3, name, slug: "diary" }; },
+      async createWorkspace({ name }) { createdWorkspaces.push(name); return { id: 3, name, slug: "any-obs-test-01" }; },
     },
     vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
   });
 
   const response = await request(app, "POST", "/api/vaults", {
     sourceMode: "import", id: "diary", directory: "diary", name: "",
-    workspaceMode: "create", repositoryVisibility: "public",
+    repositoryVisibility: "public",
     gitUserName: "Diary Bot", gitUserEmail: "diary@example.test",
   });
 
   assert.equal(response.status, 201);
-  assert.deepEqual(createdWorkspaces, ["diary"]);
+  assert.deepEqual(createdWorkspaces, [createdWorkspaces[0]]);
+  assert.match(createdWorkspaces[0], /^any-obs-/);
 });
 
 test("agent token routes create, list, and revoke MCP agent identities", async () => {
@@ -145,8 +178,7 @@ test("vault creation imports a directory from any absolute path without clone cr
     sourceMode: "import",
     importPath: "/Users/x/Workspace/my-vault",
     name: "My Vault",
-    id: "mine", directory: "mine", workspaceSlug: "mine",
-    workspaceMode: "create",
+    id: "mine", directory: "mine",
     repositoryVisibility: "private",
     gitUserName: "X Bot", gitUserEmail: "x@example.test",
   });
@@ -415,6 +447,7 @@ function fakeJobs() {
 
 function fakeRegistry() {
   const vaults = [];
+  let workspace = null;
   return {
     async list() { return vaults; },
     async get(id) { return vaults.find((vault) => vault.id === id) || null; },
@@ -426,6 +459,19 @@ function fakeRegistry() {
     async update(id, changes) {
       const vault = vaults.find((candidate) => candidate.id === id);
       return vault ? Object.assign(vault, changes) : null;
+    },
+    async getWorkspace() { return workspace; },
+    async setWorkspace(input) { workspace = { slug: input.slug, name: input.name ?? input.slug }; return workspace; },
+  };
+}
+
+function fakeFetch() {
+  const calls = [];
+  return {
+    calls,
+    async fetchImpl(url, init = {}) {
+      calls.push({ url, init });
+      return { ok: true, status: 200, text: async () => "{}" };
     },
   };
 }

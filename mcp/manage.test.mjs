@@ -75,7 +75,7 @@ test("dashboard api maps every management call to its REST route", async () => {
 
 test("management tools round-trip through the in-memory MCP client", async () => {
   const dashboard = fakeDashboard({
-    "POST /api/vaults": (call) => ({ id: call.body.id, workspaceSlug: "work" }),
+    "POST /api/vaults": (call) => ({ id: call.body.id }),
     "GET /api/status": () => ({ ok: true, systemState: "on" }),
   });
   // createServer wires dashboardApi() with defaults; override via env would be
@@ -95,7 +95,7 @@ test("management tools round-trip through the in-memory MCP client", async () =>
     name: "any_obs_vault_add",
     arguments: { sourceMode: "import", id: "work", directory: "work", gitUserName: "A", gitUserEmail: "a@b" },
   });
-  assert.deepEqual(JSON.parse(added.content[0].text), { id: "work", workspaceSlug: "work" });
+  assert.deepEqual(JSON.parse(added.content[0].text), { id: "work" });
 
   const status = await client.callTool({ name: "any_obs_status", arguments: {} });
   assert.equal(JSON.parse(status.content[0].text).systemState, "on");

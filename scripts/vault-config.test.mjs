@@ -8,13 +8,14 @@ import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
 import { loadVaultConfig } from "./vault-config.mjs";
 
-test("loads a vault-scoped workspace, path, and embedding manifest directory", async () => {
+test("loads the unified workspace, vault path, and embedding manifest directory", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vaults-"));
   const registryPath = path.join(root, "registry", "vaults.json");
   const secretsPath = path.join(root, "secrets");
   const registry = createVaultRegistry({ rootPath: root, registryPath });
+  await registry.setWorkspace({ slug: "any-obs-test-01", name: "Anything Obsidian" });
   await registry.create({
-    id: "work", directory: "work", workspaceSlug: "work-space", gitRemote: "origin", gitBranch: "main",
+    id: "work", directory: "work", gitRemote: "origin", gitBranch: "main",
     gitAutoPull: false, gitAutoPush: false, gitUserName: "Work Bot", gitUserEmail: "work@example.test",
     gitPushUrl: "https://example.test/work.git", gitCommitMessagePrefix: "Sync work", embedAfterSync: false,
     embedExtensions: ".md,.canvas", embedExcludeDirs: ".git,.private",
@@ -29,7 +30,7 @@ test("loads a vault-scoped workspace, path, and embedding manifest directory", a
   }, "work");
 
   assert.equal(config.vaultPath, path.join(root, "work"));
-  assert.equal(config.workspaceSlug, "work-space");
+  assert.equal(config.workspaceSlug, "any-obs-test-01");
   assert.equal(config.stateDir, "/state/manifests/work");
   assert.equal(config.documentFolder, "anything-obsidian-vault-work");
   assert.equal(config.gitAuthUsername, "oauth2");

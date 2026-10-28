@@ -11,7 +11,8 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { z } from "zod";
 
 import { mcpHttpOptions } from "./http-config.mjs";
-import { ADMIN_IDENTITY, ANONYMOUS_IDENTITY, loadVaults, resolveVault, visibleVaults } from "./vault-registry.mjs";
+import { ADMIN_IDENTITY, ANONYMOUS_IDENTITY, loadVaults, loadWorkspace, resolveVault, visibleVaults } from "./vault-registry.mjs";
+import { attributeRagResults } from "./rag-attribution.mjs";
 import { loadAgentIdentities, resolveIdentity } from "./agent-identity.mjs";
 import { createVaultFileService } from "./vault-files.mjs";
 import { dashboardApi, registerManagementTools } from "./manage.mjs";
@@ -113,15 +114,14 @@ function registerLocalVaultTools(server, vaultFiles) {
 function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identity) {
   server.tool(
     "any_obs_rag_answer",
-    "Ask AnythingLLM to answer from one managed vault. Prefer anythingllm_search_chunks when an agent needs source chunks.",
+    "Ask AnythingLLM to answer from the unified index of every managed vault at once. The answer can draw on any vault; use anythingllm rag search when you need attributed source chunks.",
     {
       question: z.string().min(1),
-      vaultId: z.string().min(1).optional(),
       mode: z.enum(["query", "chat"]).default("query"),
     },
-    async ({ question, vaultId, mode }) => {
-      const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId, identity);
-      const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(vault.workspaceSlug)), {
+    async ({ question, mode }) => {
+      const workspace = await requireUnifiedWorkspace(vaultRegistryPath);
+      const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(workspace.slug)), {
         method: "POST",
         body: JSON.stringify({ message: question, mode }),
       }, { baseUrl, apiKey });
@@ -131,7 +131,7 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
 
   server.tool(
     "any_obs_rag_search",
-    "Search one managed vault vector index and return matching source chunks. Prefer this for agent RAG.",
+    "Search the unified vector index across every managed vault and return matching source chunks, each tagged with its vaultId and vault-relative path so the source file can be read from the owning vault. vaultId optionally filters results to one vault. Prefer this for agent RAG.",
     {
       query: z.string().min(1),
       vaultId: z.string().min(1).optional(),
@@ -139,14 +139,36 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
       scoreThreshold: z.number().min(0).max(1).optional(),
     },
     async ({ query, vaultId, topN, scoreThreshold }) => {
-      const vault = resolveVault(await loadVaults(vaultRegistryPath), vaultId, identity);
-      const data = await requestJson(vectorSearchPathTemplate.replace("{slug}", encodeURIComponent(vault.workspaceSlug)), {
+      const workspace = await requireUnifiedWorkspace(vaultRegistryPath);
+      const vaults = await loadVaults(vaultRegistryPath);
+      const accessible = visibleVaults(vaults, identity);
+      if (vaultId) resolveVault(vaults, vaultId, identity);
+      const accessibleIds = new Set(accessible.map((vault) => vault.id));
+      const blockedVaultIds = vaults.filter((vault) => !accessibleIds.has(vault.id)).map((vault) => vault.id);
+
+      const data = await requestJson(vectorSearchPathTemplate.replace("{slug}", encodeURIComponent(workspace.slug)), {
         method: "POST",
-        body: JSON.stringify({ query, topN, scoreThreshold }),
+        body: JSON.stringify({ query, topN, ...(scoreThreshold !== undefined ? { scoreThreshold } : {}) }),
       }, { baseUrl, apiKey });
-      return asJsonContent(data);
+      const { data: enriched, summary } = attributeRagResults(data, {
+        vaultIds: [...accessibleIds],
+        filterVaultId: vaultId ?? "",
+        blockedVaultIds,
+      });
+      if (enriched && typeof enriched === "object" && !Array.isArray(enriched)) {
+        enriched.vaultAttribution = summary;
+      }
+      return asJsonContent(enriched);
     },
   );
+}
+
+async function requireUnifiedWorkspace(vaultRegistryPath) {
+  const workspace = await loadWorkspace(vaultRegistryPath);
+  if (!workspace) {
+    throw new Error("No unified workspace is configured yet. Add a vault from the dashboard (or run a worker embed) to initialise it.");
+  }
+  return workspace;
 }
 
 async function requestJson(pathOrUrl, init, { baseUrl, apiKey }) {

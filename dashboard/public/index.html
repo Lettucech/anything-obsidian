@@ -143,15 +143,11 @@
           </section>
           <section id="edit-settings" hidden>
             <details class="advanced-settings">
-              <summary>Vault identity and workspace</summary>
+              <summary>Vault identity</summary>
               <div class="form-grid">
                 <label>Name <input name="name" maxlength="80" placeholder="Derived from the repository" /></label>
                 <label>Vault ID <input name="id" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Derived from the repository" /></label>
                 <label>Directory <input name="directory" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="Same as Vault ID" /></label>
-                <label>Workspace
-                  <select name="workspaceMode"><option value="create">Create a workspace</option><option value="attach">Attach an existing workspace</option></select>
-                </label>
-                <label id="workspace-slug-field" hidden>Existing workspace slug <input name="workspaceSlug" pattern="[a-z0-9]+(-[a-z0-9]+)*" /></label>
               </div>
             </details>
             <details class="advanced-settings">

@@ -22,6 +22,8 @@ import { createSyncStatusStore } from "../lib/sync-status.mjs";
 import { createServiceManager } from "../lib/autostart.mjs";
 import { rotateLogs } from "../lib/log-rotate.mjs";
 import { compareVersions, currentVersionValue, fetchLatestVersion } from "../lib/update-check.mjs";
+import { ensureUnifiedWorkspace, purgeVaultEmbeddings } from "../lib/unified-workspace.mjs";
+import { configPaths, defaultConfigRoot } from "../lib/app-config.mjs";
 import { randomBytes } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,7 +60,7 @@ export function createDashboardServer({
   }
   const jobManager = jobs
     || createLocalJobManager({ env, jobStore: native.jobStorePath ? createFileJobStore({ filePath: native.jobStorePath }) : null });
-  const context = { env, fetchImpl, native, anythingllm, jobs: jobManager, platform, launchctl, systemctl };
+  const context = { env, fetchImpl, native, anythingllm, registry, jobs: jobManager, platform, launchctl, systemctl };
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url || "/", "http://localhost");
@@ -81,11 +83,19 @@ export function createDashboardServer({
       }
       if (req.method === "POST" && url.pathname === "/api/vaults") {
         const input = await readJsonBody(req);
-        const { gitAuth, repositoryVisibility, sourceMode = "clone", workspaceMode = "create", ...request } = input;
+        const { gitAuth, repositoryVisibility, sourceMode = "clone", workspaceMode, workspaceSlug, ...request } = input;
         const validationError = validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, request });
         if (validationError) return sendJson(res, 400, { error: validationError });
         const effectiveGitAuth = gitAuthForVisibility(repositoryVisibility, gitAuth);
         await verifyAnythingllmConnection(anythingllm);
+        // One unified workspace per instance; the legacy per-vault
+        // workspaceMode/attach fields only seed the first-time attach.
+        await ensureUnifiedWorkspace({
+          registry,
+          anythingllm,
+          stateRoot: stateRootFor(env),
+          attachSlug: workspaceMode === "attach" && workspaceSlug ? String(workspaceSlug) : "",
+        });
         let discovered;
         if (sourceMode === "clone") {
           await vaultStorage.testConnection({ repositoryUrl: request.repositoryUrl, gitAuth: effectiveGitAuth });
@@ -100,20 +110,27 @@ export function createDashboardServer({
           ...discovered,
           gitAuthMode: effectiveGitAuth?.mode === "https-token" ? "https-token" : "none",
         };
-        let workspace;
-        if (workspaceMode === "create") {
-          workspace = await anythingllm.createWorkspace({ name: vaultInput.name || vaultInput.id });
-        } else if (workspaceMode === "attach") {
-          workspace = (await anythingllm.listWorkspaces()).find(
-            (candidate) => candidate.slug === vaultInput.workspaceSlug,
-          );
-          if (!workspace) return sendJson(res, 400, { error: "Workspace was not found" });
-        } else {
-          return sendJson(res, 400, { error: "workspaceMode must be create or attach" });
-        }
-        const vault = await registry.create({ ...vaultInput, workspaceSlug: workspace.slug });
+        const vault = await registry.create(vaultInput);
         await secrets.save(vault.id, effectiveGitAuth);
         return sendJson(res, 201, vault);
+      }
+      if (req.method === "GET" && url.pathname === "/api/workspace") {
+        return sendJson(res, 200, { workspace: await registry.getWorkspace() });
+      }
+      if (req.method === "POST" && url.pathname === "/api/workspace/attach") {
+        const input = await readJsonBody(req);
+        const slug = String(input?.slug ?? "").trim();
+        if (!slug) return sendJson(res, 400, { error: "slug is required" });
+        const workspace = (await anythingllm.listWorkspaces()).find((candidate) => candidate.slug === slug);
+        if (!workspace) return sendJson(res, 400, { error: "Workspace was not found" });
+        await registry.setWorkspace(workspace);
+        // Switching the unified workspace invalidates every embed manifest.
+        const stateRoot = stateRootFor(env);
+        if (stateRoot) {
+          const { rm } = await import("node:fs/promises");
+          await rm(path.join(stateRoot, "manifests"), { recursive: true, force: true });
+        }
+        return sendJson(res, 200, { workspace });
       }
       if (req.method === "PATCH" && url.pathname.startsWith("/api/vaults/")) {
         const id = url.pathname.slice("/api/vaults/".length);
@@ -126,8 +143,23 @@ export function createDashboardServer({
       if (req.method === "DELETE" && url.pathname.startsWith("/api/vaults/")) {
         const id = url.pathname.slice("/api/vaults/".length);
         const vault = await registry.remove(id);
-        if (vault) await secrets.remove(id);
-        return vault ? sendJson(res, 204, {}) : sendJson(res, 404, { error: "Vault was not found" });
+        if (!vault) return sendJson(res, 404, { error: "Vault was not found" });
+        await secrets.remove(id);
+        // The repository and user files stay; the vault's derived chunks must
+        // leave the shared index or they would pollute every search.
+        const workspace = await registry.getWorkspace();
+        if (workspace) {
+          const purge = await purgeVaultEmbeddings({
+            baseUrl: env.ANYTHINGLLM_BASE_URL || "",
+            apiKey: env.ANYTHINGLLM_API_KEY || "",
+            workspaceSlug: workspace.slug,
+            vaultId: vault.id,
+            stateRoot: stateRootFor(env),
+            fetchImpl,
+          });
+          if (!purge.purged) console.error(`Embedding purge for vault '${vault.id}' incomplete:`, purge.errors);
+        }
+        return sendJson(res, 204, {});
       }
       if (req.method === "GET" && url.pathname === "/api/agents") {
         return sendJson(res, 200, { agents: await agentTokens.list() });
@@ -330,6 +362,10 @@ function serviceManagerFor({ env, native, platform, launchctl, systemctl }) {
   });
 }
 
+function stateRootFor(env) {
+  return env.VAULT_STATE_ROOT || configPaths(defaultConfigRoot({ env })).stateRoot;
+}
+
 async function configStoreFor(env) {
   const { createAppConfigStore, defaultConfigRoot } = await import("../lib/app-config.mjs");
   const rootDir = env.ANYTHING_OBSIDIAN_HOME || defaultConfigRoot({ env });
@@ -349,7 +385,7 @@ async function registryUpdateLanToken(env, token) {
 }
 
 async function statusPayload(context) {
-  const { jobs, env, fetchImpl, native, anythingllm, platform, launchctl, systemctl } = context;
+  const { jobs, env, fetchImpl, native, anythingllm, registry, platform, launchctl, systemctl } = context;
   const services = await serviceSnapshot({ anythingllm, native, fetchImpl, env });
   let lanEnabled = false;
   try {
@@ -363,6 +399,7 @@ async function statusPayload(context) {
     ok: true,
     systemState: classifySystemState(services),
     services,
+    workspace: await registry.getWorkspace(),
     latestJob: jobs.latest(),
     jobs: jobs.list?.() ?? [],
     config: publicConfig(env),

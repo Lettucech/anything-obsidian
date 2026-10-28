@@ -54,7 +54,7 @@ export function registerManagementTools(server, api, { z }) {
 
   server.tool(
     "any_obs_vault_add",
-    "Add a vault to management: clone a Git repository, import a directory beneath the vault root, or import any directory on this machine by passing its absolute importPath. Requires the same fields as the dashboard's Add vault dialog (repository URL or import directory, commit identity, visibility).",
+    "Add a vault to management: clone a Git repository, import a directory beneath the vault root, or import any directory on this machine by passing its absolute importPath. The vault embeds into this instance's unified RAG workspace. Requires the same fields as the dashboard's Add vault dialog (repository URL or import directory, commit identity, visibility).",
     {
       sourceMode: z.enum(["clone", "import"]).default("clone"),
       repositoryUrl: z.string().optional(),
@@ -62,8 +62,6 @@ export function registerManagementTools(server, api, { z }) {
       directory: z.string().optional(),
       importPath: z.string().optional(),
       name: z.string().optional(),
-      workspaceMode: z.enum(["create", "attach"]).default("create"),
-      workspaceSlug: z.string().optional(),
       repositoryVisibility: z.enum(["public", "private"]).default("public"),
       gitUserName: z.string(),
       gitUserEmail: z.string(),
@@ -108,7 +106,7 @@ export function registerManagementTools(server, api, { z }) {
 
   server.tool(
     "any_obs_vault_remove",
-    "Remove a vault from management. Its repository, workspace, and embedding data are never deleted.",
+    "Remove a vault from management. Its repository and the user's files are never deleted; the vault's derived chunks are removed from the shared RAG index so they stop appearing in searches.",
     { vaultId: z.string().min(1) },
     async ({ vaultId }) => asJson({ removed: vaultId, result: await api.removeVault(vaultId) ?? {} }),
   );
