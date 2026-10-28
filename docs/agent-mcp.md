@@ -12,7 +12,7 @@ the dashboard API.
 Start the default stack and connect to:
 
 ```text
-http://localhost:21433/mcp
+http://localhost:21503/mcp
 ```
 
 The local profile provides RAG plus raw-vault discovery and bounded source
@@ -95,7 +95,7 @@ token when none is configured):
 anything-obsidian lan on          # or: anything-obsidian lan token <value>
 ```
 
-Connect to `http://<host>:21444/mcp` and configure the MCP client to send
+Connect to `http://<host>:21504/mcp` and configure the MCP client to send
 `Authorization: Bearer <lan-token>` for administrator access, or a scoped
 agent token as described under Agent tokens. If remote clients resolve this
 machine by a LAN hostname or IP, register it in `MCP_ALLOWED_HOSTS` in the

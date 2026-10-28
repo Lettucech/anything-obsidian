@@ -12,8 +12,8 @@ AnythingLLM RAG index. AnythingLLM is always an external, user-provided
 dependency (URL + API key in config) — the app never hosts it.
 
 It ships as a plain Node app, installed by `install.sh`, managed by the
-`anything-obsidian` CLI and a browser dashboard on port 21400. MCP endpoints:
-loopback 21433, optional LAN 21444 (`lan on`, Bearer token required).
+`anything-obsidian` CLI and a browser dashboard on port 21502. MCP endpoints:
+loopback 21503, optional LAN 21504 (`lan on`, Bearer token required).
 
 The client stays native forever — no Docker, no Electron/desktop-shell plan,
 no npm publish. A second deployable exists for shared deployments: the
@@ -55,8 +55,8 @@ login session.
   global `fetch` first, and think twice before adding anything else.
 - Tests: `npm test` runs `node --test` over `mcp/ dashboard/ lib/ scripts/
   bin/` (the MCP server is plain JS now).
-- Network boundaries: dashboard and local MCP bind `127.0.0.1` only (21400 /
-  21433); the LAN MCP (21444) is opt-in, RAG-only, and token-gated. Secrets
+- Network boundaries: dashboard and local MCP bind `127.0.0.1` only (21502 /
+  21503); the LAN MCP (21504) is opt-in, RAG-only, and token-gated. Secrets
   never appear in API responses or logs (`redactSecretsText` /
   `redactSecretsObject`).
 - Vault locations come in two flavours, and the registry records which:

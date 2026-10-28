@@ -170,7 +170,7 @@ export function createGatewayServer({
     return {
       needsSetup: needs,
       anythingllmBaseUrl: baseUrl,
-      anythingllmUiUrl: "http://localhost:30001",
+      anythingllmUiUrl: "http://localhost:21501",
       sharedWorkspace: sharedWorkspaceSlug,
       hasAdminCredential: Boolean(adminToken || state.adminToken),
       hasApiKey: Boolean(anythingllmApiKey || state.apiKey),

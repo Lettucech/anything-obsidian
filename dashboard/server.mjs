@@ -411,8 +411,8 @@ async function statusPayload(context) {
 async function serviceSnapshot({ anythingllm, native, fetchImpl, env = {} }) {
   // Ports come from the service environment so a test never probes whatever
   // happens to be listening on the real machine's MCP ports.
-  const mcpPort = Number(env.MCP_PORT ?? 21433);
-  const mcpLanPort = Number(env.MCP_LAN_PORT ?? 21444);
+  const mcpPort = Number(env.MCP_PORT ?? 21503);
+  const mcpLanPort = Number(env.MCP_LAN_PORT ?? 21504);
   const [anythingllmHealth, schedulerStatus, gitHealth, mcpHealth, mcpLanHealth] = await Promise.all([
     probeAnythingllm(anythingllm),
     Promise.resolve(readSchedulerStatus({ pidPath: native.schedulerPidPath, killImpl: native.killImpl })),
@@ -443,7 +443,7 @@ async function serviceSnapshot({ anythingllm, native, fetchImpl, env = {} }) {
       found: true,
       powerManaged: false,
       running: mcpHealth.ok,
-      state: mcpHealth.ok ? "running (loopback 21433)" : "stopped",
+      state: mcpHealth.ok ? "running (loopback 21503)" : "stopped",
       health: mcpHealth.ok ? mcpHealth : { ok: false, status: "stopped" },
     },
     {
@@ -452,7 +452,7 @@ async function serviceSnapshot({ anythingllm, native, fetchImpl, env = {} }) {
       found: true,
       powerManaged: false,
       running: mcpLanHealth.ok,
-      state: mcpLanHealth.ok ? "running (21444, token required)" : "off",
+      state: mcpLanHealth.ok ? "running (21504, token required)" : "off",
       health: mcpLanHealth.ok ? mcpLanHealth : { ok: true, status: "off by default" },
     },
     {
@@ -580,7 +580,7 @@ async function readJsonBody(req) {
 
 if (import.meta.url === entryUrl()) {
   rotateLogs({ logsRoot: path.join(path.dirname(process.env.AO_LAST_SYNC_PATH || ""), "logs") }).catch(() => {});
-  const port = Number(process.env.DASHBOARD_PORT || 21400);
+  const port = Number(process.env.DASHBOARD_PORT || 21502);
   createDashboardServer({
     native: {
       schedulerPidPath: process.env.AO_SCHEDULER_PID_PATH,

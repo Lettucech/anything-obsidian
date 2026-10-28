@@ -124,7 +124,7 @@ Human-readable form: `anything-obsidian status`.
 - On a headless Linux server without an active session, autostart needs
   `sudo loginctl enable-linger <user>` once; without it the installer falls
   back to a plain background start.
-- The dashboard URL is `http://localhost:21400` unless a `--port` was set.
+- The dashboard URL is `http://localhost:21502` unless a `--port` was set.
 After setup, a local agent can also operate Anything Obsidian through the
 MCP management tools (`any_obs_*` on the loopback endpoint, e.g.
 `any_obs_status`, `any_obs_vault_add`, `any_obs_vault_sync`, `any_obs_lan`)

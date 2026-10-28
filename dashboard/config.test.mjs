@@ -41,8 +41,8 @@ test("classifies on off and partial states", () => {
 
 test("public config exposes only non-secret operational values", () => {
   const config = publicConfig({
-    DASHBOARD_PORT: "21400",
-    MCP_PORT: "21433",
+    DASHBOARD_PORT: "21502",
+    MCP_PORT: "21503",
     ANYTHINGLLM_BASE_URL: "http://localhost:11301/",
     VAULTS_ROOT: "/Users/x/ObsidianVaults",
     ANYTHINGLLM_API_KEY: "sk-secret",
@@ -50,14 +50,14 @@ test("public config exposes only non-secret operational values", () => {
   });
 
   assert.deepEqual(config, {
-    dashboardUrl: "http://localhost:21400",
+    dashboardUrl: "http://localhost:21502",
     anythingllmUrl: "http://localhost:11301",
-    mcpUrl: "http://localhost:21433/mcp",
+    mcpUrl: "http://localhost:21503/mcp",
     vaultsRoot: "/Users/x/ObsidianVaults",
   });
 });
 
 test("public config tolerates a missing MCP port", () => {
-  const config = publicConfig({ DASHBOARD_PORT: "21400" });
+  const config = publicConfig({ DASHBOARD_PORT: "21502" });
   assert.equal(config.mcpUrl, null);
 });

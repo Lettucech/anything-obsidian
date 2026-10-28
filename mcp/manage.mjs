@@ -1,7 +1,7 @@
 // Management tools: a thin proxy to the dashboard's loopback REST API so the
 // dashboard UI and MCP callers share one control plane (same jobs, same
 // audit trail). Local profile only — the LAN profile never registers these.
-const DEFAULT_DASHBOARD_URL = "http://127.0.0.1:21400";
+const DEFAULT_DASHBOARD_URL = "http://127.0.0.1:21502";
 
 export function dashboardApi({ baseUrl = process.env.AO_DASHBOARD_URL ?? DEFAULT_DASHBOARD_URL, fetchImpl = fetch } = {}) {
   async function request(method, pathname, body) {

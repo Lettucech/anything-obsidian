@@ -543,7 +543,7 @@ if (typeof document !== "undefined") {
     const button = event.target.closest("button[data-lan-toggle]");
     if (!button) return;
     const action = button.dataset.lanToggle;
-    if (action === "on" && !window.confirm("Enable the LAN RAG endpoint on port 21444? A Bearer token will be required for remote clients.")) return;
+    if (action === "on" && !window.confirm("Enable the LAN RAG endpoint on port 21504? A Bearer token will be required for remote clients.")) return;
     try {
       const result = await request("/api/lan", { method: "POST", body: JSON.stringify({ action }) });
       if (result.token) {

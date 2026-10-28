@@ -26,7 +26,7 @@ test("vault config resolves service endpoints from the environment without docke
   }));
   const config = await loadVaultConfig(env, "work");
   assert.equal(config.anythingllmBaseUrl, "http://custom:3001");
-  assert.equal(config.mcpBaseUrl, "http://127.0.0.1:21433");
+  assert.equal(config.mcpBaseUrl, "http://127.0.0.1:21503");
   assert.equal(config.vaultStateRoot, env.VAULT_STATE_ROOT);
   assert.equal(config.workspaceSlug, "any-obs-custom-01");
 });

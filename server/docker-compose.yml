@@ -5,8 +5,8 @@
 # non-interactive overrides).
 #
 # AnythingLLM's UI is reachable for first-boot setup on the host loopback
-# only (127.0.0.1:30001): on the server itself, or via
-#   ssh -L 30001:127.0.0.1:30001 <server>
+# only (127.0.0.1:21501): on the server itself, or via
+#   ssh -L 21501:127.0.0.1:21501 <server>
 # The dashboard's wizard walks you through this. Never bind it to the LAN.
 services:
   anythingllm:
@@ -18,7 +18,7 @@ services:
     # or over an SSH tunnel to finish first-boot setup and mint the developer
     # API key. Never on the LAN.
     ports:
-      - "127.0.0.1:30001:3001"
+      - "127.0.0.1:21501:3001"
 
   gateway:
     build:

@@ -65,7 +65,7 @@ function renderWizard(state) {
 
   function wizardAnythingllmStep() {
     const card = element("section", "card");
-    const tunnelCommand = `ssh -L 30001:127.0.0.1:30001 ${window.location.hostname}`;
+    const tunnelCommand = `ssh -L 21501:127.0.0.1:21501 ${window.location.hostname}`;
     card.append(
       stepBadge(2),
       element("h2", "", "Initialize AnythingLLM, then mint its API key"),
@@ -201,7 +201,7 @@ async function renderOverview(state) {
   card.append(
     html("p", "note", `<strong>Connect an any-obs client:</strong> <code>anything-obsidian init --url ${window.location.origin} --api-key &lt;user-token&gt;</code>`),
     html("p", "note", `<strong>Connect an agent (MCP):</strong> <code>${window.location.origin}/mcp</code> with a user token as Bearer.`),
-    html("p", "note", `<strong>AnythingLLM UI</strong> stays off the network: open <code>${state.anythingllmUiUrl}</code> on the server, or <code>ssh -L 30001:127.0.0.1:30001 ${window.location.hostname}</code>.`),
+    html("p", "note", `<strong>AnythingLLM UI</strong> stays off the network: open <code>${state.anythingllmUiUrl}</code> on the server, or <code>ssh -L 21501:127.0.0.1:21501 ${window.location.hostname}</code>.`),
   );
   els.status.textContent = "";
   els.view.querySelector(".card:last-of-type")?.remove();

@@ -46,7 +46,7 @@ Options:
   --vaults-root <path>       Vault root directory (init)
   --url <url>                AnythingLLM base URL (init)
   --api-key <key>            AnythingLLM API key (init)
-  --port <number>            Dashboard port, default 21400 (init)
+  --port <number>            Dashboard port, default 21502 (init)
   --bg                       Start the dashboard in the background (start)
   --no-browser               Do not open the browser (start)
   --json                     Machine-readable output (status)
@@ -241,7 +241,7 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
     const vaultsRoot = await resolveVaultsRoot({ flags, prompt, env, log });
     const anythingllmBaseUrl = flags.url || await prompt.question(`AnythingLLM base URL [http://localhost:3001] `, "http://localhost:3001");
     const apiKey = flags["api-key"] || await prompt.question("AnythingLLM API key: ", "");
-    const dashboardPort = Number(flags.port || 21400);
+    const dashboardPort = Number(flags.port || 21502);
 
     const client = createAnythingllmClient({ baseUrl: anythingllmBaseUrl, apiKey, fetchImpl });
     log(`Testing the AnythingLLM connection at ${anythingllmBaseUrl}…`);
@@ -259,7 +259,7 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
       vaultsRoot,
       anythingllmBaseUrl,
       apiKey,
-      dashboardPort: Number.isInteger(dashboardPort) ? dashboardPort : 21400,
+      dashboardPort: Number.isInteger(dashboardPort) ? dashboardPort : 21502,
     });
     await mkdir(config.vaultsRoot, { recursive: true });
 
@@ -545,14 +545,14 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
     }
   };
   if (mcpRunning || !launchd) {
-    const local = await probeMcp(21433);
-    report.mcp = { ...local, url: "http://localhost:21433/mcp" };
+    const local = await probeMcp(21503);
+    report.mcp = { ...local, url: "http://localhost:21503/mcp" };
   } else {
-    report.mcp = { running: false, healthy: false, url: "http://localhost:21433/mcp" };
+    report.mcp = { running: false, healthy: false, url: "http://localhost:21503/mcp" };
   }
   if (mcpLanRunning) {
-    const lan = await probeMcp(21444);
-    report.mcpLan = { ...lan, url: "http://<host>:21444/mcp" };
+    const lan = await probeMcp(21504);
+    report.mcpLan = { ...lan, url: "http://<host>:21504/mcp" };
   }
 
   const client = createAnythingllmClient({
@@ -611,7 +611,7 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
     log(`  ${mark(dashboard.healthy)} Dashboard: ${dashboard.healthy ? `running at ${dashboard.url}` : dashboard.running ? `starting or unhealthy (pid ${dashboard.pid})` : "not running"}`);
     log(`  ${mark(value.scheduler.running)} Scheduler: ${value.scheduler.running ? `running (pid ${value.scheduler.pid})` : "not running"}`);
     log(`  ${mark(value.mcp.healthy)} Local MCP: ${value.mcp.healthy ? `running at ${value.mcp.url}` : value.mcp.running ? "starting or unhealthy" : "not running"}`);
-    log(`  ${mark(value.mcpLan.healthy)} LAN MCP: ${value.mcpLan.healthy ? "running (port 21444)" : "off or not running"}`);
+    log(`  ${mark(value.mcpLan.healthy)} LAN MCP: ${value.mcpLan.healthy ? "running (port 21504)" : "off or not running"}`);
     log(`  ${mark(value.autostart.enabled)} Autostart: ${value.autostart.enabled ? "on (starts at login, restarts on crash)" : "off"}`);
     if (value.update?.available) {
       log(`  ↻ Update available: ${value.update.current} -> ${value.update.latest} (run: anything-obsidian update)`);
@@ -703,7 +703,7 @@ async function runLan({ subcommand, argument, store, env, log, json, launchctl, 
       await manager.enableLan({
         mcpLanLogPath: store.paths.mcpLanLogPath || store.paths.schedulerLogPath,
       });
-      log("LAN MCP is on at http://0.0.0.0:21444/mcp (RAG-only, Bearer token required).");
+      log("LAN MCP is on at http://0.0.0.0:21504/mcp (RAG-only, Bearer token required).");
       log("Per-agent tokens from the dashboard also work; they see only allowlisted vaults.");
       return 0;
     }
@@ -725,7 +725,7 @@ async function runLan({ subcommand, argument, store, env, log, json, launchctl, 
         return 0;
       }
       log(`LAN MCP: ${enabled ? "on" : "off"}`);
-      log(`  endpoint: ${state.running ? "running" : enabled ? "registered, not running" : "not registered"} (port 21444, RAG-only)`);
+      log(`  endpoint: ${state.running ? "running" : enabled ? "registered, not running" : "not registered"} (port 21504, RAG-only)`);
       log(`  token: ${config.lanToken ? "configured" : "not set (anything-obsidian lan on generates one)"}`);
       return 0;
     }

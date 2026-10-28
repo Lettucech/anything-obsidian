@@ -10,7 +10,7 @@ function resolveBaseConfig(env) {
   return {
     anythingllmBaseUrl: stripTrailingSlash(env.ANYTHINGLLM_BASE_URL ?? ""),
     apiKey: env.ANYTHINGLLM_API_KEY ?? "",
-    mcpBaseUrl: stripTrailingSlash(env.ANYTHINGLLM_MCP_BASE_URL ?? "http://127.0.0.1:21433"),
+    mcpBaseUrl: stripTrailingSlash(env.ANYTHINGLLM_MCP_BASE_URL ?? "http://127.0.0.1:21503"),
     vaultStateRoot: env.VAULT_STATE_ROOT ?? "",
   };
 }

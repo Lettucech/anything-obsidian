@@ -13,6 +13,26 @@ derived data. Over MCP, agents never write vault source files; the local
 profile's management tools run the same configured sync and embedding flows
 the dashboard offers, never arbitrary Git commands.
 
+## Ports
+
+The whole project owns the range **21500–21510**. Everything listens on
+loopback unless marked otherwise:
+
+| Port | Surface | Where |
+|---|---|---|
+| 21500 | IAM gateway (API, MCP, dashboard) | server stack, published |
+| 21501 | AnythingLLM UI | server host loopback only (first-boot setup) |
+| 21502 | Client dashboard | loopback only |
+| 21503 | Client local MCP | loopback only |
+| 21504 | Client LAN MCP | opt-in, LAN, Bearer token required |
+| 21505–21510 | Reserved for future any-obs surfaces | — |
+
+AnythingLLM itself (inside the server stack) keeps its container port 3001
+and is never published beyond the host loopback. Ports are overridable per
+surface (`--port` at init, `MCP_PORT`, `MCP_LAN_PORT`, `GATEWAY_PORT`);
+installs configured before the 21500-range defaults keep their recorded
+`dashboardPort` until `anything-obsidian init` is re-run.
+
 ## Boundaries
 
 - **Vault management:** the dashboard clones a managed vault beneath the
@@ -56,7 +76,7 @@ API and never hosts it.
    AnythingLLM base URL and Developer API key, and it tests the
    connection before saving a 0600 config under
    `~/Library/Application Support/anything-obsidian/`. When it finishes, the
-   dashboard is running and your browser opens at `http://localhost:21400`.
+   dashboard is running and your browser opens at `http://localhost:21502`.
 
    Prefer no prompts? Pass everything up front (also how agents install it):
 
@@ -70,7 +90,7 @@ API and never hosts it.
    (`npx skills add Lettucech/anything-obsidian --skill anything-obsidian-setup`)
    and handle the whole flow — install, setup, and health checks.
 
-2. Manage everything in the browser at `http://localhost:21400`. The
+2. Manage everything in the browser at `http://localhost:21502`. The
    dashboard can be stopped and restarted:
 
    ```bash
@@ -128,7 +148,7 @@ See `docs/superpowers/specs/2026-10-07-native-app.md` for the design notes.
 The endpoint is bound to loopback only and starts with autostart:
 
 ```text
-http://localhost:21433/mcp
+http://localhost:21503/mcp
 ```
 
 Every tool is prefixed `any_obs_` — they all belong to this system. The
@@ -199,7 +219,7 @@ anything-obsidian lan token <t>   # or set your own token
 anything-obsidian lan off
 ```
 
-Remote clients connect to `http://<host>:21444/mcp` and must send:
+Remote clients connect to `http://<host>:21504/mcp` and must send:
 
 ```text
 Authorization: Bearer <lan-token>
@@ -248,8 +268,8 @@ Bring-up is one command and one browser page — no `.env` values required:
      gateway` if you prefer proving server access first.)
    - **Step 2 — initialize AnythingLLM:** its own UI is not on the network —
      the wizard shows the exact command
-     (`ssh -L 30001:127.0.0.1:30001 <server>`, or open
-     `http://localhost:30001` on the server). Finish AnythingLLM's first-boot
+     (`ssh -L 21501:127.0.0.1:21501 <server>`, or open
+     `http://localhost:21501` on the server). Finish AnythingLLM's first-boot
      wizard there and generate the developer API key
      (Settings → Developer API).
    - **Step 3 — connect:** paste the key. The gateway verifies it, becomes

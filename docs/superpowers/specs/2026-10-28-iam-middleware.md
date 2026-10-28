@@ -99,7 +99,7 @@ workspace, one level up). Cross-workspace synthesized answers stay v2;
 ## Deployment (`server/docker-compose.yml`)
 
 - `anythingllm` (official image): published on the host **loopback only**
-  (`127.0.0.1:30001`) so an admin can finish first-boot setup and mint the
+  (`127.0.0.1:21501`) so an admin can finish first-boot setup and mint the
   developer API key on the server itself or over an SSH tunnel; never on the
   LAN.
 - `gateway`: builds from `server/Dockerfile`, published on the LAN, volumes
