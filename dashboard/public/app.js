@@ -192,8 +192,10 @@ if (typeof document !== "undefined") {
   els.agentdialog.addEventListener("close", () => { state.createdAgentName = null; });
   els.importbrowsetoggle.addEventListener("click", toggleImportBrowse);
   els.importrefreshtree.addEventListener("click", () => loadImportTree(state.browse.path));
-  els.importjumptree.addEventListener("click", () => jumpToPath());
-  els.importpathjump.addEventListener("keydown", (event) => {
+  // Optional-element guards: a cached old page must never crash the module
+  // at boot over a control it does not have.
+  els.importjumptree?.addEventListener("click", () => jumpToPath());
+  els.importpathjump?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
       jumpToPath();
@@ -475,7 +477,13 @@ if (typeof document !== "undefined") {
       render();
       const logs = await fetchJson("/api/logs?service=syncer");
       els.logs.textContent = logs.logs || "";
-    } catch (error) { message(error.message, true); }
+    } catch (error) {
+      // Never leave the header claiming it is still loading: surface the
+      // failure so a stuck backend is visible, not just silent.
+      els.systemstate.textContent = "status unavailable";
+      els.systemstate.className = "system-status partial";
+      message(error.message, true);
+    }
   }
 
   function render() {

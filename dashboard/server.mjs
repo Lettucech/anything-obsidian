@@ -468,7 +468,7 @@ async function serviceSnapshot({ anythingllm, native, fetchImpl, env = {} }) {
 
 async function probeHttp(fetchImpl, url) {
   try {
-    const response = await (fetchImpl || fetch)(url);
+    const response = await (fetchImpl || fetch)(url, { signal: AbortSignal.timeout(3000) });
     return { ok: response.ok, status: response.status };
   } catch {
     return { ok: false, status: "not running" };
@@ -505,7 +505,12 @@ async function serveStatic(res, pathname) {
     if (error?.code === "ENOENT") return sendJson(res, 404, { error: "Not found" });
     throw error;
   }
-  res.writeHead(200, { "content-type": contentType(file) });
+  res.writeHead(200, {
+    "content-type": contentType(file),
+    // The HTML and its JS must always be the same generation: a cached old
+    // page paired with a fresh module crashes the app at boot.
+    "cache-control": "no-cache",
+  });
   res.end(body);
 }
 

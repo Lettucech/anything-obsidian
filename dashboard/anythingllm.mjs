@@ -1,4 +1,4 @@
-export function createAnythingllmClient({ baseUrl, apiKey, fetchImpl = fetch }) {
+export function createAnythingllmClient({ baseUrl, apiKey, fetchImpl = fetch, timeoutMs = 5000 }) {
   const root = String(baseUrl).replace(/\/+$/, "");
 
   return {
@@ -16,8 +16,11 @@ export function createAnythingllmClient({ baseUrl, apiKey, fetchImpl = fetch }) 
   };
 
   async function request(apiPath, init) {
+    // A black-holed base URL must not stall the dashboard's status polling:
+    // every call carries its own deadline.
     const response = await fetchImpl(`${root}${apiPath}`, {
       ...init,
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
