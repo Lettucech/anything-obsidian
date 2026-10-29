@@ -50,7 +50,12 @@ client's own trust model (loopback dashboard, LAN service).
   recovery. Reaching it requires server access (SSH/physical), which is the
   credential — the same "loopback caller is the user's delegate" rule the
   client dashboard has always used. Personal workspaces are not
-  pre-provisioned: pure consumers need only the shared workspace.
+  pre-provisioned: pure consumers need only the shared workspace. The
+  dashboard has four tabs — Overview, **Workspaces** (list everything the
+  gateway knows: the pipeline-fed shared workspace plus each owned personal
+  workspace; delete any non-shared one; pre-provision a workspace and hand
+  its ownership to a user up front, which is also how "attach an existing
+  workspace" is done), Users, and Shared sources.
 
 ### Roles
 
@@ -135,9 +140,6 @@ workspace, one level up). Cross-workspace synthesized answers stay v2;
 
 ## Known v1 limits
 
-- Ownership is minted only via `POST /api/v1/workspace/new`; attaching to a
-  pre-existing workspace as a user needs an admin (create-through or
-  hand-edit is deliberately absent).
 - Gateway search tags workspace only — vault-level attribution inside
   personal workspaces stays a client-side concern (the chunks still carry
   `vaultId/path` sources).

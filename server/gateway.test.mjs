@@ -305,6 +305,41 @@ test("admins delete a user's workspace: upstream goes first, then the ownership 
   assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces/any-obs-ghost-404`, { method: "DELETE" })).status, 200);
 });
 
+test("workspaces page: list, pre-provision with an owner, all admin-only", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  const { userToken } = await createUser(adminUrl, publicUrl, "brian");
+  const auth = { Authorization: `Bearer ${userToken}` };
+
+  // The client mints its personal workspace through the proxy.
+  await fetchJson(`${publicUrl}/api/v1/workspace/new`, {
+    method: "POST", headers: auth, body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
+  });
+
+  const listed = await fetchJson(`${adminUrl}/api/gateway/workspaces`);
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.body.workspaces, [
+    { slug: SHARED, owner: null, shared: true },
+    { slug: "any-obs-brians-mac-01", owner: "brian", shared: false },
+  ]);
+
+  // Pre-provisioning hands a fresh workspace straight to a user.
+  const provisioned = await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
+    method: "POST",
+    body: JSON.stringify({ name: "team-kb", owner: "brian" }),
+  });
+  assert.equal(provisioned.status, 201);
+  assert.deepEqual(provisioned.body.workspace, { slug: "team-kb", owner: "brian", shared: false });
+  assert.deepEqual((await fetchJson(`${publicUrl}/api/v1/workspaces`, { headers: auth })).body.workspaces.map((w) => w.slug), [
+    SHARED, "any-obs-brians-mac-01", "team-kb",
+  ]);
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
+    method: "POST", body: JSON.stringify({ name: "x", owner: "ghost" }),
+  })).status, 400);
+
+  // The member token gets 404 on the whole admin surface, listing included.
+  assert.equal((await fetchJson(`${publicUrl}/api/gateway/workspaces`, { headers: auth })).status, 404);
+});
+
 function mcpTransport(baseUrl, token) {
   return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },

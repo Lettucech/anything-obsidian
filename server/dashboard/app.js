@@ -98,6 +98,7 @@ function renderTabs(state) {
   const tabs = element("nav", "tabs");
   const views = [
     ["Overview", renderOverview],
+    ["Workspaces", renderWorkspaces],
     ["Users", renderUsers],
     ["Shared sources", renderSources],
   ];
@@ -113,6 +114,66 @@ function renderTabs(state) {
   }
   buttons.get("Overview").classList.add("active");
   els.view.replaceChildren(tabs);
+}
+
+async function renderWorkspaces(state) {
+  const card = element("section", "card");
+  card.append(
+    element("h2", "", "Workspaces"),
+    element("p", "note", "The shared workspace is fed by the shared-source pipeline and is readable by everyone. Personal workspaces are minted by their owner's any-obs client through the proxy — or pre-provisioned here."),
+  );
+  const form = element("form", "row");
+  const name = element("input", "", "");
+  name.placeholder = "workspace name"; name.required = true;
+  const owner = element("select", "", "");
+  owner.innerHTML = '<option value="">(no owner)</option>';
+  const { users } = await request("/api/gateway/users");
+  for (const user of users) {
+    const option = element("option", "", user.name);
+    option.value = user.name;
+    owner.append(option);
+  }
+  form.append(name, owner, element("button", "button button-primary", "Create workspace"));
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const created = await request("/api/gateway/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: name.value, owner: owner.value }),
+      });
+      name.value = "";
+      await fill();
+    } catch (error) {
+      card.querySelector(".error")?.remove();
+      card.append(element("p", "error", error.message));
+    }
+  });
+  card.append(form);
+  const list = element("div", "list");
+  card.append(list);
+  els.view.append(card);
+
+  async function fill() {
+    const { workspaces } = await request("/api/gateway/workspaces");
+    list.replaceChildren(...workspaces.map((workspace) => {
+      const row = element("div", "row item");
+      row.append(element("span", "pill", workspace.shared ? "shared" : "personal"));
+      row.append(element("code", "", workspace.slug));
+      if (workspace.shared) row.append(element("span", "muted", "pipeline-fed, readable by everyone"));
+      else row.append(element("span", "muted", workspace.owner ? `owned by ${workspace.owner}` : "no owner"));
+      if (!workspace.shared) {
+        const remove = element("button", "button button-quiet button-danger", "Delete");
+        remove.addEventListener("click", async () => {
+          if (!window.confirm(`Delete workspace '${workspace.slug}'? Its embeddings are removed from AnythingLLM${workspace.owner ? ` and '${workspace.owner}' loses it — their client must re-create the workspace before indexing works again` : ""}.`)) return;
+          await request(`/api/gateway/workspaces/${encodeURIComponent(workspace.slug)}`, { method: "DELETE" });
+          await fill();
+        });
+        row.append(remove);
+      }
+      return row;
+    }));
+  }
+  await fill();
 }
 
 async function renderOverview(state) {

@@ -210,6 +210,33 @@ export function createGatewayServer({
       return reset ? sendJson(res, 200, reset) : sendJson(res, 404, { error: "User was not found" });
     }
 
+    if (url.pathname === "/api/gateway/workspaces") {
+      adminOnly();
+      if (req.method === "GET") {
+        const owned = (await userStore.list()).flatMap((user) =>
+          user.workspaces.map((slug) => ({ slug, owner: user.name, shared: false })),
+        );
+        return sendJson(res, 200, {
+          workspaces: [{ slug: sharedWorkspaceSlug, owner: null, shared: true }, ...owned],
+        });
+      }
+      if (req.method === "POST") {
+        // Admin pre-provisioning: create a workspace in AnythingLLM and hand
+        // its ownership to a user up front (covers "attach an existing
+        // workspace as a personal one" without the user's client round-trip).
+        const owner = String(body?.owner ?? "").trim();
+        if (owner && !(await userStore.get(owner))) throw httpError(400, `Unknown owner: ${owner}`);
+        const created = await anythingllmRequest("/api/v1/workspace/new", {
+          method: "POST",
+          body: JSON.stringify({ name: String(body?.name ?? "").trim() || "untitled" }),
+        });
+        const slug = created?.workspace?.slug ?? created?.slug;
+        if (!slug) throw httpError(502, "AnythingLLM returned an invalid workspace");
+        if (owner) await userStore.recordOwnership(slug, owner);
+        return sendJson(res, 201, { workspace: { slug, owner: owner || null, shared: false } });
+      }
+    }
+
     const workspaceMatch = url.pathname.match(/^\/api\/gateway\/workspaces\/([a-z0-9-]+)$/);
     if (workspaceMatch && req.method === "DELETE") {
       adminOnly();
