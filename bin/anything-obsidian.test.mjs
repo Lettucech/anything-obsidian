@@ -573,3 +573,33 @@ test("gateway --bg serves both planes on ephemeral ports and stop tears it down"
   await waitForPidExit(pid);
   assert.equal(existsSync(path.join(store.paths.runRoot, "gateway.pid")), false);
 });
+
+test("init --server skips the role question, defaults the vault root, and records the mode", async () => {
+  const { home, output, url } = await setup({ workspaces: [] });
+  const env = { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home };
+
+  const exitCode = await runCli(
+    ["init", "--server", "--url", url, "--api-key", "developer-key"],
+    { env, log: output.line },
+  );
+
+  assert.equal(exitCode, 0);
+  const text = output.lines.join("\n");
+  assert.match(text, /Server install/);
+  assert.doesNotMatch(text, /Connect this any-obs to/);
+
+  const config = await createAppConfigStore({ rootDir: configRoot(home) }).load();
+  assert.equal(config.mode, "server");
+  // The vault root is defaulted, not prompted.
+  assert.ok(config.vaultsRoot.endsWith("vaults"));
+});
+
+test("client installs still default to client mode", async () => {
+  const { home, output, url } = await setup({ workspaces: [] });
+  await runCli(
+    ["init", "--vaults-root", path.join(home, "Vaults"), "--url", url, "--api-key", "k"],
+    { env: { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home }, log: output.line },
+  );
+  const config = await createAppConfigStore({ rootDir: configRoot(home) }).load();
+  assert.equal(config.mode, "client");
+});

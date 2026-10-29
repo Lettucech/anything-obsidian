@@ -40,6 +40,9 @@ Non-interactive (agent) mode — provide all three, nothing is prompted:
 
 Options:
   --no-browser    do not open the browser when done
+  --server         server install: configure for the IAM gateway and register
+                   the gateway service (client dashboard stays available but
+                   is not auto-started)
   --no-autostart  do not register login auto-start / crash auto-restart
                   (macOS: LaunchAgents; Linux: systemd user units)
 
@@ -69,7 +72,7 @@ if [ ! -t 0 ] && [ -z "${AO_INSTALLER_EXECED:-}" ]; then
 fi
 
 # ---------- flags ----------
-VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; NO_AUTOSTART=0; WANT_HELP=0
+VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; NO_AUTOSTART=0; SERVER=0; WANT_HELP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --vaults-root) VAULTS_ROOT="${2:?}"; shift 2 ;;
@@ -78,6 +81,7 @@ while [ $# -gt 0 ]; do
     --port) PORT="${2:?}"; shift 2 ;;
     --no-browser) NO_BROWSER=1; shift ;;
     --no-autostart) NO_AUTOSTART=1; shift ;;
+    --server) SERVER=1; NO_BROWSER=1; shift ;;
     --help|-h) WANT_HELP=1; shift ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -86,7 +90,7 @@ done
 if [ "$WANT_HELP" -eq 1 ]; then usage; exit 0; fi
 
 NON_INTERACTIVE=0
-if [ -n "$VAULTS_ROOT" ] && [ -n "$URL" ] && [ -n "$API_KEY" ]; then NON_INTERACTIVE=1; fi
+if [ -n "$URL" ] && [ -n "$API_KEY" ] && { [ -n "$VAULTS_ROOT" ] || [ "$SERVER" -eq 1 ]; }; then NON_INTERACTIVE=1; fi
 
 # ---------- platform ----------
 OS="$(uname -s)"; ARCH="$(uname -m)"
@@ -214,6 +218,7 @@ say "  ✓ CLI ready: $LAUNCHER (short form: any-obs)"
 if [ "$NON_INTERACTIVE" -eq 1 ]; then
   INIT_ARGS="--vaults-root $VAULTS_ROOT --url $URL --api-key $API_KEY"
   if [ -n "$PORT" ]; then INIT_ARGS="$INIT_ARGS --port $PORT"; fi
+  if [ "$SERVER" -eq 1 ]; then INIT_ARGS="$INIT_ARGS --server"; fi
   say ""
   say "Configuring (non-interactive)…"
   "$LAUNCHER" init $INIT_ARGS || die "Setup failed. Fix the problem above and re-run: $LAUNCHER init"
@@ -241,6 +246,28 @@ if [ "$AUTOSTART" -eq 1 ] && [ "$NON_INTERACTIVE" -ne 1 ]; then
   answer=""
   read answer < /dev/tty 2>/dev/null || answer=""
   case "$answer" in n|N|no|No|NO) AUTOSTART=0 ;; esac
+fi
+
+if [ "$SERVER" -eq 1 ]; then
+  if [ "$AUTOSTART" -eq 1 ]; then
+    "$LAUNCHER" autostart gateway on || warn "Gateway autostart failed; start it with: $LAUNCHER gateway --bg"
+  fi
+  "$LAUNCHER" gateway --bg || warn "Gateway did not start. Re-run: anything-obsidian gateway --bg"
+  say ""
+  say "Server install complete. The gateway is running:"
+  say "  public plane   http://<this-host>:21500  (MCP + user API; user token required)"
+  say "  admin dashboard http://localhost:21505   (loopback only - ssh -L 21505:127.0.0.1:21505 <this-host>)"
+  say "Finish setup (AnythingLLM key) in that dashboard's wizard."
+  say "Useful commands:"
+  say "  anything-obsidian status               health check (shows whose token if client-style)"
+  say "  anything-obsidian stop                 stop everything incl. the gateway"
+  say "  anything-obsidian autostart gateway off  stop the gateway permanently"
+  say "The client dashboard stays available for system checks: anything-obsidian start"
+  say ""
+  say "Optional — teach your AI agent to drive any-obs:"
+  say "  npx skills add $REPO --skill anything-obsidian-setup"
+  say "  npx skills add $REPO --skill anything-obsidian-vault-workflow"
+  exit 0
 fi
 
 if [ "$AUTOSTART" -eq 1 ]; then

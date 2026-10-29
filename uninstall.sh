@@ -67,7 +67,7 @@ say "Anything Obsidian uninstaller"
 
 # ---------- stop launchd / systemd services (they may own the processes) ----------
 UID_NUM="$(id -u)"
-for label in app.anything-obsidian.dashboard app.anything-obsidian.scheduler app.anything-obsidian.mcp app.anything-obsidian.mcp-lan; do
+for label in app.anything-obsidian.dashboard app.anything-obsidian.scheduler app.anything-obsidian.mcp app.anything-obsidian.mcp-lan app.anything-obsidian.gateway; do
   plist="$HOME/Library/LaunchAgents/$label.plist"
   if [ -f "$plist" ]; then
     launchctl bootout "gui/$UID_NUM/$label" >/dev/null 2>&1 || true
@@ -77,7 +77,7 @@ for label in app.anything-obsidian.dashboard app.anything-obsidian.scheduler app
 done
 if command -v systemctl >/dev/null 2>&1; then
   UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-  for unit in anything-obsidian-dashboard.service anything-obsidian-scheduler.service anything-obsidian-mcp.service anything-obsidian-mcp-lan.service; do
+  for unit in anything-obsidian-dashboard.service anything-obsidian-scheduler.service anything-obsidian-mcp.service anything-obsidian-mcp-lan.service anything-obsidian-gateway.service; do
     if [ -f "$UNIT_DIR/$unit" ]; then
       systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
       rm -f "$UNIT_DIR/$unit"
@@ -112,6 +112,7 @@ stop_pid_file() {
 if [ -d "$DATA_DIR/run" ]; then
   stop_pid_file "$DATA_DIR/run/dashboard.pid"
   stop_pid_file "$DATA_DIR/run/scheduler.pid"
+  stop_pid_file "$DATA_DIR/run/gateway.pid"
 fi
 
 # ---------- remove launcher + PATH ----------

@@ -38,6 +38,18 @@ All vaults of one install embed into a single unified AnythingLLM workspace
 one) — agents search it once and results name the owning vault. RAG search
 never requires picking a vault first.
 
+## Two install personas
+
+- **User/solo** — the normal `install.sh`: connects to the user's own
+  AnythingLLM (direct) or to a shared gateway (user token). Registering
+  vaults, sync, dashboard.
+- **Server** — `install-server.sh` (i.e. `install.sh --server`): for the
+  machine running the IAM gateway for a shared deployment. The credential
+  here IS the AnythingLLM developer key; the vault-root prompt is skipped;
+  autostart registers the gateway service. Verify with
+  `anything-obsidian status` and the gateway admin dashboard on loopback
+  :21505.
+
 ## Install (one command, zero prompts when flags are given)
 
 ```sh

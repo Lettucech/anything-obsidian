@@ -277,13 +277,18 @@ docker compose -p any-obs -f server/anythingllm.compose.yml up -d
 It publishes AnythingLLM on the server's loopback only (`127.0.0.1:21501`);
 your AnythingLLM's URL is then `http://localhost:21501`.
 
-1. **Install on the server** (same one-command installer as any client) and
-   point it at your AnythingLLM:
+1. **Install on the server** with the server entry point — it configures
+   for the gateway, registers the gateway service (not the client
+   dashboard), and leaves the client dashboard available for system
+   checks:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
-     --vaults-root ~/.anything-obsidian/vaults --url http://localhost:21501 --api-key <developer-key> --no-browser
+   curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install-server.sh | sh -s -- \
+     --url http://localhost:21501 --api-key <developer-key>
    ```
+
+   (Same installer underneath: `install.sh --server`. The vault-root
+   question is skipped — a gateway doesn't manage local vaults.)
 
    The CLI installs as `anything-obsidian`, with `any-obs` as a short form —
    `any-obs gateway --bg`, `any-obs status`, same thing.

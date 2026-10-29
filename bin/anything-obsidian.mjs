@@ -378,7 +378,8 @@ async function runSchedulerFg({ store, env, spawnImpl, log }) {
 }
 
 async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory }) {
-  const nonInteractive = Boolean(flags["vaults-root"] && flags.url && flags["api-key"]);
+  const serverInstall = "server" in flags;
+  const nonInteractive = Boolean(flags.url && flags["api-key"] && (serverInstall || flags["vaults-root"]));
   const prompt = nonInteractive ? null : (promptFactory || createPrompt)(io);
 
   try {
@@ -396,15 +397,20 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
     log(gitOk ? "✓ git is available" : "✗ git was not found. Install git (e.g. `xcode-select --install`) and re-run init.");
     if (!gitOk) return 1;
 
-    const vaultsRoot = await resolveVaultsRoot({ flags, prompt, env, log });
+    const vaultsRoot = serverInstall
+      ? expandTilde(MANAGED_VAULTS_ROOT)
+      : await resolveVaultsRoot({ flags, prompt, env, log });
 
     // Two different credentials can go in this one slot, and confusing them
     // is the classic mistake: an admin connecting straight to AnythingLLM
     // pastes its developer key; a user on a shared deployment pastes the
-    // any-obs user token their admin issued. Ask which one this is so the
-    // prompts and error hints match the thing being pasted.
+    // any-obs user token their admin issued. Server installs ARE the admin
+    // case; otherwise ask which one this is so the prompts and error hints
+    // match the thing being pasted.
     let connectMode = null;
-    if (flags.url && flags["api-key"]) {
+    if (serverInstall) {
+      connectMode = "direct";
+    } else if (flags.url && flags["api-key"]) {
       connectMode = "auto";
     } else {
       log("");
@@ -465,6 +471,7 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
       anythingllmBaseUrl,
       apiKey,
       dashboardPort: Number.isInteger(dashboardPort) ? dashboardPort : 21502,
+      ...(serverInstall ? { mode: "server" } : {}),
     });
     await mkdir(config.vaultsRoot, { recursive: true });
 
@@ -475,7 +482,14 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
     log(`  Dashboard:        http://localhost:${config.dashboardPort}`);
     log(`  Config directory: ${store.paths.root}`);
     log("");
-    log("Start the dashboard with: anything-obsidian start");
+    if (config.mode === "server") {
+      log("Server install: start the gateway with anything-obsidian gateway --bg or");
+      log("anything-obsidian autostart gateway on (runs at login, restarts on crash).");
+      log("The admin dashboard is at http://localhost:21505 (loopback only).");
+      log("The client dashboard stays available for system checks: anything-obsidian start");
+    } else {
+      log("Start the dashboard with: anything-obsidian start");
+    }
     return 0;
   } finally {
     prompt?.close();
@@ -657,11 +671,13 @@ async function runStop({ store, killImpl, log, launchctl, systemctl, platform, e
   if (!config) return 1;
 
   const manager = autostartManager({ store, env: env || process.env, log, launchctl, systemctl, platform });
+  const serverInstall = config.mode === "server";
   if (manager && (await manager.enabled())) {
     await manager.halt();
     log("Dashboard and scheduler stopped (autostart services unloaded).");
     log("They will start again at next login or reboot while autostart is on.");
     log("Disable that permanently with: anything-obsidian autostart off");
+    if (serverInstall) await stopGatewayIfRunning({ store, manager, killImpl, log });
     return 0;
   }
 
@@ -669,7 +685,36 @@ async function runStop({ store, killImpl, log, launchctl, systemctl, platform, e
   log(dashboard.stopped ? `Dashboard stopped (pid ${dashboard.pid}).` : "Dashboard is not running.");
   const scheduler = await stopSchedulerProcess({ pidPath: store.paths.schedulerPidPath, killImpl });
   log(scheduler.stopped ? `Scheduler stopped (pid ${scheduler.pid}).` : "Scheduler is not running.");
+  if (serverInstall) await stopGatewayIfRunning({ store, manager, killImpl, log });
   return 0;
+}
+
+async function stopGatewayIfRunning({ store, manager, killImpl, log }) {
+  // Server installs: `stop` covers the gateway too — background pid or
+  // service-managed, whichever is live.
+  const pidPath = path.join(store.paths.runRoot, "gateway.pid");
+  let pid;
+  try {
+    pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
+  } catch {
+    pid = null;
+  }
+  if (Number.isInteger(pid) && pid > 0) {
+    try {
+      killImpl(pid, "SIGTERM");
+      rmSync(pidPath, { force: true });
+      log(`Gateway stopped (pid ${pid}).`);
+      return;
+    } catch {
+      // fall through to the service manager
+    }
+  }
+  if (manager?.gatewayEnabled && (await manager.gatewayEnabled())) {
+    await manager.disableGateway();
+    log("Gateway autostart service removed.");
+    return;
+  }
+  log("Gateway is not running.");
 }
 
 async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launchctl, systemctl, platform, fetchLatest = fetchLatestVersion }) {
