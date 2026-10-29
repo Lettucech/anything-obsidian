@@ -28,8 +28,8 @@ loopback unless marked otherwise:
 | 21505 | Gateway admin dashboard | server loopback only |
 | 21506–21510 | Reserved for future any-obs surfaces | — |
 
-AnythingLLM itself (inside the server stack) keeps its container port 3001
-and is never published beyond the host loopback. Ports are overridable per
+AnythingLLM itself keeps its container port 3001 and is never published
+beyond the host loopback of the machine it runs on. Ports are overridable per
 surface (`--port` at init, `MCP_PORT`, `MCP_LAN_PORT`, `GATEWAY_PORT`);
 installs configured before the 21500-range defaults keep their recorded
 `dashboardPort` until `anything-obsidian init` is re-run.
@@ -50,6 +50,10 @@ installs configured before the 21500-range defaults keep their recorded
   commands or edits note content.
 - **Derived RAG:** the worker updates a vault's AnythingLLM index after the
   configured sync workflow. It never becomes the source for vault files.
+  The same rule holds server-side: the only path that writes into the RAG
+  index is the vault/source pipeline — user tokens can never upload
+  documents or edit embeddings directly, so the index is always a
+  rebuildable view of a source directory.
 - **No vault ownership:** removing a vault from management does not delete its
   repository or the user's files. Its derived chunks leave the shared index
   (so they stop appearing in searches); the workspace itself stays.
@@ -128,6 +132,11 @@ Update in place any time (data and settings are kept):
 ```bash
 anything-obsidian update
 ```
+
+Installs configured before the unified-workspace release (0.3.0) migrate
+automatically: on the first sync or embed after updating, every vault
+re-embeds once into the shared workspace. That first run is slow and
+uploads everything — expected, not a fault.
 
 Sync failures surface in the dashboard (a red banner plus a per-vault
 "Last sync" line) and as an OS notification; set `AO_NOTIFY=0` in the
@@ -286,6 +295,10 @@ your AnythingLLM's URL is then `http://localhost:21501`.
    anything-obsidian autostart gateway on   # start at login, restart on crash
    ```
 
+   On a headless Linux server, run `sudo loginctl enable-linger $USER` once
+   so the gateway (like every other any-obs service) keeps running without
+   an active login session.
+
 3. **Open the admin dashboard** — it is loopback-only
    (`http://localhost:21505` on the server, or
    `ssh -L 21505:127.0.0.1:21505 <server>` from your machine). Reaching it
@@ -322,6 +335,11 @@ your AnythingLLM's URL is then `http://localhost:21501`.
 - **Shared knowledge** enters the index only through registered sources
   (git repositories or server directories) refreshed by the pipeline —
   schedule them with an interval or queue a refresh on demand.
+- **Gateway state** (key, users, sources, manifests, git clones) lives
+  under the data directory too, in `gateway/` next to the client's
+  registry and secrets — same backup and `ANYTHING_OBSIDIAN_HOME` rules as
+  everything else. Migrating from an early Docker install? Copy the
+  container's `/data` contents into that `gateway/` directory.
 
 ## Operations
 
