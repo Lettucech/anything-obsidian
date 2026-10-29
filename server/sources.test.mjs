@@ -103,6 +103,41 @@ test("scheduled refreshes only queue enabled, due sources", async () => {
   assert.deepEqual(await manager.runDueSources(), ["due"]);
 });
 
+test("the api key may be a resolver, picked up fresh by every job", async () => {
+  let currentKey = "";
+  const captured = [];
+  const embedVault = async ({ config }) => {
+    captured.push(config.apiKey);
+    return { scanned: 1, uploaded: 1, removed: 0, workspaceSlug: config.workspaceSlug };
+  };
+  const dataDir = await mkdtemp(path.join(tmpdir(), "any-obs-sources-key-"));
+  const manager = createSourceManager({
+    dataDir,
+    baseUrl: "http://anythingllm:3001",
+    apiKey: async () => currentKey,
+    embedVault,
+    runGit: async () => "",
+  });
+  const dir = await mkdtemp(path.join(tmpdir(), "any-obs-sources-key-dir-"));
+  await manager.create({ id: "handbook", kind: "dir", ref: dir, workspace: "company-kb" });
+
+  // No key configured yet: the job fails with the gateway's own guidance,
+  // not the client's init message.
+  const first = manager.requestRefresh("handbook");
+  await waitFor(() => manager.job(first.id).finishedAt);
+  assert.equal(manager.job(first.id).status, "failed");
+  assert.match(manager.job(first.id).error, /Settings tab/);
+
+  // The key appears (as it does when saved in Settings) — the next job
+  // picks it up without any restart.
+  currentKey = "fresh-key";
+  const second = manager.requestRefresh("handbook");
+  await waitFor(() => manager.job(second.id).finishedAt);
+  assert.equal(manager.job(second.id).status, "succeeded");
+  // The empty-key run never reached the embedder (it fails in the pipeline).
+  assert.deepEqual(captured, ["fresh-key"]);
+});
+
 async function setup(overrides = {}) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "any-obs-gateway-sources-"));
   const gitCalls = [];

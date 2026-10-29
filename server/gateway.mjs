@@ -631,7 +631,9 @@ if (import.meta.url === entryUrl()) {
   const sourceManager = createSourceManager({
     dataDir,
     baseUrl: env.ANYTHINGLLM_BASE_URL,
-    apiKey: env.ANYTHINGLLM_API_KEY ?? "",
+    // Resolve per job: the wizard- or Settings-collected key lives in the
+    // data volume, not the process env.
+    apiKey: async () => env.ANYTHINGLLM_API_KEY || (await gatewayConfig.load()).apiKey,
   });
   const shared = {
     userStore,

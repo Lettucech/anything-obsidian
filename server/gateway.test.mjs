@@ -67,6 +67,18 @@ test("setup wizard on the admin plane: verify, store, close; restart persists", 
   assert.equal(done.status, 200);
   assert.equal(done.body.configured, true);
 
+  // A source refresh runs the embed pipeline with the wizard-collected key
+  // (not the empty env one).
+  await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
+    method: "POST", body: JSON.stringify({ name: "company-kb", kind: "shared" }),
+  });
+  await fetchJson(`${adminUrl}/api/gateway/sources`, {
+    method: "POST", body: JSON.stringify({ id: "team-kb", kind: "dir", ref: "/srv/kb", workspace: "company-kb" }),
+  });
+  const refresh = await fetchJson(`${adminUrl}/api/gateway/sources/team-kb/refresh`, { method: "POST" });
+  await waitFor(() => upstream.embeds.at(-1)?.config);
+  assert.equal(upstream.embeds.at(-1).config.apiKey, "minted-developer-key");
+
   assert.equal((await fetchJson(`${adminUrl}/api/setup/api-key`, { method: "POST", body: JSON.stringify({ apiKey: "x" }) })).status, 403);
 
   // A gateway restarted on the same data volume stays configured and the
@@ -407,6 +419,14 @@ test("settings: connection status, masked key, and updating the key later", asyn
   })).status, 404);
 });
 
+async function waitFor(predicate, attempts = 100) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("condition not reached in time");
+}
+
 function mcpTransport(baseUrl, token) {
   return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
@@ -438,14 +458,19 @@ async function fetchJson(url, init = {}) {
 async function startGateway({ envKey = true, dataDir: dataDirOverride } = {}) {
   const dataDir = dataDirOverride ?? await mkdtemp(path.join(tmpdir(), "any-obs-gateway-test-"));
   const upstream = fakeAnythingllm();
+  upstream.embeds = [];
+  const gatewayConfig = (await import("./gateway-config.mjs")).createGatewayConfig({ dataDir });
   const shared = {
     userStore: createUserStore({ dataDir }),
-    gatewayConfig: (await import("./gateway-config.mjs")).createGatewayConfig({ dataDir }),
+    gatewayConfig,
     sourceManager: createSourceManager({
       dataDir,
       baseUrl: "http://anythingllm.test",
-      apiKey: "admin-key",
-      embedVault: async ({ config }) => ({ scanned: 0, uploaded: 0, removed: 0, workspaceSlug: config.workspaceSlug }),
+      apiKey: envKey ? "admin-key" : async () => (await gatewayConfig.load()).apiKey,
+      embedVault: async ({ config }) => {
+        upstream.embeds.push({ config });
+        return { scanned: 0, uploaded: 0, removed: 0, workspaceSlug: config.workspaceSlug };
+      },
       runGit: async () => "",
     }),
     anythingllmBaseUrl: "http://anythingllm.test",

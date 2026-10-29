@@ -17,6 +17,9 @@ import { vaultDocumentFolder } from "../lib/unified-workspace.mjs";
 
 const SOURCE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+// apiKey may be a plain value or a resolver — the gateway passes a resolver
+// so every job picks up the current key (wizard-collected or env) at run
+// time, including changes made later in the dashboard's Settings tab.
 export function createSourceManager({
   dataDir,
   baseUrl,
@@ -122,11 +125,13 @@ export function createSourceManager({
       const source = await manager.get(job.sourceId);
       if (!source) throw new Error(`Unknown source: ${job.sourceId}`);
       if (!source.workspace) throw new Error(`Source '${source.id}' has no target workspace — re-create it with one`);
+      const resolvedApiKey = typeof apiKey === "function" ? await apiKey() : apiKey;
+      if (!resolvedApiKey) throw new Error("No AnythingLLM key configured — set it in the admin dashboard's Settings tab");
       const vaultPath = await refreshWorkingCopy(source);
       const result = await embedVault({
         config: {
           anythingllmBaseUrl: baseUrl,
-          apiKey,
+          apiKey: resolvedApiKey,
           workspaceSlug: source.workspace,
           vaultId: source.id,
           vaultPath,
