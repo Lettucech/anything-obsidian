@@ -103,17 +103,24 @@ function renderTabs(state) {
     ["Shared sources", renderSources],
   ];
   const buttons = new Map();
-  for (const [label, render] of views) {
+  // One switch point: clear everything under the tab bar, then let the
+  // chosen tab append its own cards. Render functions only ever append —
+  // without this they would stack below the previous tab's DOM.
+  const show = (label) => {
+    for (const [other, node] of buttons) node.classList.toggle("active", other === label);
+    const keep = tabs;
+    els.view.replaceChildren(keep);
+    views.find(([name]) => name === label)[1](state);
+  };
+  for (const [label] of views) {
     const button = element("button", "tab", label);
-    button.addEventListener("click", () => {
-      for (const [other, node] of buttons) node.classList.toggle("active", other === label);
-      render(state);
-    });
+    button.addEventListener("click", () => show(label));
     buttons.set(label, button);
     tabs.append(button);
   }
   buttons.get("Overview").classList.add("active");
   els.view.replaceChildren(tabs);
+  show("Overview");
 }
 
 async function renderWorkspaces(state) {
