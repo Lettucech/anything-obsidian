@@ -225,7 +225,11 @@ if [ "$NON_INTERACTIVE" -eq 1 ]; then
 else
   say ""
   say "Now a few questions to finish setup (AnythingLLM URL and API key; see the README):"
-  "$LAUNCHER" init || die "Setup failed. Re-run it any time with: $LAUNCHER init"
+  if [ "$SERVER" -eq 1 ]; then
+    "$LAUNCHER" init --server || die "Setup failed. Re-run it any time with: $LAUNCHER init --server"
+  else
+    "$LAUNCHER" init || die "Setup failed. Re-run it any time with: $LAUNCHER init"
+  fi
 fi
 
 # ---------- start ----------
@@ -241,7 +245,7 @@ open_dashboard_in_browser() {
 
 AUTOSTART=1
 if [ "$NO_AUTOSTART" -eq 1 ]; then AUTOSTART=0; fi
-if [ "$AUTOSTART" -eq 1 ] && [ "$NON_INTERACTIVE" -ne 1 ]; then
+if [ "$AUTOSTART" -eq 1 ] && [ "$NON_INTERACTIVE" -ne 1 ] && [ "$SERVER" -ne 1 ]; then
   printf 'Keep the dashboard and sync running at login (auto-restart on crash)? [Y/n] '
   answer=""
   read answer < /dev/tty 2>/dev/null || answer=""
@@ -253,6 +257,32 @@ if [ "$SERVER" -eq 1 ]; then
     "$LAUNCHER" autostart gateway on || warn "Gateway autostart failed; start it with: $LAUNCHER gateway --bg"
   fi
   "$LAUNCHER" gateway --bg || warn "Gateway did not start. Re-run: anything-obsidian gateway --bg"
+
+  if ! curl -m 2 -s -o /dev/null http://127.0.0.1:21501/ 2>/dev/null; then
+    say ""
+    say "AnythingLLM isn't reachable at localhost:21501."
+    if command -v docker >/dev/null 2>&1; then
+      START_ANY=0
+      if [ "$NON_INTERACTIVE" -ne 1 ]; then
+        printf 'Start the bundled AnythingLLM now (docker compose)? [Y/n] '
+        answer=""
+        read answer < /dev/tty 2>/dev/null || answer=""
+        case "$answer" in n|N|no|No|NO) START_ANY=0 ;; *) START_ANY=1 ;; esac
+      fi
+      if [ "$START_ANY" -eq 1 ]; then
+        docker compose -p any-obs -f "$APP_DIR/server/anythingllm.compose.yml" up -d \
+          && say "  ✓ AnythingLLM is starting on http://localhost:21501 (loopback only)."
+        say "  Finish its first-boot wizard there, then mint the developer API key and"
+        say "  paste it in the gateway admin dashboard's Settings tab (localhost:21505)."
+      fi
+    else
+      say "Docker isn't installed. Either install Docker and run"
+      say "  docker compose -p any-obs -f $APP_DIR/server/anythingllm.compose.yml up -d"
+      say "or point this gateway at an existing AnythingLLM:"
+      say "  anything-obsidian init --url <that-url> --api-key <developer-key>"
+    fi
+  fi
+
   say ""
   say "Server install complete. The gateway is running:"
   say "  public plane   http://<this-host>:21500  (MCP + user API; user token required)"
