@@ -90,8 +90,9 @@ function renderWizard(state) {
 
 async function renderDashboard(state) {
   els.headline.textContent = "any-obs gateway";
+  // renderTabs already shows the initial tab (Overview); rendering it here
+  // as well produced two identical cards on landing.
   renderTabs(state);
-  await renderOverview(state);
 }
 
 function renderTabs(state) {
