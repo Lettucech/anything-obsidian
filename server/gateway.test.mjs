@@ -427,6 +427,35 @@ async function waitFor(predicate, attempts = 100) {
   throw new Error("condition not reached in time");
 }
 
+test("me: a token can ask who it is — identity, role, readable workspaces", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  await createUser(adminUrl, publicUrl, "brian");
+  await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
+    method: "POST", body: JSON.stringify({ name: "company-kb", kind: "shared" }),
+  });
+  await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
+    method: "POST", body: JSON.stringify({ user: "brian" }),
+  });
+  const reset = await fetchJson(`${adminUrl}/api/gateway/users/brian/reset-token`, { method: "POST" });
+
+  const anonymous = await fetchJson(`${publicUrl}/api/gateway/me`);
+  assert.equal(anonymous.status, 401);
+
+  const me = await fetchJson(`${publicUrl}/api/gateway/me`, {
+    headers: { Authorization: `Bearer ${reset.body.token}` },
+  });
+  assert.equal(me.status, 200);
+  assert.deepEqual(me.body, {
+    kind: "user",
+    name: "brian",
+    role: "member",
+    workspaces: { read: ["company-kb"] },
+  });
+
+  // Admin plane does not carry the identity endpoint.
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/me`)).status, 404);
+});
+
 function mcpTransport(baseUrl, token) {
   return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },

@@ -56,14 +56,19 @@ curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/in
      yourself, the installer does it. If the user already keeps notes in an
      existing folder, keep this default and import that folder later with
      `sourceMode: "import"` + its absolute `importPath`.
-  2. **AnythingLLM base URL** — where their instance serves the API, e.g.
-     `http://localhost:3001` for a local AnythingLLM Desktop. If the user's
-     team runs the any-obs server stack (shared instance behind the IAM
-     gateway), the base URL is the gateway (`http://<server>:21500`) and the
-     key is that user's gateway token, not an AnythingLLM admin key.
-  3. **API key** — from AnythingLLM Settings → Developer API, or the user's
-     gateway token in a shared deployment. Ask the user to paste it; never
-     invent one.
+  2. **Which credential they hold — ask, never guess:**
+     - Direct: they run their own AnythingLLM (Desktop/Docker/remote).
+       Collect its base URL (e.g. `http://localhost:21501` with the
+       reference compose) and its **Developer API key** (AnythingLLM
+       Settings → Developer API).
+     - Gateway: their team runs a shared any-obs gateway. Collect the
+       **gateway URL** (`http://<server>:21500`) and their **any-obs user
+       token** issued by the admin — never an AnythingLLM key. A reader
+       token can search but not index; indexing needs member.
+  3. The interactive installer asks which of the two this is; non-interactive
+     `--url`/`--api-key` accept either — init auto-detects a gateway token
+     and reports "Connected to the gateway as <name> (<role>)". Never
+     invent a key or token.
 - Interactive humans can drop the flags entirely: the installer asks the same
   questions.
 

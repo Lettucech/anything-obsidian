@@ -77,9 +77,14 @@ API and never hosts it.
    The installer checks prerequisites, installs the app under
    `~/.anything-obsidian/`, puts `anything-obsidian` on your PATH, then asks
    a few setup questions: a vault root (default `~/.anything-obsidian/vaults`,
-   inside the app's own home so nothing touches Documents or Desktop), the
-   AnythingLLM base URL and Developer API key, and it tests the
-   connection before saving a 0600 config under
+   inside the app's own home so nothing touches Documents or Desktop), and
+   **which of two credentials you hold** —
+   - connecting **directly to an AnythingLLM you run**: its base URL plus the
+     Developer API key from its Settings → Developer API page;
+   - connecting **through a shared any-obs gateway**: the gateway URL plus the
+     **any-obs user token your admin issued** (never an AnythingLLM key —
+     that belongs to the server admin alone).
+   It tests the connection before saving a 0600 config under
    `~/Library/Application Support/anything-obsidian/`. When it finishes, the
    dashboard is running and your browser opens at `http://localhost:21502`.
 
@@ -326,8 +331,14 @@ your AnythingLLM's URL is then `http://localhost:21501`.
    the **Overview** with client and MCP connection snippets. Full API
    surface: `docs/superpowers/specs/2026-10-28-iam-middleware.md`.
 
+- **Onboarding a user** (admin): create them in the gateway dashboard
+  (they default to reader — promote to member when they should index their
+  own vaults) and hand them two things: the gateway URL
+  `http://<server>:21500` and their token. That is all a user ever needs.
 - **any-obs clients** connect exactly as before —
-  `--url http://<server>:21500 --api-key <user-token>`. The unified workspace
+  `--url http://<server>:21500 --api-key <user-token>`; `anything-obsidian
+  status` shows whose token the machine holds ("via gateway, as 'brian'
+  (member)"). The unified workspace
   their client creates is recorded as that user's personal workspace, and
   granted shared workspaces are first-class on the client too: its
   `any_obs_rag_search` fans out across everything the token can see and the

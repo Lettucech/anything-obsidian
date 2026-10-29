@@ -49,7 +49,7 @@ test("init fails with a clear message when AnythingLLM rejects the key", async (
   );
 
   assert.equal(exitCode, 1);
-  assert.match(output.lines.join("\n"), /Could not talk to AnythingLLM/);
+  assert.match(output.lines.join("\n"), /Could not connect/);
   const store = createAppConfigStore({ rootDir: configRoot(home) });
   assert.equal(await store.load(), null);
 });
@@ -71,6 +71,7 @@ test("init prompts interactively and warns before accepting a Documents vault ro
     path.join(home, "Documents", "Vaults"), // vault root question: TCC-protected attempt
     false, // confirm: decline
     path.join(home, "ObsidianVaults"), // vault root question: safe root
+    "1", // connect mode: direct AnythingLLM
     "key-123", // api key question
   ];
 

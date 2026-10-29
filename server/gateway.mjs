@@ -337,6 +337,21 @@ export function createGatewayServer({
       return sendJson(res, 200, { removed: slug });
     }
 
+    if (url.pathname === "/api/gateway/me" && req.method === "GET") {
+      // Who is this token? Lets a client (or installer) tell "gateway user
+      // token" from a plain AnythingLLM developer key, and see its own
+      // name, role, and readable workspaces. Public plane only.
+      if (plane !== "public") return sendJson(res, 404, { error: "Not found" });
+      if (!identity || identity.kind !== "user") throw httpError(401, "Bearer token required");
+      const entitlements = await userStore.entitlements(identity.name);
+      return sendJson(res, 200, {
+        kind: "user",
+        name: identity.name,
+        role: identity.role,
+        workspaces: { read: entitlements.read },
+      });
+    }
+
     if (url.pathname === "/api/gateway/search" && req.method === "POST") {
       if (!identity) throw httpError(401, "Bearer token required");
       const entitlements = await entitlementsFor(identity);

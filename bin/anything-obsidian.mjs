@@ -397,19 +397,66 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
     if (!gitOk) return 1;
 
     const vaultsRoot = await resolveVaultsRoot({ flags, prompt, env, log });
-    const anythingllmBaseUrl = flags.url || await prompt.question(`AnythingLLM base URL [http://localhost:3001] `, "http://localhost:3001");
-    const apiKey = flags["api-key"] || await prompt.question("AnythingLLM API key: ", "");
+
+    // Two different credentials can go in this one slot, and confusing them
+    // is the classic mistake: an admin connecting straight to AnythingLLM
+    // pastes its developer key; a user on a shared deployment pastes the
+    // any-obs user token their admin issued. Ask which one this is so the
+    // prompts and error hints match the thing being pasted.
+    let connectMode = null;
+    if (flags.url && flags["api-key"]) {
+      connectMode = "auto";
+    } else {
+      log("");
+      log("Connect this any-obs to:");
+      log("  1) An AnythingLLM instance directly (you run it — admin/solo setup)");
+      log("  2) A shared any-obs gateway (your team's admin gave you a user token)");
+      const answer = await prompt.question("Choose [1] ", "1");
+      connectMode = String(answer).trim() === "2" ? "gateway" : "direct";
+    }
+
+    let anythingllmBaseUrl;
+    let apiKey;
+    if (connectMode === "gateway" || connectMode === "auto") {
+      const urlDefault = "http://localhost:21500";
+      anythingllmBaseUrl = flags.url || await prompt.question(`Gateway base URL [${urlDefault}] `, urlDefault);
+      apiKey = flags["api-key"] || await prompt.question("any-obs user token (from your admin): ", "");
+    } else {
+      anythingllmBaseUrl = flags.url || await prompt.question(`AnythingLLM base URL [http://localhost:3001] `, "http://localhost:3001");
+      apiKey = flags["api-key"] || await prompt.question("AnythingLLM API key (Settings → Developer API): ", "");
+    }
     const dashboardPort = Number(flags.port || 21502);
 
     const client = createAnythingllmClient({ baseUrl: anythingllmBaseUrl, apiKey, fetchImpl });
-    log(`Testing the AnythingLLM connection at ${anythingllmBaseUrl}…`);
+    log(`Testing the connection at ${anythingllmBaseUrl}…`);
+    let gatewayIdentity = null;
     try {
+      // A gateway answers this with the token's own identity; plain
+      // AnythingLLM 404s it. Either way the list-workspaces test below is
+      // the real acceptance check.
+      const probe = await fetchImpl(`${anythingllmBaseUrl.replace(/\/+$/, "")}/api/gateway/me`, {
+        headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+      }).catch(() => null);
+      if (probe?.ok) gatewayIdentity = await probe.json().catch(() => null);
+
       const workspaces = await client.listWorkspaces();
-      log(`✓ Connected. ${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"} visible.`);
+      if (gatewayIdentity) {
+        log(`✓ Connected to the gateway as '${gatewayIdentity.name}' (${gatewayIdentity.role}). ${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"} readable.`);
+        if (gatewayIdentity.role === "reader") {
+          log("  Note: reader tokens can search but cannot index — ask your admin for the member role to add vaults.");
+        }
+      } else {
+        log(`✓ Connected. ${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"} visible.`);
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      log(`✗ Could not talk to AnythingLLM: ${detail}`);
-      log("  Check that the URL is reachable and the API key comes from Settings → Developer API.");
+      log(`✗ Could not connect: ${detail}`);
+      if (connectMode === "gateway") {
+        log("  Check that the gateway URL is reachable and the token is the any-obs user token your admin issued");
+        log("  (not an AnythingLLM developer key — that belongs to the server admin only).");
+      } else {
+        log("  Check that the URL is reachable and the API key comes from Settings → Developer API.");
+      }
       return 1;
     }
 
@@ -424,7 +471,7 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
     log("");
     log("Setup complete.");
     log(`  Vault root:       ${config.vaultsRoot}`);
-    log(`  AnythingLLM:      ${config.anythingllmBaseUrl}`);
+    log(`  AnythingLLM:      ${config.anythingllmBaseUrl}${gatewayIdentity ? ` (via gateway, as '${gatewayIdentity.name}')` : ""}`);
     log(`  Dashboard:        http://localhost:${config.dashboardPort}`);
     log(`  Config directory: ${store.paths.root}`);
     log("");
@@ -721,6 +768,16 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
   try {
     const workspaces = await client.listWorkspaces();
     report.anythingllm = { ok: true, detail: "connected", workspaces: workspaces.length };
+    // If the configured key is a gateway user token, say whose it is —
+    // this is how "which credential am I holding" stays answerable.
+    const me = await fetchImpl(`${String(config.anythingllmBaseUrl).replace(/\/+$/, "")}/api/gateway/me`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${config.apiKey}` },
+      signal: AbortSignal.timeout(3000),
+    }).catch(() => null);
+    if (me?.ok) {
+      const identity = await me.json().catch(() => null);
+      if (identity?.kind === "user") report.gateway = { user: identity.name, role: identity.role };
+    }
   } catch (error) {
     report.anythingllm = { ok: false, detail: error instanceof Error ? error.message : String(error) };
   }
@@ -764,7 +821,8 @@ async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launc
     log(`      vault root: ${value.config.vaultsRoot}`);
     log(`      vaults managed: ${value.vaults ?? "unknown"}`);
     log(`      RAG workspace: ${value.workspace ?? "not created yet (appears with the first vault)"}`);
-    log(`  ${mark(value.anythingllm.ok)} AnythingLLM: ${value.anythingllm.ok ? `${value.config.anythingllmBaseUrl} (${value.anythingllm.workspaces ?? 0} workspaces)` : value.anythingllm.detail}`);
+    const viaGateway = value.gateway ? ` — via gateway, as '${value.gateway.user}' (${value.gateway.role})` : "";
+    log(`  ${mark(value.anythingllm.ok)} AnythingLLM: ${value.anythingllm.ok ? `${value.config.anythingllmBaseUrl} (${value.anythingllm.workspaces ?? 0} workspaces)${viaGateway}` : value.anythingllm.detail}`);
     const dashboard = value.dashboard;
     log(`  ${mark(dashboard.healthy)} Dashboard: ${dashboard.healthy ? `running at ${dashboard.url}` : dashboard.running ? `starting or unhealthy (pid ${dashboard.pid})` : "not running"}`);
     log(`  ${mark(value.scheduler.running)} Scheduler: ${value.scheduler.running ? `running (pid ${value.scheduler.pid})` : "not running"}`);
