@@ -603,3 +603,38 @@ test("client installs still default to client mode", async () => {
   const config = await createAppConfigStore({ rootDir: configRoot(home) }).load();
   assert.equal(config.mode, "client");
 });
+
+test("a client init on a gateway machine keeps mode=server and rewrites only the client config", async () => {
+  const { home, output, url } = await setup({ workspaces: [] });
+  const env = { ANYTHING_OBSIDIAN_HOME: configRoot(home), PATH: process.env.PATH, HOME: home };
+
+  // The admin installed the server first.
+  await runCli(["init", "--server", "--url", url, "--api-key", "developer-key"], { env, log: output.line });
+
+  // Later, a client install overwrites the client config (answered yes).
+  const confirmCalls = [];
+  const promptFactory = () => ({
+    async question(text, fallback) { return script.shift() ?? fallback; },
+    async confirm(text, fallback) {
+      confirmCalls.push({ text, answer: script.shift() ?? fallback });
+      return confirmCalls.at(-1).answer;
+    },
+    close() {},
+  });
+  const script = [
+    "1", // connect mode: direct
+    "client-token", // api key
+  ];
+  const exitCode = await runCli(
+    ["init", "--vaults-root", path.join(home, "Vaults"), "--url", url, "--api-key", "client-token"],
+    { env, promptFactory, log: output.line },
+  );
+
+  assert.equal(exitCode, 0);
+  const config = await createAppConfigStore({ rootDir: configRoot(home) }).load();
+  // Client values win…
+  assert.equal(config.anythingllmBaseUrl, url);
+  assert.equal(config.apiKey, "client-token");
+  // …but the server mode marker survives: `stop` must still tear the gateway down.
+  assert.equal(config.mode, "server");
+});

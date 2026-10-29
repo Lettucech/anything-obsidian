@@ -384,8 +384,16 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
 
   try {
     const existing = await store.load();
+    // A client install on a machine that runs the gateway rewrites only the
+    // client dashboard's config — say so, and never let it drop the server
+    // mode marker (that would stop `stop` from tearing the gateway down).
+    const serverModePresent = existing?.mode === "server" && !serverInstall;
     if (existing && !nonInteractive) {
-      const overwrite = await prompt.confirm(`Config already exists at ${store.paths.configPath}. Overwrite? [y/N] `, false);
+      const overwrite = await prompt.confirm(
+        serverModePresent
+          ? "A gateway (server) install already exists on this machine. This rewrites the client dashboard's config only - the gateway and its data (gateway/) are untouched. Continue? [y/N] "
+          : `Config already exists at ${store.paths.configPath}. Overwrite? [y/N] `,
+        false);
       if (!overwrite) {
         log("Keeping the existing configuration.");
         return 0;
@@ -471,7 +479,7 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
       anythingllmBaseUrl,
       apiKey,
       dashboardPort: Number.isInteger(dashboardPort) ? dashboardPort : 21502,
-      ...(serverInstall ? { mode: "server" } : {}),
+      ...(serverInstall ? { mode: "server" } : existing?.mode === "server" ? { mode: "server" } : {}),
     });
     await mkdir(config.vaultsRoot, { recursive: true });
 
