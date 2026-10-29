@@ -71,8 +71,7 @@ test("init prompts interactively and warns before accepting a Documents vault ro
     path.join(home, "Documents", "Vaults"), // vault root question: TCC-protected attempt
     false, // confirm: decline
     path.join(home, "ObsidianVaults"), // vault root question: safe root
-    "1", // connect mode: direct AnythingLLM
-    "key-123", // api key question
+    "user-token-123", // any-obs user token question (--url was given)
   ];
 
   const exitCode = await runCli(["init", "--url", url], {
@@ -87,7 +86,7 @@ test("init prompts interactively and warns before accepting a Documents vault ro
   const store = createAppConfigStore({ rootDir: configRoot(home) });
   const config = await store.load();
   assert.equal(config.vaultsRoot, path.join(home, "ObsidianVaults"));
-  assert.equal(config.apiKey, "key-123");
+  assert.equal(config.apiKey, "user-token-123");
 });
 
 test("start-bg records a scheduler pid and stop clears it", async () => {

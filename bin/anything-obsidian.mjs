@@ -409,35 +409,19 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
       ? expandTilde(MANAGED_VAULTS_ROOT)
       : await resolveVaultsRoot({ flags, prompt, env, log });
 
-    // Two different credentials can go in this one slot, and confusing them
-    // is the classic mistake: an admin connecting straight to AnythingLLM
-    // pastes its developer key; a user on a shared deployment pastes the
-    // any-obs user token their admin issued. Server installs ARE the admin
-    // case; otherwise ask which one this is so the prompts and error hints
-    // match the thing being pasted.
-    let connectMode = null;
-    if (serverInstall) {
-      connectMode = "direct";
-    } else if (flags.url && flags["api-key"]) {
-      connectMode = "auto";
-    } else {
-      log("");
-      log("Connect this any-obs to:");
-      log("  1) An AnythingLLM instance directly (you run it — admin/solo setup)");
-      log("  2) A shared any-obs gateway (your team's admin gave you a user token)");
-      const answer = await prompt.question("Choose [1] ", "1");
-      connectMode = String(answer).trim() === "2" ? "gateway" : "direct";
-    }
-
+    // install.sh IS the client installer: gateway-first. The default flow
+    // asks for the gateway URL and the any-obs user token, nothing else.
+    // Solo setups pointing straight at an AnythingLLM still work — the
+    // post-connect probe (/api/gateway/me) detects "no gateway in front"
+    // and the summary says so; no architecture question is asked of anyone.
     let anythingllmBaseUrl;
     let apiKey;
-    if (connectMode === "gateway" || connectMode === "auto") {
-      const urlDefault = "http://localhost:21500";
-      anythingllmBaseUrl = flags.url || await prompt.question(`Gateway base URL [${urlDefault}] `, urlDefault);
-      apiKey = flags["api-key"] || await prompt.question("any-obs user token (from your admin): ", "");
-    } else {
-      anythingllmBaseUrl = flags.url || await prompt.question(`AnythingLLM base URL [http://localhost:3001] `, "http://localhost:3001");
+    if (serverInstall) {
+      anythingllmBaseUrl = flags.url || await prompt.question(`AnythingLLM base URL [http://localhost:21501] `, "http://localhost:21501");
       apiKey = flags["api-key"] || await prompt.question("AnythingLLM API key (Settings → Developer API): ", "");
+    } else {
+      anythingllmBaseUrl = flags.url || await prompt.question(`Gateway base URL [http://localhost:21500] `, "http://localhost:21500");
+      apiKey = flags["api-key"] || await prompt.question("any-obs user token (from your admin): ", "");
     }
     const dashboardPort = Number(flags.port || 21502);
 
@@ -465,11 +449,11 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       log(`✗ Could not connect: ${detail}`);
-      if (connectMode === "gateway") {
-        log("  Check that the gateway URL is reachable and the token is the any-obs user token your admin issued");
-        log("  (not an AnythingLLM developer key — that belongs to the server admin only).");
-      } else {
+      if (serverInstall) {
         log("  Check that the URL is reachable and the API key comes from Settings → Developer API.");
+      } else {
+        log("  Check that the gateway URL is reachable and the token is the any-obs user token your admin issued.");
+        log("  (Pasting an AnythingLLM URL and developer key also works — that connects directly, solo setup.)");
       }
       return 1;
     }
@@ -498,7 +482,7 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
     log("");
     log("Setup complete.");
     log(`  Vault root:       ${config.vaultsRoot}`);
-    log(`  AnythingLLM:      ${config.anythingllmBaseUrl}${gatewayIdentity ? ` (via gateway, as '${gatewayIdentity.name}')` : ""}`);
+    log(`  AnythingLLM:      ${config.anythingllmBaseUrl}${gatewayIdentity ? ` (via gateway, as '${gatewayIdentity.name}')` : " (direct — no gateway in front)"}`);
     log(`  Dashboard:        http://localhost:${config.dashboardPort}`);
     log(`  Config directory: ${store.paths.root}`);
     log("");

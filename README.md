@@ -77,14 +77,11 @@ API and never hosts it.
    The installer checks prerequisites, installs the app under
    `~/.anything-obsidian/`, puts `anything-obsidian` on your PATH, then asks
    a few setup questions: a vault root (default `~/.anything-obsidian/vaults`,
-   inside the app's own home so nothing touches Documents or Desktop), and
-   **which of two credentials you hold** —
-   - connecting **directly to an AnythingLLM you run**: its base URL plus the
-     Developer API key from its Settings → Developer API page;
-   - connecting **through a shared any-obs gateway**: the gateway URL plus the
-     **any-obs user token your admin issued** (never an AnythingLLM key —
-     that belongs to the server admin alone).
-   It tests the connection before saving a 0600 config under
+   inside the app's own home so nothing touches Documents or Desktop), the
+   **gateway base URL** (default `http://localhost:21500`), and the
+   **any-obs user token your admin issued** — clients always ride a gateway;
+   that token is what your admin hands out, never an AnythingLLM key. It
+   tests the connection before saving a 0600 config under
    `~/Library/Application Support/anything-obsidian/`. When it finishes, the
    dashboard is running and your browser opens at `http://localhost:21502`.
 
@@ -92,7 +89,7 @@ API and never hosts it.
 
    ```bash
    curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
-     --vaults-root ~/.anything-obsidian/vaults --url http://localhost:3001 --api-key <key> --no-browser
+     --vaults-root ~/.anything-obsidian/vaults --url http://<gateway-host>:21500 --api-key <user-token> --no-browser
    ```
 
    Or let your AI agent do it: agents can load the
