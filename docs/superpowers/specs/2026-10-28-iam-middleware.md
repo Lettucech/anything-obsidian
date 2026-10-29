@@ -138,7 +138,10 @@ workspace, one level up). Cross-workspace synthesized answers stay v2;
   `anything-obsidian autostart gateway on` (LaunchAgent/systemd user unit —
   the same supervisor machinery as the client services). The base URL comes
   from env `ANYTHINGLLM_BASE_URL` or the config written by
-  `anything-obsidian init`.
+  `anything-obsidian init`. For operators without an existing instance, a
+  reference compose (`server/anythingllm.compose.yml`, loopback 21501 only)
+  ships as an opt-in convenience — the operator runs it; any-obs never
+  starts, stops, or upgrades it.
 - State lives under the data directory (`gateway/` next to the client's
   registry and secrets): key, users, sources, manifests, and git clones.
   The AnythingLLM base URL points at whatever instance the operator hosts —

@@ -252,14 +252,23 @@ their own client.
 
 AnythingLLM itself is never bundled or hosted by any-obs — point the
 gateway at whatever instance you already run (official Docker image on the
-same server, Desktop, or a remote host).
+same server, Desktop, or a remote host). Don't have one yet? A ready-made
+reference compose ships with the project — one command, project-reserved
+ports, data in its own volume:
+
+```bash
+docker compose -p any-obs -f server/anythingllm.compose.yml up -d
+```
+
+It publishes AnythingLLM on the server's loopback only (`127.0.0.1:21501`);
+your AnythingLLM's URL is then `http://localhost:21501`.
 
 1. **Install on the server** (same one-command installer as any client) and
    point it at your AnythingLLM:
 
    ```bash
    curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
-     --vaults-root ~/.anything-obsidian/vaults --url http://localhost:3001 --api-key <developer-key> --no-browser
+     --vaults-root ~/.anything-obsidian/vaults --url http://localhost:21501 --api-key <developer-key> --no-browser
    ```
 
    The CLI installs as `anything-obsidian`, with `any-obs` as a short form —
@@ -284,9 +293,10 @@ same server, Desktop, or a remote host).
    Follow the two-step wizard:
 
    - **Step 1 — initialize AnythingLLM:** its own UI is wherever you host
-     it (the wizard assumes `http://localhost:21501` on the server; tunnel
-     it the same way if needed). Finish AnythingLLM's first-boot wizard and
-     generate the developer API key (Settings → Developer API).
+     it — with the reference compose that is `http://localhost:21501` on
+     the server (tunnel `ssh -L 21501:127.0.0.1:21501 <server>` from your
+     machine). Finish AnythingLLM's first-boot wizard and generate the
+     developer API key (Settings → Developer API).
    - **Step 2 — connect:** paste the key. The gateway verifies it, becomes
      its only holder (it never lives on any user's machine), and you can
      rotate it any time in the Settings tab.

@@ -1,0 +1,28 @@
+# A ready-made AnythingLLM for operators who don't already run one.
+#
+# This file is an optional convenience, not part of the app: nothing in
+# any-obs starts, stops, or upgrades it — the operator does, with
+#
+#   docker compose -p any-obs -f server/anythingllm.compose.yml up -d
+#
+# The gateway (anything-obsidian gateway) then points at it with
+#   --url http://localhost:21501
+# AnythingLLM's UI is published on the host loopback only (21501, the
+# project's reserved port) so first-boot setup and the developer API key
+# happen on the server itself or over an SSH tunnel:
+#   ssh -L 21501:127.0.0.1:21501 <server>
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    restart: unless-stopped
+    environment:
+      # The official image warns (and may not persist data) without this —
+      # it must point at the mounted volume.
+      STORAGE_DIR: /app/server/storage
+    volumes:
+      - anythingllm-storage:/app/server/storage
+    ports:
+      - "127.0.0.1:21501:3001"
+
+volumes:
+  anythingllm-storage:

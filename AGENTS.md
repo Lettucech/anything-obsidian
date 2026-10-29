@@ -21,7 +21,10 @@ under `server/` runs from the same install (`anything-obsidian gateway`,
 `autostart gateway on`), is the sole holder of the AnythingLLM admin key,
 scopes every client with per-user tokens, and its shared-source pipeline is
 the only writer to shared workspaces. AnythingLLM itself is never bundled
-or hosted — it is always an external dependency the user provides. See
+or hosted — it is always an external dependency the user provides (an
+optional reference compose for running it ships at
+`server/anythingllm.compose.yml`, but the operator starts it and any-obs
+never manages its lifecycle). See
 `docs/superpowers/specs/2026-10-28-iam-middleware.md`.
 
 The root `package.json` now
