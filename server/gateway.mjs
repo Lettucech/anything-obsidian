@@ -207,7 +207,21 @@ export function createGatewayServer({
     if (url.pathname === "/api/gateway/workspaces") {
       adminOnly();
       if (req.method === "GET") {
-        return sendJson(res, 200, { workspaces: await userStore.workspaces() });
+        // Two-way view: the registry, plus anything upstream the gateway
+        // does not know about (workspaces made outside it, e.g. directly in
+        // AnythingLLM during setup) so an admin can adopt or delete them.
+        const registry = await userStore.workspaces();
+        const known = new Set(registry.map((workspace) => workspace.slug));
+        let untracked = [];
+        try {
+          const upstream = await anythingllmRequest("/api/v1/workspaces", { method: "GET" });
+          untracked = (upstream?.workspaces ?? [])
+            .filter((workspace) => workspace.slug && !known.has(workspace.slug))
+            .map((workspace) => ({ slug: workspace.slug, name: workspace.name ?? workspace.slug }));
+        } catch {
+          untracked = [];
+        }
+        return sendJson(res, 200, { workspaces: registry, untracked });
       }
       if (req.method === "POST") {
         // Admin creates a workspace in AnythingLLM and registers it here:
@@ -232,6 +246,30 @@ export function createGatewayServer({
           workspace: { slug, kind, ...(kind === "personal" ? { owner: record.owner } : { grants: record.grants }) },
         });
       }
+    }
+
+    if (url.pathname === "/api/gateway/workspaces/adopt" && req.method === "POST") {
+      adminOnly();
+      // Register a workspace that already exists upstream (reverse scan):
+      // nothing is created, the slug must exist in AnythingLLM.
+      const slug = String(body?.slug ?? "").trim();
+      const kind = body?.kind === "shared" ? "shared" : body?.kind === "personal" ? "personal" : null;
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw httpError(400, "slug is required");
+      if (!kind) throw httpError(400, 'kind must be "shared" or "personal"');
+      const owner = String(body?.owner ?? "").trim();
+      if (kind === "personal") {
+        if (!owner) throw httpError(400, "A personal workspace requires an owner");
+        if (!(await userStore.get(owner))) throw httpError(400, `Unknown owner: ${owner}`);
+      }
+      if (await userStore.workspaceRecord(slug)) throw httpError(400, `Workspace is already tracked: ${slug}`);
+      const upstream = await anythingllmRequest("/api/v1/workspaces", { method: "GET" });
+      if (!(upstream?.workspaces ?? []).some((workspace) => workspace.slug === slug)) {
+        throw httpError(400, `Workspace does not exist in AnythingLLM: ${slug}`);
+      }
+      const record = await userStore.recordWorkspace(slug, { kind, owner: kind === "personal" ? owner : null });
+      return sendJson(res, 201, {
+        workspace: { slug, kind, ...(kind === "personal" ? { owner: record.owner } : { grants: record.grants }) },
+      });
     }
 
     const grantsMatch = url.pathname.match(/^\/api\/gateway\/workspaces\/([a-z0-9-]+)\/grants\/?([a-z0-9-]*)$/);

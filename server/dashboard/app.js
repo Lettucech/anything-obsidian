@@ -162,7 +162,7 @@ async function renderWorkspaces(state) {
   els.view.append(card);
 
   async function fill() {
-    const { workspaces } = await request("/api/gateway/workspaces");
+    const { workspaces, untracked } = await request("/api/gateway/workspaces");
     list.replaceChildren(...workspaces.map((workspace) => {
       const row = element("div", "row item columned");
       const line = element("div", "row");
@@ -183,6 +183,52 @@ async function renderWorkspaces(state) {
       if (workspace.kind === "shared") row.append(grantsLine(workspace));
       return row;
     }));
+
+    // Reverse scan: workspaces that exist in AnythingLLM but are not
+    // tracked here (made outside the gateway, e.g. during setup). Adopt
+    // them into the registry or delete them upstream.
+    if (untracked?.length) {
+      const section = element("div", "untracked");
+      section.append(
+        element("h2", "", "Untracked on AnythingLLM"),
+        element("p", "note", "These exist in AnythingLLM but the gateway has no record of them. Adopt (choose what they are) or delete."),
+      );
+      for (const workspace of untracked) {
+        const row = element("div", "row item");
+        row.append(
+          element("span", "pill", "untracked"),
+          element("code", "", workspace.slug),
+          element("span", "muted", workspace.name),
+        );
+        const kind = element("select", "", "");
+        kind.innerHTML = '<option value="shared">adopt as shared</option><option value="personal">adopt as personal</option>';
+        const owner = element("select", "", "");
+        owner.hidden = true;
+        owner.innerHTML = users.map((user) => `<option value="${user.name}">${user.name}</option>`).join("");
+        kind.addEventListener("change", () => { owner.hidden = kind.value !== "personal"; });
+        const adopt = element("button", "button button-primary", "Adopt");
+        adopt.addEventListener("click", async () => {
+          try {
+            await request("/api/gateway/workspaces/adopt", {
+              method: "POST",
+              body: JSON.stringify({ slug: workspace.slug, kind: kind.value, ...(kind.value === "personal" ? { owner: owner.value } : {}) }),
+            });
+            await fill();
+          } catch (error) {
+            window.alert(error.message);
+          }
+        });
+        const remove = element("button", "button button-quiet button-danger", "Delete");
+        remove.addEventListener("click", async () => {
+          if (!window.confirm(`Delete '${workspace.slug}' from AnythingLLM? Its embeddings go with it.`)) return;
+          await request(`/api/gateway/workspaces/${encodeURIComponent(workspace.slug)}`, { method: "DELETE" });
+          await fill();
+        });
+        row.append(kind, owner, adopt, remove);
+        section.append(row);
+      }
+      list.append(section);
+    }
   }
 
   function grantsLine(workspace) {

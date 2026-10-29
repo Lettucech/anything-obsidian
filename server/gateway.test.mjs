@@ -316,6 +316,52 @@ test("MCP on the public plane is token-gated with the four RAG/pipeline tools", 
   await client.close();
 });
 
+test("reverse scan: upstream workspaces the gateway does not track show as untracked and can be adopted", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  const { userToken } = await createUser(adminUrl, publicUrl, "brian");
+
+  // The fake upstream pre-seeds "other-secret" (made outside the gateway)
+  // and the client mints a personal one through the proxy.
+  await fetchJson(`${publicUrl}/api/v1/workspace/new`, {
+    method: "POST", headers: { Authorization: `Bearer ${userToken}` }, body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
+  });
+
+  const listed = await fetchJson(`${adminUrl}/api/gateway/workspaces`);
+  assert.deepEqual(listed.body.untracked, [{ slug: "other-secret", name: "other-secret" }]);
+
+  // Adopt it as shared.
+  const adopted = await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
+    method: "POST", body: JSON.stringify({ slug: "other-secret", kind: "shared" }),
+  });
+  assert.equal(adopted.status, 201);
+  assert.deepEqual(adopted.body.workspace, { slug: "other-secret", kind: "shared", grants: [] });
+
+  // Tracking is the only difference: nothing was created upstream.
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces`)).body.untracked.length, 0);
+
+  // Adopt guards: already-tracked, upstream-missing, bad kind.
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
+    method: "POST", body: JSON.stringify({ slug: "other-secret", kind: "shared" }),
+  })).status, 400);
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
+    method: "POST", body: JSON.stringify({ slug: "ghost-space", kind: "shared" }),
+  })).status, 400);
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
+    method: "POST", body: JSON.stringify({ slug: "company-kb", kind: "wizard" }),
+  })).status, 400);
+
+  // Adopting as personal requires a known owner.
+  const personal = await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
+    method: "POST", body: JSON.stringify({ slug: "company-kb", kind: "personal", owner: "ghost" }),
+  });
+  assert.equal(personal.status, 400);
+
+  // A member token sees 404 on the adopt surface.
+  assert.equal((await fetchJson(`${publicUrl}/api/gateway/workspaces/adopt`, {
+    method: "POST", headers: { Authorization: `Bearer ${userToken}` }, body: JSON.stringify({ slug: "x", kind: "shared" }),
+  })).status, 404);
+});
+
 function mcpTransport(baseUrl, token) {
   return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
