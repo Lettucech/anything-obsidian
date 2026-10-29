@@ -135,6 +135,19 @@ All state lives under one data directory (`~/Library/Application Support/
 anything-obsidian` on macOS) plus the app itself in `~/.anything-obsidian/`.
 Never edit files in those directories directly; use the CLI or the dashboard.
 
+## Agent skills are opt-in via npx
+
+The installer does not install agent skills itself — its final output tells
+the user how. To install them (as the user's agent, or on their request):
+
+```sh
+npx skills add Lettucech/anything-obsidian --skill anything-obsidian-setup
+npx skills add Lettucech/anything-obsidian --skill anything-obsidian-vault-workflow
+```
+
+`npx skills` manages the copies (install target, updates, removal) — do not
+hand-copy skill directories into `~/.zcode/skills` or similar.
+
 ## Uninstall
 
 ```sh

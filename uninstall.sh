@@ -151,11 +151,10 @@ fi
 
 say ""
 say "Uninstalled."
-for skills_dir in "$HOME/.zcode/skills" "$HOME/.agents/skills" "$HOME/.claude/skills"; do
-  if [ -d "$skills_dir/anything-obsidian-setup" ] || [ -d "$skills_dir/anything-obsidian-vault-workflow" ]; then
-    say "Agent skill copies were kept at $skills_dir — remove them with rm -rf if unwanted."
-  fi
-done
+if [ -d "$HOME/.zcode/skills/anything-obsidian-setup" ] || [ -d "$HOME/.agents/skills/anything-obsidian-setup" ] || [ -d "$HOME/.claude/skills/anything-obsidian-setup" ]; then
+  say "Installed agent skills were kept — remove them with: npx skills remove anything-obsidian-setup"
+  say "  (and: npx skills remove anything-obsidian-vault-workflow, if installed)"
+fi
 if [ -n "$VAULTS_ROOT" ] && [ -d "$VAULTS_ROOT" ]; then
   say ""
   say "Your vault folders were NOT touched. They live in:"

@@ -40,7 +40,6 @@ Non-interactive (agent) mode — provide all three, nothing is prompted:
 
 Options:
   --no-browser    do not open the browser when done
-  --no-skills     skip installing agent skills into detected skill directories
   --no-autostart  do not register login auto-start / crash auto-restart
                   (macOS: LaunchAgents; Linux: systemd user units)
 
@@ -70,7 +69,7 @@ if [ ! -t 0 ] && [ -z "${AO_INSTALLER_EXECED:-}" ]; then
 fi
 
 # ---------- flags ----------
-VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; NO_SKILLS=0; NO_AUTOSTART=0; WANT_HELP=0
+VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; NO_AUTOSTART=0; WANT_HELP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --vaults-root) VAULTS_ROOT="${2:?}"; shift 2 ;;
@@ -78,7 +77,6 @@ while [ $# -gt 0 ]; do
     --api-key) API_KEY="${2:?}"; shift 2 ;;
     --port) PORT="${2:?}"; shift 2 ;;
     --no-browser) NO_BROWSER=1; shift ;;
-    --no-skills) NO_SKILLS=1; shift ;;
     --no-autostart) NO_AUTOSTART=1; shift ;;
     --help|-h) WANT_HELP=1; shift ;;
     *) die "Unknown option: $1" ;;
@@ -207,30 +205,6 @@ case ":$PATH:" in
 esac
 say "  ✓ CLI ready: $LAUNCHER"
 
-# ---------- agent skills ----------
-SKILL_TARGETS=""
-for skills_dir in "$HOME/.zcode/skills" "$HOME/.agents/skills" "$HOME/.claude/skills"; do
-  if [ -d "$skills_dir" ]; then SKILL_TARGETS="$SKILL_TARGETS $skills_dir"; fi
-done
-if [ "$NO_SKILLS" -eq 0 ] && [ -n "$SKILL_TARGETS" ]; then
-  INSTALL_SKILLS=1
-  if [ "$NON_INTERACTIVE" -ne 1 ]; then
-    printf 'Install the agent skills (setup + vault workflow) into:%s? [Y/n] ' "$SKILL_TARGETS"
-    answer=""
-    read answer < /dev/tty 2>/dev/null || answer=""
-    case "$answer" in n|N|no|No|NO) INSTALL_SKILLS=0 ;; esac
-  fi
-  if [ "$INSTALL_SKILLS" -eq 1 ]; then
-    for skills_dir in $SKILL_TARGETS; do
-      for skill in anything-obsidian-setup anything-obsidian-vault-workflow; do
-        rm -rf "$skills_dir/$skill"
-        cp -R "$APP_DIR/skills/$skill" "$skills_dir/$skill"
-      done
-    done
-    say "  ✓ agent skills installed into:$SKILL_TARGETS"
-  fi
-fi
-
 # ---------- init ----------
 if [ "$NON_INTERACTIVE" -eq 1 ]; then
   INIT_ARGS="--vaults-root $VAULTS_ROOT --url $URL --api-key $API_KEY"
@@ -276,6 +250,10 @@ if [ "$AUTOSTART" -eq 1 ]; then
     say "  anything-obsidian autostart off stop permanently"
     say "Uninstall any time:"
     say "  curl -fsSL https://raw.githubusercontent.com/$REPO/$BRANCH/uninstall.sh | sh"
+    say ""
+    say "Optional — teach your AI agent to drive any-obs (installs via npx, per agent):"
+    say "  npx skills add $REPO --skill anything-obsidian-setup      # setup + health playbook"
+    say "  npx skills add $REPO --skill anything-obsidian-vault-workflow  # vault retrieval/edit workflow"
   else
     warn "Autostart failed; falling back to a plain background start."
     "$LAUNCHER" start --bg || { warn "The dashboard did not start. Re-run: anything-obsidian start"; exit 1; }
@@ -289,6 +267,10 @@ else
     say "Installed. The dashboard is at http://localhost:$DASH_PORT"
     say "Keep vault sync running in the background with: anything-obsidian start-bg"
     say "Turn on auto-restart any time with: anything-obsidian autostart on"
+    say ""
+    say "Optional — teach your AI agent to drive any-obs:"
+    say "  npx skills add $REPO --skill anything-obsidian-setup"
+    say "  npx skills add $REPO --skill anything-obsidian-vault-workflow"
   else
     CONFIG_HINT="${ANYTHING_OBSIDIAN_HOME:-$HOME/Library/Application Support/anything-obsidian}"
     if [ "$OS" != "Darwin" ]; then CONFIG_HINT="${ANYTHING_OBSIDIAN_HOME:-$HOME/.config/anything-obsidian}"; fi

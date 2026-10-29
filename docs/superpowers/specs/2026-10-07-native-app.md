@@ -149,9 +149,8 @@ browsed folder is the root or deeper than one level.
   next login), `start --bg` delegates to the manager, and `status` reports
   manager state instead of pid files. Launchd-spawned services run with
   `AO_SUPERVISED=1` so they never self-detect as already managed. The
-  installer enables this by default (`--no-autostart` to opt out) and also
-  copies the two agent skills into detected skill directories (`--no-skills`
-  to opt out). Headless Linux servers need `loginctl enable-linger`.
+  installer enables this by default (`--no-autostart` to opt out).
+  Headless Linux servers need `loginctl enable-linger`.
 - **Job history persistence (done 2026-10-14):** `state/jobs.json` keeps the
   newest 50 jobs capped at 2MB (oldest-first trimming); the dashboard restores
   history on boot and marks interrupted jobs as failed.
