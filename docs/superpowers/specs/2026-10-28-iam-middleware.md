@@ -36,26 +36,26 @@ client's own trust model (loopback dashboard, LAN service).
 - **Public plane** (21500, published on the LAN): MCP endpoint, fan-out
   search, and the user-token-authenticated AnythingLLM proxy. Every call
   needs a **user token** (named principals, `lowercase-dash`, shown once,
-  stored SHA-256). Entitlements: read = the shared workspace plus
-  workspaces recorded as *owned* by that user — ownership is captured when
-  the user's token creates a workspace through the proxy, which is how an
-  any-obs client's unified workspace becomes the user's personal workspace
-  with zero client changes; write = owned workspaces and their vault
-  pipeline document folders only. The shared workspace is never
-  user-writable — the gateway's own pipeline is its only writer (it talks to
-  AnythingLLM directly with the admin key, never through the proxy). No
-  dashboard, setup, or admin surface exists on this plane.
+  stored SHA-256). Entitlements come from the gateway's own workspace
+  registry — **nothing is pre-created** (no default shared workspace):
+  - shared workspaces (created by an admin, any number of them) carry a
+    grants list; a user reads one only when granted, so space A can go to
+    one team and space B to another. Sources targeting a shared workspace
+    feed it regardless of grants (the pipeline writes with the admin key).
+  - personal workspaces carry exactly one owner — minted by that user's
+    client through the proxy (a user token creating a workspace records the
+    ownership), or pre-provisioned by an admin. Read + write for the owner;
+    the shared workspaces are never user-writable — the pipeline is the
+    only writer.
+  A user with neither searches an empty world, which is the honest default.
 - **Admin plane** (21505, host loopback only): the dashboard, its setup
-  wizard, user/source management, and a full passthrough proxy for
-  recovery. Reaching it requires server access (SSH/physical), which is the
-  credential — the same "loopback caller is the user's delegate" rule the
-  client dashboard has always used. Personal workspaces are not
-  pre-provisioned: pure consumers need only the shared workspace. The
-  dashboard has four tabs — Overview, **Workspaces** (list everything the
-  gateway knows: the pipeline-fed shared workspace plus each owned personal
-  workspace; delete any non-shared one; pre-provision a workspace and hand
-  its ownership to a user up front, which is also how "attach an existing
-  workspace" is done), Users, and Shared sources.
+  wizard, user/source/workspace management, and a full passthrough proxy
+  for recovery. Reaching it requires server access (SSH/physical), which is
+  the credential — the same "loopback caller is the user's delegate" rule
+  the client dashboard has always used. The dashboard has four tabs —
+  Overview, **Workspaces** (create shared or personal; per-shared-workspace
+  grant/revoke of users; delete any), Users, and **Shared sources** (each
+  source names the workspace it feeds).
 
 ### Roles
 

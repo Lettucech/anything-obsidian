@@ -8,17 +8,17 @@ import { createUserStore, hashToken } from "./iam.mjs";
 
 async function setup() {
   const dataDir = await mkdtemp(path.join(tmpdir(), "any-obs-gateway-iam-"));
-  return createUserStore({ dataDir, sharedWorkspaceSlug: "shared" });
+  return createUserStore({ dataDir });
 }
 
-test("users are created with a once-shown token and verified by hash", async () => {
+test("users are created with a role and a once-shown token, verified by hash", async () => {
   const store = await setup();
 
-  const { user, token } = await store.create({ name: "brian" });
+  const { user, token } = await store.create({ name: "brian", role: "admin" });
   assert.equal(user.name, "brian");
-  assert.equal(user.role, "member");
+  assert.equal(user.role, "admin");
   assert.ok(token.length > 20);
-  assert.deepEqual(store.verify(token), { kind: "user", name: "brian", role: "member" });
+  assert.deepEqual(store.verify(token), { kind: "user", name: "brian", role: "admin" });
   assert.equal(store.verify("wrong-token"), null);
   assert.equal(store.verify(""), null);
 
@@ -29,35 +29,6 @@ test("users are created with a once-shown token and verified by hash", async () 
 
   await assert.rejects(() => store.create({ name: "brian" }), /User already exists/);
   await assert.rejects(() => store.create({ name: "Bad Name" }), /lowercase dash-separated/);
-});
-
-test("removed users lose token access; workspaces stay owned", async () => {
-  const store = await setup();
-  const { token } = await store.create({ name: "scout" });
-  await store.recordOwnership("any-obs-mine-01", "scout");
-
-  assert.deepEqual(await store.remove("scout"), { name: "scout" });
-  assert.equal(store.verify(token), null);
-  assert.equal(await store.remove("scout"), null);
-  // Derived data is not the user's to take down.
-  assert.deepEqual(await store.ownedWorkspaces("scout"), ["any-obs-mine-01"]);
-});
-
-test("entitlements are the shared workspace for reads and owned workspaces for writes", async () => {
-  const store = await setup();
-  await store.create({ name: "brian" });
-
-  assert.deepEqual(await store.entitlements("brian"), { read: ["shared"], write: [] });
-
-  await store.recordOwnership("any-obs-brian-01", "brian");
-  await store.recordOwnership("any-obs-brian-02", "brian");
-  assert.deepEqual(await store.entitlements("brian"), {
-    read: ["shared", "any-obs-brian-01", "any-obs-brian-02"],
-    write: ["any-obs-brian-01", "any-obs-brian-02"],
-  });
-
-  // Ownership is minted once; a second claim is a no-op.
-  assert.equal(await store.recordOwnership("any-obs-brian-01", "someone-else"), "brian");
 });
 
 test("users carry a role that can change after creation", async () => {
@@ -88,48 +59,97 @@ test("resetting a token invalidates the old one immediately", async () => {
   assert.equal(await store.resetToken("ghost"), null);
 });
 
+test("nothing is pre-created: entitlements come only from owned and granted workspaces", async () => {
+  const store = await setup();
+  await store.create({ name: "brian" });
+
+  // A fresh user can read nothing at all.
+  assert.deepEqual(await store.entitlements("brian"), { read: [], write: [] });
+
+  await store.recordOwnership("any-obs-brian-01", "brian");
+  await store.recordWorkspace("space-a", { kind: "shared" });
+  await store.grantWorkspaceAccess("space-a", "brian");
+
+  assert.deepEqual(await store.entitlements("brian"), {
+    read: ["any-obs-brian-01", "space-a"],
+    write: ["any-obs-brian-01"],
+  });
+
+  // Revoking the grant takes the read away; the personal write stays.
+  assert.deepEqual(await store.revokeWorkspaceAccess("space-a", "brian"), []);
+  assert.deepEqual(await store.entitlements("brian"), {
+    read: ["any-obs-brian-01"],
+    write: ["any-obs-brian-01"],
+  });
+});
+
+test("workspace records: kinds, grants validation, listing, removal", async () => {
+  const store = await setup();
+  await store.create({ name: "brian" });
+  await store.recordWorkspace("space-a", { kind: "shared" });
+  await store.recordWorkspace("space-b", { kind: "shared" });
+  await store.recordWorkspace("any-obs-brian-01", { kind: "personal", owner: "brian" });
+
+  await assert.rejects(() => store.grantWorkspaceAccess("space-a", "ghost"), /Unknown user/);
+  await assert.rejects(() => store.grantWorkspaceAccess("any-obs-brian-01", "brian"), /Not a shared workspace/);
+  assert.deepEqual(await store.grantWorkspaceAccess("space-a", "brian"), ["brian"]);
+  // Recording again is a no-op, never an overwrite.
+  await store.recordWorkspace("space-a", { kind: "personal", owner: "ghost" });
+  assert.deepEqual(await store.workspaceRecord("space-a"), { kind: "shared", grants: ["brian"] });
+
+  assert.deepEqual(await store.workspaces(), [
+    { slug: "space-a", kind: "shared", grants: ["brian"] },
+    { slug: "space-b", kind: "shared", grants: [] },
+    { slug: "any-obs-brian-01", kind: "personal", owner: "brian" },
+  ]);
+
+  assert.equal(await store.removeWorkspace("space-b"), true);
+  assert.equal(await store.removeWorkspace("space-b"), false);
+});
+
+test("a legacy volume (plain owner strings) loads as personal workspaces", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "any-obs-gateway-iam-legacy-"));
+  const { writeFile } = await import("node:fs/promises");
+  await writeFile(path.join(dataDir, "users.json"), JSON.stringify({
+    users: [{ name: "brian", tokenHash: hashToken("t"), role: "member" }],
+    workspaces: { "any-obs-brian-01": "brian" },
+  }));
+  const store = createUserStore({ dataDir });
+  assert.deepEqual(await store.workspaces(), [
+    { slug: "any-obs-brian-01", kind: "personal", owner: "brian" },
+  ]);
+  assert.deepEqual(await store.entitlements("brian"), {
+    read: ["any-obs-brian-01"],
+    write: ["any-obs-brian-01"],
+  });
+});
+
 test("readers never receive write entitlements", async () => {
   const store = await setup();
   await store.create({ name: "reader-1", role: "reader" });
   await store.recordOwnership("any-obs-reader-01", "reader-1");
   assert.deepEqual(await store.entitlements("reader-1"), {
-    read: ["shared", "any-obs-reader-01"],
+    read: ["any-obs-reader-01"],
     write: [],
-  });
-
-  await store.create({ name: "member-1" });
-  await store.recordOwnership("any-obs-member-01", "member-1");
-  assert.deepEqual(await store.entitlements("member-1"), {
-    read: ["shared", "any-obs-member-01"],
-    write: ["any-obs-member-01"],
   });
 });
 
-test("users list their owned workspaces; a workspace record can be dropped", async () => {
+test("removed users lose token access; workspace records stay", async () => {
   const store = await setup();
-  await store.create({ name: "brian" });
-  await store.recordOwnership("any-obs-brian-02", "brian");
-  await store.recordOwnership("any-obs-brian-01", "brian");
-  await store.recordOwnership("shared-ghost", "ghost");
+  const { token } = await store.create({ name: "scout" });
+  await store.recordOwnership("any-obs-mine-01", "scout");
 
-  assert.deepEqual((await store.list()).find((user) => user.name === "brian").workspaces, [
-    "any-obs-brian-01",
-    "any-obs-brian-02",
+  assert.deepEqual(await store.remove("scout"), { name: "scout" });
+  assert.equal(store.verify(token), null);
+  assert.equal(await store.remove("scout"), null);
+  assert.deepEqual(await store.workspaces(), [
+    { slug: "any-obs-mine-01", kind: "personal", owner: "scout" },
   ]);
-
-  assert.equal(await store.removeWorkspace("any-obs-brian-01"), true);
-  assert.deepEqual((await store.list()).find((user) => user.name === "brian").workspaces, ["any-obs-brian-02"]);
-  assert.deepEqual(await store.entitlements("brian"), {
-    read: ["shared", "any-obs-brian-02"],
-    write: ["any-obs-brian-02"],
-  });
-  assert.equal(await store.removeWorkspace("already-gone"), false);
 });
 
 test("token hashes are sha-256 of the raw token", async () => {
   const store = await setup();
   const { token } = await store.create({ name: "hash-check" });
-  // verify() agreeing with hashToken() is the observable contract.
   assert.match(hashToken(token), /^[a-f0-9]{64}$/);
   assert.notEqual(hashToken(token), token);
 });

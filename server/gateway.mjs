@@ -42,7 +42,6 @@ export function createGatewayServer({
   gatewayConfig = createGatewayConfig({ dataDir: defaultDataDir(env) }),
   anythingllmBaseUrl = env.ANYTHINGLLM_BASE_URL ?? "",
   anythingllmApiKey = env.ANYTHINGLLM_API_KEY ?? "",
-  sharedWorkspaceSlug = env.SHARED_WORKSPACE_SLUG ?? "shared",
   fetchImpl = fetch,
 }) {
   if (plane !== "public" && plane !== "admin") throw new Error(`Unknown gateway plane: ${plane}`);
@@ -129,7 +128,6 @@ export function createGatewayServer({
       name: "any-obs-gateway",
       plane,
       version: pkg.version,
-      sharedWorkspace: sharedWorkspaceSlug,
       configured: Boolean(apiKeyActive()),
       users: (await userStore.list()).length,
     });
@@ -144,7 +142,6 @@ export function createGatewayServer({
       needsSetup: await needsSetup(),
       anythingllmBaseUrl: baseUrl,
       anythingllmUiUrl: "http://localhost:21501",
-      sharedWorkspace: sharedWorkspaceSlug,
       hasApiKey: Boolean(apiKeyActive()),
     };
   }
@@ -166,10 +163,7 @@ export function createGatewayServer({
 
     await gatewayConfig.save({ apiKey: candidate });
     configuredApiKey = candidate;
-    const workspace = await ensureSharedWorkspace({
-      baseUrl, apiKey: candidate, slug: sharedWorkspaceSlug, fetchImpl,
-    });
-    return sendJson(res, 200, { configured: true, sharedWorkspace: workspace });
+    return sendJson(res, 200, { configured: true });
   }
 
   async function handleGatewayApi({ req, res, url, identity, body }) {
@@ -213,28 +207,46 @@ export function createGatewayServer({
     if (url.pathname === "/api/gateway/workspaces") {
       adminOnly();
       if (req.method === "GET") {
-        const owned = (await userStore.list()).flatMap((user) =>
-          user.workspaces.map((slug) => ({ slug, owner: user.name, shared: false })),
-        );
-        return sendJson(res, 200, {
-          workspaces: [{ slug: sharedWorkspaceSlug, owner: null, shared: true }, ...owned],
-        });
+        return sendJson(res, 200, { workspaces: await userStore.workspaces() });
       }
       if (req.method === "POST") {
-        // Admin pre-provisioning: create a workspace in AnythingLLM and hand
-        // its ownership to a user up front (covers "attach an existing
-        // workspace as a personal one" without the user's client round-trip).
+        // Admin creates a workspace in AnythingLLM and registers it here:
+        // kind "shared" starts ungranted and is fed by sources targeting it;
+        // kind "personal" hands ownership to a user up front (also how
+        // "attach an existing workspace" is done).
+        const kind = body?.kind === "shared" ? "shared" : body?.kind === "personal" ? "personal" : null;
+        if (!kind) throw httpError(400, 'kind must be "shared" or "personal"');
         const owner = String(body?.owner ?? "").trim();
-        if (owner && !(await userStore.get(owner))) throw httpError(400, `Unknown owner: ${owner}`);
+        if (kind === "personal") {
+          if (!owner) throw httpError(400, "A personal workspace requires an owner");
+          if (!(await userStore.get(owner))) throw httpError(400, `Unknown owner: ${owner}`);
+        }
         const created = await anythingllmRequest("/api/v1/workspace/new", {
           method: "POST",
           body: JSON.stringify({ name: String(body?.name ?? "").trim() || "untitled" }),
         });
         const slug = created?.workspace?.slug ?? created?.slug;
         if (!slug) throw httpError(502, "AnythingLLM returned an invalid workspace");
-        if (owner) await userStore.recordOwnership(slug, owner);
-        return sendJson(res, 201, { workspace: { slug, owner: owner || null, shared: false } });
+        const record = await userStore.recordWorkspace(slug, { kind, owner: kind === "personal" ? owner : null });
+        return sendJson(res, 201, {
+          workspace: { slug, kind, ...(kind === "personal" ? { owner: record.owner } : { grants: record.grants }) },
+        });
       }
+    }
+
+    const grantsMatch = url.pathname.match(/^\/api\/gateway\/workspaces\/([a-z0-9-]+)\/grants\/?([a-z0-9-]*)$/);
+    if (grantsMatch && (req.method === "POST" || req.method === "DELETE")) {
+      adminOnly();
+      const [ , slug, grantedUser ] = grantsMatch;
+      if (req.method === "POST") {
+        const name = String(body?.user ?? grantedUser ?? "").trim();
+        if (!name) throw httpError(400, "user is required");
+        const grants = await userStore.grantWorkspaceAccess(slug, name);
+        return sendJson(res, 200, { slug, grants });
+      }
+      if (!grantedUser) throw httpError(400, "user is required");
+      const grants = await userStore.revokeWorkspaceAccess(slug, grantedUser);
+      return sendJson(res, 200, { slug, grants });
     }
 
     const workspaceMatch = url.pathname.match(/^\/api\/gateway\/workspaces\/([a-z0-9-]+)$/);
@@ -391,17 +403,16 @@ export function createGatewayServer({
 
     server.tool(
       "any_obs_rag_answer",
-      "Ask AnythingLLM to answer from one workspace this caller may read (defaults to the shared workspace). Cross-workspace synthesis is not offered; use any_obs_rag_search to discover where knowledge lives first.",
+      "Ask AnythingLLM to answer from one workspace this caller may read. Cross-workspace synthesis is not offered; use any_obs_rag_search to discover where knowledge lives first.",
       {
         question: z.string().min(1),
-        workspace: z.string().min(1).optional(),
+        workspace: z.string().min(1),
         mode: z.enum(["query", "chat"]).default("query"),
       },
       async ({ question, workspace, mode }) => {
         const entitlements = await entitlementsFor(identity);
-        const slug = workspace ?? sharedWorkspaceSlug;
-        if (!entitlements.read.includes(slug)) throw new Error(`Workspace is not readable by this caller: ${slug}`);
-        const data = await anythingllmRequest(`/api/v1/workspace/${encodeURIComponent(slug)}/chat`, {
+        if (!entitlements.read.includes(workspace)) throw new Error(`Workspace is not readable by this caller: ${workspace}`);
+        const data = await anythingllmRequest(`/api/v1/workspace/${encodeURIComponent(workspace)}/chat`, {
           method: "POST",
           body: JSON.stringify({ message: question, mode }),
         });
@@ -411,7 +422,7 @@ export function createGatewayServer({
 
     server.tool(
       "any_obs_shared_refresh",
-      "Queue a refresh+reindex job for the shared knowledge base (git pull or directory re-read, then reindex into the shared workspace). Returns the job record; poll any_obs_job_get. Never synchronous.",
+      "Queue a refresh+reindex job for the shared knowledge base (git pull or directory re-read, then reindex into the workspace its source targets). Returns the job records; poll any_obs_job_get. Never synchronous.",
       { sourceId: z.string().min(1).optional() },
       async ({ sourceId }) => {
         const sources = (await sourceManager.list()).filter((source) =>
@@ -463,31 +474,6 @@ export function createGatewayServer({
     res.writeHead(200, { "content-type": file.endsWith(".js") ? "text/javascript; charset=utf-8" : file.endsWith(".css") ? "text/css; charset=utf-8" : "text/html; charset=utf-8" });
     res.end(body);
   }
-}
-
-// The shared workspace is gateway state: make sure it exists once a key is
-// available. Never deletes anything.
-export async function ensureSharedWorkspace({ baseUrl, apiKey, slug, name = "any-obs shared", fetchImpl = fetch }) {
-  const root = stripTrailingSlash(baseUrl);
-  const listResponse = await fetchImpl(`${root}/api/v1/workspaces`, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
-  });
-  const listText = await listResponse.text();
-  if (!listResponse.ok) throw new Error(`AnythingLLM API ${listResponse.status}`);
-  const listed = safeJson(listText)?.workspaces ?? [];
-  const existing = listed.find((workspace) => workspace.slug === slug);
-  if (existing) return { slug, name: existing.name ?? slug, created: false };
-
-  const createResponse = await fetchImpl(`${root}/api/v1/workspace/new`, {
-    method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ name }),
-  });
-  const createText = await createResponse.text();
-  if (!createResponse.ok) throw new Error(`AnythingLLM API ${createResponse.status}`);
-  const created = safeJson(createText)?.workspace;
-  if (!created?.slug) throw new Error("AnythingLLM returned an invalid workspace");
-  return { slug: created.slug, name: created.name ?? created.slug, created: true };
 }
 
 function defaultDataDir(env) {
@@ -570,14 +556,12 @@ if (import.meta.url === entryUrl()) {
     process.exit(1);
   }
   const dataDir = defaultDataDir(env);
-  const sharedWorkspaceSlug = env.SHARED_WORKSPACE_SLUG ?? "shared";
   const gatewayConfig = createGatewayConfig({ dataDir });
-  const userStore = createUserStore({ dataDir, sharedWorkspaceSlug });
+  const userStore = createUserStore({ dataDir });
   const sourceManager = createSourceManager({
     dataDir,
     baseUrl: env.ANYTHINGLLM_BASE_URL,
     apiKey: env.ANYTHINGLLM_API_KEY ?? "",
-    sharedWorkspaceSlug,
   });
   const shared = {
     userStore,
@@ -585,7 +569,6 @@ if (import.meta.url === entryUrl()) {
     gatewayConfig,
     anythingllmBaseUrl: env.ANYTHINGLLM_BASE_URL,
     anythingllmApiKey: env.ANYTHINGLLM_API_KEY ?? "",
-    sharedWorkspaceSlug,
   };
 
   const bootstrap = async () => {
@@ -595,11 +578,9 @@ if (import.meta.url === entryUrl()) {
       console.error(`[any-obs-gateway] no AnythingLLM key yet — open the admin dashboard (loopback :${env.GATEWAY_ADMIN_PORT ?? DEFAULT_GATEWAY_ADMIN_PORT}) and run the setup wizard`);
       return;
     }
-    try {
-      const workspace = await ensureSharedWorkspace({ baseUrl: env.ANYTHINGLLM_BASE_URL, apiKey: key, slug: sharedWorkspaceSlug });
-      console.error(`[any-obs-gateway] shared workspace '${workspace.slug}' ready`);
-    } catch (error) {
-      console.error(`[any-obs-gateway] shared workspace not verified yet: ${error?.message ?? error}`);
+    const workspaces = await userStore.workspaces();
+    if (!workspaces.some((workspace) => workspace.kind === "shared")) {
+      console.error(`[any-obs-gateway] no shared workspaces yet — create one in the admin dashboard (Workspaces tab), then point shared sources at it`);
     }
   };
   bootstrap();

@@ -45,7 +45,6 @@ services:
       # restriction on the admin plane is enforced by the host publish below.
       GATEWAY_BIND: 0.0.0.0
       GATEWAY_ADMIN_BIND: 0.0.0.0
-      SHARED_WORKSPACE_SLUG: ${SHARED_WORKSPACE_SLUG:-shared}
     ports:
       - "21500:21500"
       - "127.0.0.1:21505:21505"

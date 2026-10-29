@@ -59,7 +59,7 @@ function renderWizard(state) {
     card.append(
       stepBadge(2),
       element("h2", "", "Connect the gateway to AnythingLLM"),
-      element("p", "note", "Paste the developer API key. The gateway verifies it, becomes its only holder, and prepares the shared workspace."),
+      element("p", "note", "Paste the developer API key. The gateway verifies it and becomes its only holder."),
     );
     const form = element("form", "");
     const input = element("input", "", "");
@@ -81,7 +81,7 @@ function renderWizard(state) {
     return card;
   }
 
-  els.status.textContent = `AnythingLLM: ${state.anythingllmBaseUrl || "unknown"} · shared workspace: ${state.sharedWorkspace}`;
+  els.status.textContent = `AnythingLLM: ${state.anythingllmBaseUrl || "unknown"}`;
   els.view.replaceChildren(wizard);
   render();
 }
@@ -128,26 +128,26 @@ async function renderWorkspaces(state) {
   const card = element("section", "card");
   card.append(
     element("h2", "", "Workspaces"),
-    element("p", "note", "The shared workspace is fed by the shared-source pipeline and is readable by everyone. Personal workspaces are minted by their owner's any-obs client through the proxy — or pre-provisioned here."),
+    element("p", "note", "Nothing is pre-created. Shared workspaces carry a grants list — only granted users (plus the sources targeting them) feed and read them. Personal workspaces have one owner, minted by their any-obs client or pre-provisioned here."),
   );
+  const { users } = await request("/api/gateway/users");
   const form = element("form", "row");
   const name = element("input", "", "");
   name.placeholder = "workspace name"; name.required = true;
+  const kind = element("select", "", "");
+  kind.innerHTML = '<option value="shared">shared (grant users read)</option><option value="personal">personal (one owner)</option>';
   const owner = element("select", "", "");
-  owner.innerHTML = '<option value="">(no owner)</option>';
-  const { users } = await request("/api/gateway/users");
-  for (const user of users) {
-    const option = element("option", "", user.name);
-    option.value = user.name;
-    owner.append(option);
-  }
-  form.append(name, owner, element("button", "button button-primary", "Create workspace"));
+  owner.innerHTML = users.map((user) => `<option value="${user.name}">${user.name}</option>`).join("");
+  form.append(name, kind, owner, element("button", "button button-primary", "Create workspace"));
+  const syncKind = () => { owner.hidden = kind.value !== "personal"; };
+  kind.addEventListener("change", syncKind);
+  syncKind();
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       const created = await request("/api/gateway/workspaces", {
         method: "POST",
-        body: JSON.stringify({ name: name.value, owner: owner.value }),
+        body: JSON.stringify({ name: name.value, kind: kind.value, ...(kind.value === "personal" ? { owner: owner.value } : {}) }),
       });
       name.value = "";
       await fill();
@@ -164,22 +164,58 @@ async function renderWorkspaces(state) {
   async function fill() {
     const { workspaces } = await request("/api/gateway/workspaces");
     list.replaceChildren(...workspaces.map((workspace) => {
-      const row = element("div", "row item");
-      row.append(element("span", "pill", workspace.shared ? "shared" : "personal"));
-      row.append(element("code", "", workspace.slug));
-      if (workspace.shared) row.append(element("span", "muted", "pipeline-fed, readable by everyone"));
-      else row.append(element("span", "muted", workspace.owner ? `owned by ${workspace.owner}` : "no owner"));
-      if (!workspace.shared) {
-        const remove = element("button", "button button-quiet button-danger", "Delete");
-        remove.addEventListener("click", async () => {
-          if (!window.confirm(`Delete workspace '${workspace.slug}'? Its embeddings are removed from AnythingLLM${workspace.owner ? ` and '${workspace.owner}' loses it — their client must re-create the workspace before indexing works again` : ""}.`)) return;
-          await request(`/api/gateway/workspaces/${encodeURIComponent(workspace.slug)}`, { method: "DELETE" });
-          await fill();
-        });
-        row.append(remove);
+      const row = element("div", "row item columned");
+      const line = element("div", "row");
+      line.append(element("span", "pill", workspace.kind));
+      line.append(element("code", "", workspace.slug));
+      if (workspace.kind === "personal") {
+        line.append(element("span", "muted", `owned by ${workspace.owner}`));
       }
+      const remove = element("button", "button button-quiet button-danger", "Delete");
+      remove.addEventListener("click", async () => {
+        const who = workspace.kind === "personal" ? ` and '${workspace.owner}' loses it — their client must re-create the workspace before indexing works again` : "";
+        if (!window.confirm(`Delete workspace '${workspace.slug}'? Its embeddings are removed from AnythingLLM${who}.`)) return;
+        await request(`/api/gateway/workspaces/${encodeURIComponent(workspace.slug)}`, { method: "DELETE" });
+        await fill();
+      });
+      line.append(remove);
+      row.append(line);
+      if (workspace.kind === "shared") row.append(grantsLine(workspace));
       return row;
     }));
+  }
+
+  function grantsLine(workspace) {
+    const line = element("div", "row workspace-line");
+    line.append(element("span", "muted", "read grants:"));
+    const grants = workspace.grants ?? [];
+    if (!grants.length) line.append(element("span", "muted", "nobody yet — sources can still feed it, but no user can read it"));
+    for (const name of grants) {
+      const chip = element("span", "pill", name);
+      const revoke = element("button", "button button-quiet button-danger", "×");
+      revoke.title = `Revoke ${name}`;
+      revoke.addEventListener("click", async () => {
+        await request(`/api/gateway/workspaces/${encodeURIComponent(workspace.slug)}/grants/${encodeURIComponent(name)}`, { method: "DELETE" });
+        await fill();
+      });
+      chip.append(revoke);
+      line.append(chip);
+    }
+    const select = element("select", "", "");
+    select.innerHTML = '<option value="">grant a user…</option>' +
+      users.filter((user) => !grants.includes(user.name)).map((user) => `<option value="${user.name}">${user.name}</option>`).join("");
+    const grant = element("button", "button button-quiet", "Grant");
+    grant.disabled = !select.value;
+    select.addEventListener("change", () => { grant.disabled = !select.value; });
+    grant.addEventListener("click", async () => {
+      if (!select.value) return;
+      await request(`/api/gateway/workspaces/${encodeURIComponent(workspace.slug)}/grants`, {
+        method: "POST", body: JSON.stringify({ user: select.value }),
+      });
+      await fill();
+    });
+    line.append(select, grant);
+    return line;
   }
   await fill();
 }
@@ -192,7 +228,6 @@ async function renderOverview(state) {
     const health = await request("/health", { method: "GET" });
     grid.append(
       metric("Status", health.ok ? "Running" : "Down"),
-      metric("Shared workspace", health.sharedWorkspace),
       metric("Users", health.users),
       metric("Gateway version", health.version),
     );
@@ -317,21 +352,28 @@ async function renderSources() {
   const card = element("section", "card");
   card.append(
     element("h2", "", "Shared sources"),
-    element("p", "note", "The shared workspace's knowledge comes only from these sources: a git repository (pulled on refresh) or a directory on this server (read as-is). Each refresh reindexes into the shared workspace."),
+    element("p", "note", "Knowledge enters the shared workspaces only through these sources: a git repository (pulled on refresh) or a directory on this server (read as-is). Each source targets one workspace — create it in the Workspaces tab first."),
   );
   const form = element("form", "row");
   const id = element("input", "", ""); id.placeholder = "source-id"; id.required = true;
   const kind = element("select", "", "");
   kind.innerHTML = '<option value="git">git repository</option><option value="dir">server directory</option>';
   const ref = element("input", "", ""); ref.placeholder = "https://git.example/kb.git or /srv/kb"; ref.required = true;
+  const target = element("select", "", ""); target.required = true;
+  const { workspaces } = await request("/api/gateway/workspaces");
+  const sharedOnes = workspaces.filter((workspace) => workspace.kind === "shared");
+  target.innerHTML = sharedOnes.length
+    ? sharedOnes.map((workspace) => `<option value="${workspace.slug}">${workspace.slug}</option>`).join("")
+    : '<option value="">(no shared workspaces — create one first)</option>';
+  if (!sharedOnes.length) target.disabled = true;
   const interval = element("input", "", ""); interval.type = "number"; interval.value = "600"; interval.min = "0";
-  form.append(id, kind, ref, interval, element("button", "button button-primary", "Add source"));
+  form.append(id, kind, ref, target, interval, element("button", "button button-primary", "Add source"));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       await request("/api/gateway/sources", {
         method: "POST",
-        body: JSON.stringify({ id: id.value, kind: kind.value, ref: ref.value, intervalSeconds: Number(interval.value) }),
+        body: JSON.stringify({ id: id.value, kind: kind.value, ref: ref.value, workspace: target.value, intervalSeconds: Number(interval.value) }),
       });
       await fill();
     } catch (error) {
@@ -353,6 +395,7 @@ async function renderSources() {
         element("code", "", source.id),
         element("span", "pill", source.kind),
         html("span", "muted", source.kind === "git" ? `${source.ref} @ ${source.branch}` : source.ref),
+        element("span", "pill", `→ ${source.workspace}`),
         element("span", "muted", source.lastRefresh ? `refreshed ${new Date(source.lastRefresh).toLocaleString()}` : "never refreshed"),
       );
       const actions = element("div", "row");

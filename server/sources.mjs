@@ -21,7 +21,6 @@ export function createSourceManager({
   dataDir,
   baseUrl,
   apiKey,
-  sharedWorkspaceSlug,
   embedVault = defaultEmbedVault,
   runGit = defaultRunGit,
   now = Date.now,
@@ -49,12 +48,17 @@ export function createSourceManager({
       if (kind === "dir" && !path.isAbsolute(ref)) {
         throw new Error("A dir source ref must be an absolute path on this server");
       }
+      const workspace = String(input?.workspace ?? "").trim();
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(workspace)) {
+        throw new Error("A source must target a workspace slug (create one in the Workspaces tab first)");
+      }
       const registry = await readRegistry();
       if (registry.sources.some((source) => source.id === id)) throw new Error(`Source already exists: ${id}`);
       const source = {
         id,
         kind,
         ref,
+        workspace,
         branch: String(input?.branch ?? "main"),
         intervalSeconds: Math.max(0, Number(input?.intervalSeconds ?? 600) || 0),
         embedExtensions: String(input?.embedExtensions ?? ""),
@@ -117,12 +121,13 @@ export function createSourceManager({
     try {
       const source = await manager.get(job.sourceId);
       if (!source) throw new Error(`Unknown source: ${job.sourceId}`);
+      if (!source.workspace) throw new Error(`Source '${source.id}' has no target workspace — re-create it with one`);
       const vaultPath = await refreshWorkingCopy(source);
       const result = await embedVault({
         config: {
           anythingllmBaseUrl: baseUrl,
           apiKey,
-          workspaceSlug: sharedWorkspaceSlug,
+          workspaceSlug: source.workspace,
           vaultId: source.id,
           vaultPath,
           documentFolder: vaultDocumentFolder(source.id),

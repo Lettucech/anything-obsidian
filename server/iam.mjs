@@ -1,10 +1,15 @@
-// Gateway IAM: a named-user directory with hashed bearer tokens and
-// workspace ownership. There is no admin credential to check here — the
-// admin plane is host-loopback and reaching it is the proof.
+// Gateway IAM: a named-user directory with hashed bearer tokens, roles,
+// and the gateway's own workspace registry. There is no admin credential to
+// check here — the admin plane is host-loopback and reaching it is the
+// proof.
 //
-// Ownership is minted when a user's token creates a workspace through the
-// proxy — that is how an any-obs client's unified workspace becomes the
-// user's personal workspace without any client-side change.
+// Workspace registry: nothing is pre-provisioned. A workspace record is
+//   { kind: "shared"|"personal", owner, grants }
+// — shared workspaces carry a grants list (which users may read them) and
+// are fed by the shared-source pipeline targeting them; personal workspaces
+// carry exactly one owner and are minted by that user's client through the
+// proxy (or pre-provisioned by an admin). Legacy volumes stored the plain
+// owner string; those load as personal records.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -24,20 +29,19 @@ export function hashToken(token) {
   return createHash("sha256").update(String(token)).digest("hex");
 }
 
-export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
+export function createUserStore({ dataDir }) {
   const filePath = path.join(dataDir, "users.json");
   const cache = snapshotKeeper();
 
   return {
     async list() {
       const state = await read();
-      const byOwner = {};
-      for (const [slug, owner] of Object.entries(state.workspaces)) {
-        (byOwner[owner] ??= []).push(slug);
-      }
       return state.users.map(({ tokenHash, ...user }) => ({
         ...user,
-        workspaces: (byOwner[user.name] ?? []).sort(),
+        workspaces: Object.entries(state.workspaces)
+          .filter(([, record]) => record.kind === "personal" && record.owner === user.name)
+          .map(([slug]) => slug)
+          .sort(),
       }));
     },
     async get(name) {
@@ -86,8 +90,8 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
       const state = await read();
       const index = state.users.findIndex((user) => user.name === name);
       if (index === -1) return null;
-      // Owned workspaces stay recorded: the derived data is not the user's to
-      // take down, and a re-created user of the same name regains access.
+      // Workspace records stay: the derived data is not the user's to take
+      // down, and a re-created user of the same name regains access.
       state.users.splice(index, 1);
       await write(state);
       return { name };
@@ -95,18 +99,52 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
     verify(token) {
       return verify(token);
     },
-    async ownedWorkspaces(name) {
-      const state = await read();
-      return Object.entries(state.workspaces)
-        .filter(([, owner]) => owner === name)
-        .map(([slug]) => slug);
+
+    // ---- workspace registry ----
+
+    async workspaces() {
+      return Object.entries((await read()).workspaces).map(([slug, record]) => ({
+        slug,
+        kind: record.kind,
+        ...(record.kind === "personal" ? { owner: record.owner } : { grants: [...record.grants] }),
+      }));
     },
-    async recordOwnership(slug, name) {
+    async workspaceRecord(slug) {
+      return (await read()).workspaces[slug] ?? null;
+    },
+    async recordWorkspace(slug, { kind, owner = null }) {
       const state = await read();
-      if (state.workspaces[slug]) return state.workspaces[slug];
-      state.workspaces[slug] = name;
+      const existing = state.workspaces[slug];
+      if (existing) return existing;
+      state.workspaces[slug] = kind === "shared"
+        ? { kind: "shared", grants: [] }
+        : { kind: "personal", owner: String(owner ?? "") };
       await write(state);
+      return state.workspaces[slug];
+    },
+    // Legacy proxy-mint flow: ownership record for a personal workspace.
+    async recordOwnership(slug, name) {
+      const existing = await this.workspaceRecord(slug);
+      if (existing) return existing.owner ?? name;
+      await this.recordWorkspace(slug, { kind: "personal", owner: name });
       return name;
+    },
+    async grantWorkspaceAccess(slug, name) {
+      const state = await read();
+      const record = state.workspaces[slug];
+      if (!record || record.kind !== "shared") throw new Error(`Not a shared workspace: ${slug}`);
+      if (!state.users.some((user) => user.name === name)) throw new Error(`Unknown user: ${name}`);
+      if (!record.grants.includes(name)) record.grants.push(name);
+      await write(state);
+      return [...record.grants];
+    },
+    async revokeWorkspaceAccess(slug, name) {
+      const state = await read();
+      const record = state.workspaces[slug];
+      if (!record || record.kind !== "shared") throw new Error(`Not a shared workspace: ${slug}`);
+      record.grants = record.grants.filter((granted) => granted !== name);
+      await write(state);
+      return [...record.grants];
     },
     async removeWorkspace(slug) {
       const state = await read();
@@ -118,11 +156,20 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
     async entitlements(name) {
       const state = await read();
       const user = state.users.find((candidate) => candidate.name === name);
-      const owned = await this.ownedWorkspaces(name);
+      const readList = [];
+      const writeList = [];
+      for (const [slug, record] of Object.entries(state.workspaces)) {
+        if (record.kind === "personal" && record.owner === name) {
+          readList.push(slug);
+          writeList.push(slug);
+        } else if (record.kind === "shared" && record.grants.includes(name)) {
+          readList.push(slug);
+        }
+      }
       return {
-        read: unique([sharedWorkspaceSlug, ...owned]),
+        read: readList.sort(),
         // Readers never write — not their own folders, not embeddings.
-        write: user?.role === "reader" ? [] : owned,
+        write: user?.role === "reader" ? [] : writeList.sort(),
       };
     },
   };
@@ -169,8 +216,22 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
           .filter((user) => typeof user?.name === "string" && typeof user?.tokenHash === "string")
           .map((user) => ({ ...user, role: ROLES.includes(user.role) ? user.role : "member" }))
         : [],
-      workspaces: parsed?.workspaces && typeof parsed.workspaces === "object" ? parsed.workspaces : {},
+      workspaces: normalizeWorkspaces(parsed?.workspaces),
     };
+  }
+
+  function normalizeWorkspaces(value) {
+    const out = {};
+    for (const [slug, record] of Object.entries(value ?? {})) {
+      if (typeof record === "string") {
+        out[slug] = { kind: "personal", owner: record };
+      } else if (record && typeof record === "object") {
+        out[slug] = record.kind === "shared"
+          ? { kind: "shared", grants: Array.isArray(record.grants) ? record.grants.filter((name) => typeof name === "string") : [] }
+          : { kind: "personal", owner: typeof record.owner === "string" ? record.owner : "" };
+      }
+    }
+    return out;
   }
 }
 
@@ -182,8 +243,4 @@ function snapshotKeeper() {
       current = state;
     },
   };
-}
-
-function unique(values) {
-  return [...new Set(values.filter(Boolean))];
 }

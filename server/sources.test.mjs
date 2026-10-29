@@ -9,28 +9,29 @@ import { createSourceManager } from "./sources.mjs";
 test("sources validate ids, kinds, and refs before entering the registry", async () => {
   const { manager } = await setup();
 
-  assert.equal((await manager.create({ id: "team-kb", kind: "git", ref: "https://git.example/team/kb.git" })).kind, "git");
-  await assert.rejects(() => manager.create({ id: "team-kb", ref: "x" }), /Source already exists/);
-  await assert.rejects(() => manager.create({ id: "Bad Id", ref: "x" }), /lowercase dash-separated/);
-  await assert.rejects(() => manager.create({ id: "ok", ref: "" }), /ref is required/);
+  assert.equal((await manager.create({ id: "team-kb", kind: "git", ref: "https://git.example/team/kb.git", workspace: "company-kb" })).kind, "git");
+  await assert.rejects(() => manager.create({ id: "team-kb", ref: "x", workspace: "company-kb" }), /Source already exists/);
+  await assert.rejects(() => manager.create({ id: "Bad Id", ref: "x", workspace: "company-kb" }), /lowercase dash-separated/);
+  await assert.rejects(() => manager.create({ id: "ok", ref: "", workspace: "company-kb" }), /ref is required/);
   await assert.rejects(() => manager.create({ id: "ok", kind: "dir", ref: "relative/path" }), /absolute path/);
+  await assert.rejects(() => manager.create({ id: "ok", ref: "https://x.git" }), /target a workspace/);
   assert.equal((await manager.list()).length, 1);
-  assert.deepEqual(await manager.remove("team-kb"), { id: "team-kb", kind: "git", ref: "https://git.example/team/kb.git", branch: "main", intervalSeconds: 600, embedExtensions: "", embedExcludeDirs: "", enabled: true, lastRefresh: null });
+  assert.deepEqual(await manager.remove("team-kb"), { id: "team-kb", kind: "git", ref: "https://git.example/team/kb.git", workspace: "company-kb", branch: "main", intervalSeconds: 600, embedExtensions: "", embedExcludeDirs: "", enabled: true, lastRefresh: null });
   assert.equal(await manager.remove("team-kb"), null);
 });
 
-test("a dir source reindexes its directory into the shared workspace via the embed pipeline", async () => {
+test("a dir source reindexes its directory into its target workspace via the embed pipeline", async () => {
   const captured = captureEmbed();
   const { manager } = await setup({ embedVault: captured.embedVault });
   const dir = await mkdtemp(path.join(tmpdir(), "any-obs-source-dir-"));
-  await manager.create({ id: "handbook", kind: "dir", ref: dir });
+  await manager.create({ id: "handbook", kind: "dir", ref: dir, workspace: "company-kb" });
 
   const job = manager.requestRefresh("handbook");
   await waitFor(() => manager.job(job.id).status === "succeeded");
 
   assert.equal(captured.embeds.length, 1);
   const config = captured.embeds[0].config;
-  assert.equal(config.workspaceSlug, "shared");
+  assert.equal(config.workspaceSlug, "company-kb");
   assert.equal(config.vaultId, "handbook");
   assert.equal(config.vaultPath, dir);
   assert.equal(config.documentFolder, "anything-obsidian-vault-handbook");
@@ -41,7 +42,7 @@ test("a dir source reindexes its directory into the shared workspace via the emb
 
 test("a git source clones first, then pulls on later refreshes", async () => {
   const { manager, gitCalls } = await setup({ embedVault: captureEmbed().embedVault });
-  await manager.create({ id: "team-kb", kind: "git", ref: "https://git.example/team/kb.git", branch: "release" });
+  await manager.create({ id: "team-kb", kind: "git", ref: "https://git.example/team/kb.git", branch: "release", workspace: "company-kb" });
 
   const first = manager.requestRefresh("team-kb");
   await waitFor(() => manager.job(first.id).status === "succeeded");
@@ -72,8 +73,8 @@ test("refresh jobs run one at a time and failures surface on the job", async () 
   };
   const { manager } = await setup({ embedVault });
   const dir = await mkdtemp(path.join(tmpdir(), "any-obs-source-dir-"));
-  await manager.create({ id: "one", kind: "dir", ref: dir });
-  await manager.create({ id: "broken", kind: "dir", ref: dir });
+  await manager.create({ id: "one", kind: "dir", ref: dir, workspace: "company-kb" });
+  await manager.create({ id: "broken", kind: "dir", ref: dir, workspace: "company-kb" });
 
   const jobs = [manager.requestRefresh("one"), manager.requestRefresh("broken"), manager.requestRefresh("one")];
   await waitFor(() => jobs.every((job) => manager.job(job.id).finishedAt));
@@ -89,9 +90,9 @@ test("scheduled refreshes only queue enabled, due sources", async () => {
   const { manager } = await setup({ embedVault: captureEmbed().embedVault, now: () => clock });
   const dirA = await mkdtemp(path.join(tmpdir(), "any-obs-due-a-"));
   const dirB = await mkdtemp(path.join(tmpdir(), "any-obs-due-b-"));
-  await manager.create({ id: "due", kind: "dir", ref: dirA, intervalSeconds: 60 });
-  await manager.create({ id: "paused", kind: "dir", ref: dirB, intervalSeconds: 60, enabled: false });
-  await manager.create({ id: "manual-only", kind: "dir", ref: dirB, intervalSeconds: 0 });
+  await manager.create({ id: "due", kind: "dir", ref: dirA, intervalSeconds: 60, workspace: "company-kb" });
+  await manager.create({ id: "paused", kind: "dir", ref: dirB, intervalSeconds: 60, enabled: false, workspace: "company-kb" });
+  await manager.create({ id: "manual-only", kind: "dir", ref: dirB, intervalSeconds: 0, workspace: "company-kb" });
 
   assert.deepEqual(await manager.runDueSources(), ["due"]);
   await waitFor(() => manager.listJobs().length > 0 && manager.listJobs().every((job) => job.finishedAt));
@@ -110,8 +111,7 @@ async function setup(overrides = {}) {
     dataDir,
     baseUrl: "http://anythingllm:3001",
     apiKey: "key",
-    sharedWorkspaceSlug: "shared",
-    ...(overrides.embedVault ? { embedVault: overrides.embedVault } : {}),
+        ...(overrides.embedVault ? { embedVault: overrides.embedVault } : {}),
     runGit: async (args) => {
       gitCalls.push(args);
       if (args[0] === "clone") {

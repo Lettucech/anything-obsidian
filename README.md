@@ -243,10 +243,12 @@ token grants access to RAG results, which may contain source content.
 For one AnythingLLM shared by several people or agents, run the server stack:
 the IAM **gateway** is the only front door — it holds the single admin API
 key, issues per-user tokens, filters every proxied call to the workspaces
-each user may read (the shared workspace plus their own), fans searches out
-across all of them in one query, and runs the shared-source pipeline (git
-pull or directory re-read, then reindex) that is the only writer to the
-shared workspace.
+each user may read, fans searches out across all of them in one query, and
+runs the source pipeline (git pull or directory re-read, then reindex into
+the workspace its source targets). Nothing is pre-created: admins make
+shared workspaces and grant users onto them (space A to one team, space B
+to another), and each user's personal workspace is minted by their own
+client.
 
 Bring-up is one command and one browser page — no `.env` values required:
 
@@ -272,17 +274,18 @@ Bring-up is one command and one browser page — no `.env` values required:
      first-boot wizard there and generate the developer API key
      (Settings → Developer API).
    - **Step 2 — connect:** paste the key. The gateway verifies it, becomes
-     its only holder (it never lives on any user's machine), and prepares
-     the shared workspace.
+     its only holder (it never lives on any user's machine).
 
-   After setup, the dashboard's tabs manage everything day to day: **Users**
-   (create with a role — `member` runs an any-obs client, `admin` may also
-   manage the gateway with their token, `reader` is search-only — change
-   roles later, reset a lost token), **Shared sources** (register the git
-   repos or server directories that feed the shared workspace, trigger
-   refreshes, watch jobs), and the **Overview** with client and MCP
-   connection snippets. Full API surface:
-   `docs/superpowers/specs/2026-10-28-iam-middleware.md`.
+   After setup, the dashboard's tabs manage everything day to day:
+   **Workspaces** (create shared or personal workspaces — shared ones start
+   with an empty grants list; grant and revoke users per workspace; nothing
+   exists until you make it), **Users** (create with a role — `member` runs
+   an any-obs client, `admin` may also manage the gateway with their token,
+   `reader` is search-only, and new users default to reader — change roles
+   later, reset a lost token), **Shared sources** (register the git repos or
+   server directories that feed a workspace; each source targets one), and
+   the **Overview** with client and MCP connection snippets. Full API
+   surface: `docs/superpowers/specs/2026-10-28-iam-middleware.md`.
 
 - **any-obs clients** connect exactly as before —
   `--url http://<server>:21500 --api-key <user-token>`. The unified workspace
