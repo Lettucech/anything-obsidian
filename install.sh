@@ -9,7 +9,7 @@
 # Layout it creates:
 #   ~/.anything-obsidian/app       the application (downloaded from GitHub)
 #   ~/.anything-obsidian/runtime   a portable Node.js, only if the system has no node >= 22
-#   ~/.local/bin/anything-obsidian CLI launcher
+#   ~/.local/bin/anything-obsidian CLI launcher (short form: any-obs)
 #
 # Data (config, secrets, registry) lives separately under the OS app-support
 # directory and is never removed by this script. See uninstall.sh.
@@ -186,6 +186,11 @@ exit 1
 LAUNCHER_EOF
 chmod +x "$LAUNCHER"
 
+# Short form — same launcher body, one command to type.
+ALIAS_BIN="$BIN_DIR/any-obs"
+sed "s/anything-obsidian: no node found/any-obs: no node found/" "$LAUNCHER" > "$ALIAS_BIN"
+chmod +x "$ALIAS_BIN"
+
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
@@ -203,7 +208,7 @@ case ":$PATH:" in
     say "  ✓ added $BIN_DIR to PATH in $PROFILE (new terminals pick this up)"
     ;;
 esac
-say "  ✓ CLI ready: $LAUNCHER"
+say "  ✓ CLI ready: $LAUNCHER (short form: any-obs)"
 
 # ---------- init ----------
 if [ "$NON_INTERACTIVE" -eq 1 ]; then

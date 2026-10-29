@@ -115,10 +115,12 @@ if [ -d "$DATA_DIR/run" ]; then
 fi
 
 # ---------- remove launcher + PATH ----------
-if [ -L "$LAUNCHER" ] || [ -f "$LAUNCHER" ]; then
-  rm -f "$LAUNCHER"
-  say "  removed $LAUNCHER"
-fi
+for launcher in "$LAUNCHER" "$BIN_DIR/any-obs"; do
+  if [ -L "$launcher" ] || [ -f "$launcher" ]; then
+    rm -f "$launcher"
+    say "  removed $launcher"
+  fi
+done
 for profile in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.bash_profile"; do
   if [ -f "$profile" ] && grep -q '# >>> anything-obsidian >>>' "$profile"; then
     tmp="$profile.ao-uninstall.$$"

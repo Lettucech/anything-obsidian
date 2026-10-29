@@ -86,6 +86,8 @@ slug once the first vault exists.
 anything-obsidian status --json
 ```
 
+(Short form: `any-obs` — every command below works as `any-obs <command>` too.)
+
 Exit code `0` plus `"ok": true` means: config present, git found, AnythingLLM
 reachable. Check these fields:
 

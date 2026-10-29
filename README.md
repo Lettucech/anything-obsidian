@@ -262,6 +262,8 @@ same server, Desktop, or a remote host).
      --vaults-root ~/.anything-obsidian/vaults --url http://localhost:3001 --api-key <developer-key> --no-browser
    ```
 
+   The CLI installs as `anything-obsidian`, with `any-obs` as a short form —
+   `any-obs gateway --bg`, `any-obs status`, same thing.
    The gateway reads the URL from this config; the key you paste here is
    only a starting point and can be rotated later in the dashboard. No
    Docker is needed — and because the gateway is native, **directory
