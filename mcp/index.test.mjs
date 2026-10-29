@@ -217,7 +217,7 @@ test("rag tools explain themselves when no unified workspace is configured yet",
     const [client, server] = await connect("local", ANONYMOUS_IDENTITY);
     const result = await client.callTool({ name: "any_obs_rag_search", arguments: { query: "anything" } });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /No unified workspace is configured yet/);
+    assert.match(result.content[0].text, /No RAG workspaces are visible yet/);
     await client.close();
     await server.close();
   } finally {
@@ -313,3 +313,58 @@ function jsonResponse(data) {
     text: async () => JSON.stringify(data),
   };
 }
+
+test("a consumer client with no vaults still searches gateway-granted shared workspaces", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-consumer-"));
+  const registryPath = path.join(root, "vaults.json");
+  // No workspace in the registry, no vaults at all: this client exists only
+  // to consume the gateway's shared knowledge.
+  await writeFile(registryPath, JSON.stringify({ vaults: [] }));
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === "/api/v1/workspaces") {
+      // The gateway answers with the granted shared workspace only.
+      return jsonResponse({ workspaces: [{ slug: "company-kb" }] });
+    }
+    if (parsed.pathname.endsWith("/chat")) {
+      return jsonResponse({ textResponse: "answer" });
+    }
+    const slug = decodeURIComponent(parsed.pathname.split("/")[4] ?? "");
+    return jsonResponse({
+      results: slug === "company-kb"
+        ? [{ score: 0.9, chunkSource: "company-kb-source/handbook.md", text: "shared hit" }]
+        : [],
+    });
+  };
+
+  const previous = captureEnv({
+    VAULT_REGISTRY_PATH: registryPath,
+    ANYTHINGLLM_BASE_URL: "http://anythingllb.test",
+    ANYTHINGLLM_API_KEY: "user-token",
+  });
+  try {
+    const [client, server] = await connect("local", ANONYMOUS_IDENTITY);
+
+    const search = JSON.parse((await client.callTool({
+      name: "any_obs_rag_search",
+      arguments: { query: "anything" },
+    })).content[0].text);
+    assert.deepEqual(search.results.map((chunk) => [chunk.workspace, chunk.text]), [
+      ["company-kb", "shared hit"],
+    ]);
+
+    const answer = JSON.parse((await client.callTool({
+      name: "any_obs_rag_answer",
+      arguments: { question: "hi" },
+    })).content[0].text);
+    assert.equal(answer.textResponse, "answer");
+
+    await client.close();
+    await server.close();
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(previous);
+  }
+});

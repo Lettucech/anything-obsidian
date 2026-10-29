@@ -120,8 +120,8 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
       mode: z.enum(["query", "chat"]).default("query"),
     },
     async ({ question, mode }) => {
-      const workspace = await requireUnifiedWorkspace(vaultRegistryPath);
-      const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(workspace.slug)), {
+      const visible = await visibleRagWorkspaces(vaultRegistryPath, { baseUrl, apiKey });
+      const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(visible[0])), {
         method: "POST",
         body: JSON.stringify({ message: question, mode }),
       }, { baseUrl, apiKey });
@@ -221,27 +221,23 @@ function extractRagChunks(data) {
 // AnythingLLM that is exactly the instance's unified workspace (key = the
 // instance's developer key); against a gateway it is the filtered list the
 // proxy answers with — personal plus granted shared workspaces.
+// What the configured key can see is the source of truth: a gateway answers
+// with the token's granted + owned workspaces (which may not include any
+// local unified workspace — a consumer client with no vaults still has
+// shared grants to search). Only when the backend answers nothing do we fall
+// back to the local registry's unified workspace, and only then is "no
+// workspace" an error.
 async function visibleRagWorkspaces(vaultRegistryPath, { baseUrl, apiKey }) {
-  const workspace = await requireUnifiedWorkspace(vaultRegistryPath);
   try {
     const data = await requestJson("/api/v1/workspaces", { method: "GET" }, { baseUrl, apiKey });
     const slugs = (data?.workspaces ?? []).map((workspace) => workspace.slug).filter(Boolean);
-    if (slugs.length && !slugs.includes(workspace.slug)) {
-      return [workspace.slug, ...slugs];
-    }
-    return slugs.length ? slugs : [workspace.slug];
+    if (slugs.length) return slugs;
   } catch {
-    // Plain AnythingLLM quirks should never break the primary workspace.
-    return [workspace.slug];
+    // fall through to the local registry (plain AnythingLLM, or no backend)
   }
-}
-
-async function requireUnifiedWorkspace(vaultRegistryPath) {
   const workspace = await loadWorkspace(vaultRegistryPath);
-  if (!workspace) {
-    throw new Error("No unified workspace is configured yet. Add a vault from the dashboard (or run a worker embed) to initialise it.");
-  }
-  return workspace;
+  if (workspace) return [workspace.slug];
+  throw new Error("No RAG workspaces are visible yet. Add a vault to create this instance's own workspace, or ask your gateway admin to grant a shared workspace to your user.");
 }
 
 async function requestJson(pathOrUrl, init, { baseUrl, apiKey }) {
