@@ -546,10 +546,14 @@ export function createGatewayServer({
   }
 }
 
-function defaultDataDir(env) {
-  return env.GATEWAY_DATA_DIR
-    ? path.resolve(env.GATEWAY_DATA_DIR)
-    : path.join(env.HOME ?? ".", ".anything-obsidian-gateway");
+function defaultDataDir(env, defaultConfigRoot) {
+  if (env.GATEWAY_DATA_DIR) return path.resolve(env.GATEWAY_DATA_DIR);
+  // Native deployment: the gateway's state lives beside the rest of the
+  // app's data, under the standard config root.
+  const home = env.ANYTHING_OBSIDIAN_HOME
+    ? path.resolve(env.ANYTHING_OBSIDIAN_HOME)
+    : defaultConfigRoot({ env });
+  return path.join(home, "gateway");
 }
 
 function httpError(status, message) {
@@ -621,25 +625,34 @@ async function readPackageInfo() {
 
 if (import.meta.url === entryUrl()) {
   const env = process.env;
-  if (!env.ANYTHINGLLM_BASE_URL) {
-    console.error("ANYTHINGLLM_BASE_URL is required (inside compose this is http://anythingllm:3001)");
+  const { defaultConfigRoot } = await import("../lib/app-config.mjs");
+
+  // Native deployment: base URL comes from env, or the config written by
+  // `anything-obsidian init` on this machine. The key is never env-required —
+  // the admin dashboard's wizard and Settings manage it in the data dir.
+  const baseUrlResolved = env.ANYTHINGLLM_BASE_URL
+    ? env.ANYTHINGLLM_BASE_URL
+    : (await (await import("../lib/app-config.mjs")).createAppConfigStore({ rootDir: defaultConfigRoot({ env }) }).load())?.anythingllmBaseUrl;
+  if (!baseUrlResolved) {
+    console.error("No AnythingLLM base URL. Set one with: anything-obsidian init --vaults-root <path> --url <url> --api-key <key>");
     process.exit(1);
   }
-  const dataDir = defaultDataDir(env);
+
+  const dataDir = defaultDataDir(env, defaultConfigRoot);
   const gatewayConfig = createGatewayConfig({ dataDir });
   const userStore = createUserStore({ dataDir });
   const sourceManager = createSourceManager({
     dataDir,
-    baseUrl: env.ANYTHINGLLM_BASE_URL,
+    baseUrl: baseUrlResolved,
     // Resolve per job: the wizard- or Settings-collected key lives in the
-    // data volume, not the process env.
+    // data dir, not the process env.
     apiKey: async () => env.ANYTHINGLLM_API_KEY || (await gatewayConfig.load()).apiKey,
   });
   const shared = {
     userStore,
     sourceManager,
     gatewayConfig,
-    anythingllmBaseUrl: env.ANYTHINGLLM_BASE_URL,
+    anythingllmBaseUrl: baseUrlResolved,
     anythingllmApiKey: env.ANYTHINGLLM_API_KEY ?? "",
   };
 

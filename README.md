@@ -20,12 +20,12 @@ loopback unless marked otherwise:
 
 | Port | Surface | Where |
 |---|---|---|
-| 21500 | IAM gateway public plane (MCP + user API) | server stack, published on the LAN |
-| 21501 | AnythingLLM UI | server host loopback only (first-boot setup) |
+| 21500 | IAM gateway public plane (MCP + user API) | server, published on the LAN |
+| 21501 | AnythingLLM UI (wherever you host it) | host loopback only (first-boot setup) |
 | 21502 | Client dashboard | loopback only |
 | 21503 | Client local MCP | loopback only |
 | 21504 | Client LAN MCP | opt-in, LAN, Bearer token required |
-| 21505 | Gateway admin dashboard | server host loopback only |
+| 21505 | Gateway admin dashboard | server loopback only |
 | 21506–21510 | Reserved for future any-obs surfaces | — |
 
 AnythingLLM itself (inside the server stack) keeps its container port 3001
@@ -238,48 +238,62 @@ export MCP_ALLOWED_HOSTS=obsidian-host.local,192.168.1.10
 Keep the dashboard and AnythingLLM management UI on loopback. A LAN bearer
 token grants access to RAG results, which may contain source content.
 
-## Shared deployments (server stack)
+## Shared deployments (the gateway)
 
-For one AnythingLLM shared by several people or agents, run the server stack:
-the IAM **gateway** is the only front door — it holds the single admin API
-key, issues per-user tokens, filters every proxied call to the workspaces
-each user may read, fans searches out across all of them in one query, and
-runs the source pipeline (git pull or directory re-read, then reindex into
-the workspace its source targets). Nothing is pre-created: admins make
-shared workspaces and grant users onto them (space A to one team, space B
-to another), and each user's personal workspace is minted by their own
-client.
+For one AnythingLLM shared by several people or agents, run the **gateway**
+on the server — the same native app, one command. It holds the single admin
+API key, issues per-user tokens, filters every proxied call to the
+workspaces each user may read, fans searches out across all of them in one
+query, and runs the source pipeline (git pull or directory re-read, then
+reindex into the workspace its source targets). Nothing is pre-created:
+admins make shared workspaces and grant users onto them (space A to one
+team, space B to another), and each user's personal workspace is minted by
+their own client.
 
-Bring-up is one command and one browser page — no `.env` values required:
+AnythingLLM itself is never bundled or hosted by any-obs — point the
+gateway at whatever instance you already run (official Docker image on the
+same server, Desktop, or a remote host).
 
-1. **Start the stack.**
+1. **Install on the server** (same one-command installer as any client) and
+   point it at your AnythingLLM:
 
    ```bash
-   cd server
-   docker compose up -d
+   curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
+     --vaults-root ~/.anything-obsidian/vaults --url http://localhost:3001 --api-key <developer-key> --no-browser
    ```
 
-   (Optional: `cp .env.example .env` only if you want to preset secrets for
-   a non-interactive deployment. Normal deployments leave it empty.)
+   The gateway reads the URL from this config; the key you paste here is
+   only a starting point and can be rotated later in the dashboard. No
+   Docker is needed — and because the gateway is native, **directory
+   sources work on any path the server can read** (git sources clone into
+   the data directory as usual).
 
-2. **Open the gateway admin dashboard** — it is loopback-only
+2. **Start it and keep it running:**
+
+   ```bash
+   anything-obsidian gateway --bg       # one-off background start
+   anything-obsidian autostart gateway on   # start at login, restart on crash
+   ```
+
+3. **Open the admin dashboard** — it is loopback-only
    (`http://localhost:21505` on the server, or
-   `ssh -L 21505:127.0.0.1:21505 -L 21501:127.0.0.1:21501 <server>` from your
-   machine, which tunnels AnythingLLM's UI too). Reaching it is the admin
-   credential — same trust model as the client dashboard. Follow the
-   two-step wizard:
+   `ssh -L 21505:127.0.0.1:21505 <server>` from your machine). Reaching it
+   is the admin credential — same trust model as the client dashboard.
+   Follow the two-step wizard:
 
-   - **Step 1 — initialize AnythingLLM:** its UI is never on the network;
-     the wizard shows the exact tunnel command. Finish AnythingLLM's
-     first-boot wizard there and generate the developer API key
-     (Settings → Developer API).
+   - **Step 1 — initialize AnythingLLM:** its own UI is wherever you host
+     it (the wizard assumes `http://localhost:21501` on the server; tunnel
+     it the same way if needed). Finish AnythingLLM's first-boot wizard and
+     generate the developer API key (Settings → Developer API).
    - **Step 2 — connect:** paste the key. The gateway verifies it, becomes
-     its only holder (it never lives on any user's machine).
+     its only holder (it never lives on any user's machine), and you can
+     rotate it any time in the Settings tab.
 
    After setup, the dashboard's tabs manage everything day to day:
    **Workspaces** (create shared or personal workspaces — shared ones start
-   with an empty grants list; grant and revoke users per workspace; nothing
-   exists until you make it), **Users** (create with a role — `member` runs
+   with an empty grants list; grant and revoke users per workspace; workspaces
+   that exist in AnythingLLM but not in the gateway show up as untracked for
+   you to adopt or delete), **Users** (create with a role — `member` runs
    an any-obs client, `admin` may also manage the gateway with their token,
    `reader` is search-only, and new users default to reader — change roles
    later, reset a lost token), **Shared sources** (register the git repos or

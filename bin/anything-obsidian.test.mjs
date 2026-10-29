@@ -532,3 +532,43 @@ test("--help still works on an unsupported runtime", async () => {
   assert.equal(await runCli(["--help"], { log: output.line, nodeVersion: "18.20.0" }), 0);
   assert.match(output.lines.join("\n"), /Usage: anything-obsidian/);
 });
+
+test("gateway --bg serves both planes on ephemeral ports and stop tears it down", async () => {
+  const { home, output, url } = await setup({ workspaces: [] });
+  const publicPort = 23000 + Math.floor(Math.random() * 5000);
+  const adminPort = publicPort + 1;
+  const env = {
+    ANYTHING_OBSIDIAN_HOME: configRoot(home),
+    PATH: process.env.PATH,
+    HOME: home,
+    GATEWAY_PORT: String(publicPort),
+    GATEWAY_ADMIN_PORT: String(adminPort),
+  };
+  await runCli(
+    ["init", "--vaults-root", path.join(home, "Vaults"), "--url", url, "--api-key", "k"],
+    { env, log: output.line },
+  );
+
+  const started = await runCli(["gateway", "--bg"], {
+    env,
+    spawnImpl: (command, args, options) => spawn(command, args, options),
+    log: output.line,
+  });
+  assert.equal(started, 0);
+  assert.match(output.lines.join("\n"), /Gateway is running/);
+
+  const health = await fetch(`${adminPort === 0 ? "" : `http://127.0.0.1:${adminPort}`}/health`);
+  const report = await health.json();
+  assert.equal(report.name, "any-obs-gateway");
+  assert.equal(report.plane, "admin");
+
+  const store = createAppConfigStore({ rootDir: configRoot(home) });
+  const pid = Number.parseInt(readFileSync(path.join(store.paths.runRoot, "gateway.pid"), "utf8"), 10);
+  assert.ok(pid > 0);
+
+  const stopped = await runCli(["gateway", "stop"], { env, log: output.line });
+  assert.equal(stopped, 0);
+  assert.match(output.lines.join("\n"), /Stopped gateway/);
+  await waitForPidExit(pid);
+  assert.equal(existsSync(path.join(store.paths.runRoot, "gateway.pid")), false);
+});

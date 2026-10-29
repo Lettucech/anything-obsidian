@@ -10,8 +10,12 @@ developer API key is effectively global-admin and cannot be handed to every
 user's client. The gateway is that front door — a lightweight IAM proxy that
 holds the single admin key, issues per-user tokens, and lets each user reach
 the shared workspace plus their own personal workspace. It is the server half
-of any-obs: one repo, two deployables (client stays native via `install.sh`;
-the server stack ships as Docker compose: AnythingLLM + gateway).
+of any-obs: one repo, one deployable form — the gateway runs natively from
+the same install (`anything-obsidian gateway`), and AnythingLLM is never
+bundled or hosted by any-obs. (Originally the server half shipped as
+Docker compose with an AnythingLLM service; that was removed when directory
+sources made host-filesystem access a requirement — the same reason the
+client is native.)
 
 Design decisions settled in discussion (2026-10-28):
 
@@ -127,16 +131,18 @@ workspace, one level up). Cross-workspace synthesized answers stay v2;
   setup wizard (`/api/setup/api-key` — exists only while unconfigured),
   users and sources CRUD, and full-proxy passthrough for recovery.
 
-## Deployment (`server/docker-compose.yml`)
+## Deployment (native)
 
-- `anythingllm` (official image): published on the host **loopback only**
-  (`127.0.0.1:21501`) so an admin can finish first-boot setup and mint the
-  developer API key on the server itself or over an SSH tunnel; never on the
-  LAN.
-- `gateway`: builds from `server/Dockerfile`; the public plane publishes on
-  the LAN (21500), the admin plane publishes on the host loopback only
-  (21505). Volumes for AnythingLLM storage, gateway data
-  (key/users/sources/jobs/manifests), and shared-source clones.
+- The gateway runs from the standard install: `anything-obsidian gateway`
+  (foreground), `gateway --bg` (pid file under the data directory), or
+  `anything-obsidian autostart gateway on` (LaunchAgent/systemd user unit —
+  the same supervisor machinery as the client services). The base URL comes
+  from env `ANYTHINGLLM_BASE_URL` or the config written by
+  `anything-obsidian init`.
+- State lives under the data directory (`gateway/` next to the client's
+  registry and secrets): key, users, sources, manifests, and git clones.
+  The AnythingLLM base URL points at whatever instance the operator hosts —
+  its UI stays reachable only on that host.
 
 ## Known v1 limits
 

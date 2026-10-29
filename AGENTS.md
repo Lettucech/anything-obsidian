@@ -16,11 +16,12 @@ It ships as a plain Node app, installed by `install.sh`, managed by the
 loopback 21503, optional LAN 21504 (`lan on`, Bearer token required).
 
 The client stays native forever — no Docker, no Electron/desktop-shell plan,
-no npm publish. A second deployable exists for shared deployments: the
-**server stack** under `server/` (AnythingLLM + the IAM gateway, run with
-`docker compose`); the gateway is the sole holder of the AnythingLLM admin
-key, per-user tokens scope every client, and its shared-source pipeline is
-the only writer to the shared workspace. See
+no npm publish. The same is true for shared deployments: the IAM **gateway**
+under `server/` runs from the same install (`anything-obsidian gateway`,
+`autostart gateway on`), is the sole holder of the AnythingLLM admin key,
+scopes every client with per-user tokens, and its shared-source pipeline is
+the only writer to shared workspaces. AnythingLLM itself is never bundled
+or hosted — it is always an external dependency the user provides. See
 `docs/superpowers/specs/2026-10-28-iam-middleware.md`.
 
 The root `package.json` now

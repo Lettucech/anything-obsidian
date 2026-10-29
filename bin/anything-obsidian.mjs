@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { createAnythingllmClient } from "../dashboard/anythingllm.mjs";
@@ -39,6 +39,8 @@ Commands:
   stop       Stop the dashboard (if backgrounded) and the sync scheduler
   status     Show install, config, and service health (--json for agents)
   autostart  Keep the dashboard and scheduler running: on | off | status
+             (also: autostart gateway on | off | status for a server install)
+  gateway    Run the IAM gateway (shared deployments): foreground, --bg, stop
   lan        Manage the LAN MCP endpoint: token <t> | on | off | status
   update     Update the app in place (data and settings are kept)
 
@@ -77,7 +79,7 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
   const store = deps.store || createAppConfigStore({ rootDir: defaultConfigRoot({ env }) });
   const fetchImpl = deps.fetchImpl || fetch;
   const spawnImpl = deps.spawnImpl || spawn;
-  const killImpl = deps.killImpl;
+  const killImpl = deps.killImpl || ((pid, signal) => process.kill(pid, signal));
   const execFileImpl = deps.execFileImpl || execFileAsync;
   const log = deps.log || ((message) => io.output.write(`${message}\n`));
 
@@ -107,9 +109,13 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
     case "status":
       return runStatus({ store, env, fetchImpl, execFileImpl, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
     case "autostart":
-      return runAutostart({ subcommand: rest[0], store, env, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
+      return runAutostart({ subcommand: rest[0], rest, store, env, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
     case "mcp-fg":
       return runMcpFg({ store, env, spawnImpl, log, lan: rest.includes("--lan") || flags.lan === "" || flags.lan === "1" });
+    case "gateway":
+      return runGateway({ args: rest, store, env, spawnImpl, killImpl, log });
+    case "gateway-fg":
+      return runGatewayFg({ store, env, spawnImpl, log });
     case "lan":
       return runLan({ subcommand: rest[0], argument: rest[1], store, env, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
     case "update":
@@ -140,12 +146,36 @@ function autostartManager({ store, env, log, launchctl, systemctl, platform = pr
   }
 }
 
-async function runAutostart({ subcommand, store, env, log, json, launchctl, systemctl, platform }) {
+async function runAutostart({ subcommand, rest, store, env, log, json, launchctl, systemctl, platform }) {
   const config = await loadConfigOrWarn(store, log);
   if (!config) return 1;
   await store.ensureLayout();
   const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
   if (!manager) return 1;
+
+  if (subcommand === "gateway") {
+    const action = rest[1] || "status";
+    if (action === "on") {
+      await manager.enableGateway?.({ gatewayLogPath: path.join(store.paths.logsRoot, "gateway.log") });
+      const state = await manager.status();
+      if (json) return log(JSON.stringify({ ok: true, gateway: "on", services: { gateway: state.gateway } }, null, 2));
+      log("Gateway autostart is on: it starts at every login and restarts if it crashes.");
+      log(`Admin dashboard: http://localhost:21505 (loopback only)`);
+      return 0;
+    }
+    if (action === "off") {
+      await manager.disableGateway?.();
+      if (json) return log(JSON.stringify({ ok: true, gateway: "off" }, null, 2));
+      log("Gateway autostart is off. Start it any time with: anything-obsidian gateway");
+      return 0;
+    }
+    const state = manager.status ? (await manager.status()).gateway : null;
+    if (json) return log(JSON.stringify({ ok: true, gateway: state ?? { loaded: false, running: false, pid: null } }, null, 2));
+    log(state
+      ? `Gateway autostart: ${state.running ? `running (pid ${state.pid})` : state.loaded ? "loaded, not running" : "not loaded"}`
+      : "Gateway autostart: not supported on this platform");
+    return 0;
+  }
 
   switch (subcommand) {
     case "on": {
@@ -189,6 +219,134 @@ async function runAutostart({ subcommand, store, env, log, json, launchctl, syst
       return 0;
     }
   }
+}
+
+const GATEWAY_SCRIPT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "server", "gateway.mjs");
+
+function gatewayPaths(store) {
+  return {
+    pidPath: path.join(store.paths.runRoot, "gateway.pid"),
+    logPath: path.join(store.paths.logsRoot, "gateway.log"),
+    script: GATEWAY_SCRIPT_PATH,
+  };
+}
+
+function gatewayPid(pidPath, killImpl) {
+  let pid;
+  try {
+    pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
+  } catch {
+    return { running: false, pid: null };
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return { running: false, pid: null };
+  try {
+    killImpl(pid, 0);
+    return { running: true, pid };
+  } catch (error) {
+    if (error?.code === "ESRCH") return { running: false, pid };
+    if (error?.code === "EPERM") return { running: true, pid };
+    throw error;
+  }
+}
+
+async function runGateway({ args, store, env, spawnImpl, killImpl, log }) {
+  const paths = gatewayPaths(store);
+
+  if (args[0] === "stop") {
+    const status = gatewayPid(paths.pidPath, killImpl);
+    if (!status.running) {
+      rmSync(paths.pidPath, { force: true });
+      log("Gateway is not running.");
+      return 0;
+    }
+    killImpl(status.pid, "SIGTERM");
+    rmSync(paths.pidPath, { force: true });
+    log(`Stopped gateway (pid ${status.pid}).`);
+    return 0;
+  }
+
+  const config = await loadConfigOrWarn(store, log);
+  if (!config) return 1;
+  await store.ensureLayout();
+
+  // Hand off to the service manager when it owns us (autostart gateway on).
+  const manager = autostartManager({ store, env, log });
+  if (args.includes("--bg") && manager && !env.AO_SUPERVISED && (await manager.gatewayEnabled?.())) {
+    await manager.enableGateway({ gatewayLogPath: paths.logPath });
+    log("Gateway is managed by the platform service manager (public :21500, admin :21505).");
+    return 0;
+  }
+
+  const childEnv = {
+    ...nativeEnv(config, store.paths, { env }),
+    ...(env.GATEWAY_PORT ? { GATEWAY_PORT: env.GATEWAY_PORT } : {}),
+    ...(env.GATEWAY_ADMIN_PORT ? { GATEWAY_ADMIN_PORT: env.GATEWAY_ADMIN_PORT } : {}),
+    AO_MODE: "native",
+  };
+  const adminPort = Number(env.GATEWAY_ADMIN_PORT ?? 21505);
+
+  if (args.includes("--bg")) {
+    const existing = gatewayPid(paths.pidPath, killImpl);
+    if (existing.running) {
+      log(`Gateway is already running (pid ${existing.pid}).`);
+      return 0;
+    }
+    mkdirSync(path.dirname(paths.pidPath), { recursive: true });
+    mkdirSync(path.dirname(paths.logPath), { recursive: true });
+    const fd = openSync(paths.logPath, "a");
+    let pid;
+    try {
+      const child = spawnImpl(process.argv[0] || process.execPath, [paths.script], {
+        cwd: path.dirname(paths.script),
+        env: childEnv,
+        detached: true,
+        stdio: ["ignore", fd, fd],
+        windowsHide: true,
+      });
+      writeFileSync(paths.pidPath, `${child.pid}\n`);
+      child.unref?.();
+      pid = child.pid;
+    } finally {
+      closeSync(fd);
+    }
+    const ready = await waitForHttp(`http://127.0.0.1:${adminPort}/health`, { fetchImpl: fetch });
+    log(ready
+      ? `Gateway is running (public :${Number(env.GATEWAY_PORT ?? 21500)}, admin dashboard http://localhost:${adminPort}). Pid file: ${paths.pidPath}`
+      : "Gateway did not become ready in time — check the log at " + paths.logPath);
+    return ready ? 0 : 1;
+  }
+
+  return runGatewayFg({ store, env, spawnImpl, log });
+}
+
+async function runGatewayFg({ store, env, spawnImpl, log }) {
+  const config = await loadConfigOrWarn(store, log);
+  if (!config) return 1;
+  await store.ensureLayout();
+
+  const paths = gatewayPaths(store);
+  if (env.AO_SUPERVISED) {
+    process.title = "anything-obsidian-gateway";
+  }
+  const child = spawnImpl(process.argv[0] || process.execPath, [paths.script], {
+    cwd: path.dirname(paths.script),
+    env: nativeEnv(config, store.paths, { env }),
+    stdio: "inherit",
+  });
+  const forward = (signal) => {
+    try {
+      child.kill(signal);
+    } catch {
+      // already gone
+    }
+  };
+  process.on("SIGTERM", () => forward("SIGTERM"));
+  process.on("SIGINT", () => forward("SIGINT"));
+  const code = await new Promise((resolve) => {
+    child.on("close", (exitCode) => resolve(exitCode ?? 0));
+    child.on("error", () => resolve(1));
+  });
+  return code;
 }
 
 async function runSchedulerFg({ store, env, spawnImpl, log }) {
