@@ -642,19 +642,24 @@ if (import.meta.url === entryUrl()) {
   const env = process.env;
   const { defaultConfigRoot } = await import("../lib/app-config.mjs");
 
-  // Native deployment: base URL comes from env, or the config written by
-  // `anything-obsidian init` on this machine. The key is never env-required —
-  // the admin dashboard's wizard and Settings manage it in the data dir.
+  // Native deployment, and fully self-contained: the gateway's base URL and
+  // key live in its own data dir (gateway/gateway.json), NOT in the client's
+  // config.json — an admin may install the client on the same machine later
+  // and rewriting that file must never touch the gateway. Resolution order:
+  // env, then gateway.json, then the legacy client config (older installs
+  // kept the URL there).
+  const dataDir = defaultDataDir(env, defaultConfigRoot);
+  const gatewayConfig = createGatewayConfig({ dataDir });
+  const gatewayState = await gatewayConfig.load();
   const baseUrlResolved = env.ANYTHINGLLM_BASE_URL
     ? env.ANYTHINGLLM_BASE_URL
-    : (await (await import("../lib/app-config.mjs")).createAppConfigStore({ rootDir: defaultConfigRoot({ env }) }).load())?.anythingllmBaseUrl;
+    : gatewayState.anythingllmBaseUrl
+      || (await (await import("../lib/app-config.mjs")).createAppConfigStore({ rootDir: defaultConfigRoot({ env }) }).load())?.anythingllmBaseUrl;
   if (!baseUrlResolved) {
-    console.error("No AnythingLLM base URL. Set one with: anything-obsidian init --vaults-root <path> --url <url> --api-key <key>");
+    console.error("No AnythingLLM base URL. Set one with: anything-obsidian init --server --url <url> --api-key <key>");
     process.exit(1);
   }
 
-  const dataDir = defaultDataDir(env, defaultConfigRoot);
-  const gatewayConfig = createGatewayConfig({ dataDir });
   const userStore = createUserStore({ dataDir });
   const sourceManager = createSourceManager({
     dataDir,

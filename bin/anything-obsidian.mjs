@@ -475,6 +475,18 @@ async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory })
     });
     await mkdir(config.vaultsRoot, { recursive: true });
 
+    if (serverInstall) {
+      // The gateway must be immune to a later client install on this
+      // machine: its base URL and key live in its own data dir, never only
+      // in the client's config.json.
+      const { createGatewayConfig } = await import("../server/gateway-config.mjs");
+      const gatewayDataDir = path.join(store.paths.root, "gateway");
+      await createGatewayConfig({ dataDir: gatewayDataDir }).save({
+        anythingllmBaseUrl,
+        apiKey,
+      });
+    }
+
     log("");
     log("Setup complete.");
     log(`  Vault root:       ${config.vaultsRoot}`);

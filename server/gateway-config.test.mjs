@@ -7,15 +7,18 @@ import test from "node:test";
 
 import { createGatewayConfig } from "./gateway-config.mjs";
 
-test("gateway config persists only the api key, 0600, in the data dir", async () => {
+test("gateway config persists the base URL and api key, 0600, in the data dir", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "any-obs-gateway-config-"));
   const config = createGatewayConfig({ dataDir });
 
-  assert.deepEqual(await config.load(), { apiKey: "" });
+  assert.deepEqual(await config.load(), { apiKey: "", anythingllmBaseUrl: "" });
   assert.equal(await config.configured(), false);
 
   await config.save({ apiKey: "key-1" });
-  assert.deepEqual(await config.load(), { apiKey: "key-1" });
+  assert.equal(await config.configured(), false); // a key without a URL is not enough
+
+  await config.save({ apiKey: "key-1", anythingllmBaseUrl: "http://localhost:21501" });
+  assert.deepEqual(await config.load(), { apiKey: "key-1", anythingllmBaseUrl: "http://localhost:21501" });
   assert.equal(await config.configured(), true);
 
   const state = await stat(path.join(dataDir, "gateway.json"));
@@ -37,5 +40,5 @@ test("a legacy data volume with an adminToken field loads cleanly without it", a
   const { writeFile } = await import("node:fs/promises");
   await writeFile(path.join(dataDir, "gateway.json"), JSON.stringify({ adminToken: "legacy", apiKey: "k" }));
   const config = createGatewayConfig({ dataDir });
-  assert.deepEqual(await config.load(), { apiKey: "k" });
+  assert.deepEqual(await config.load(), { apiKey: "k", anythingllmBaseUrl: "" });
 });

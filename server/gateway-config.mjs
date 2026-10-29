@@ -1,8 +1,9 @@
-// Gateway's own state: the AnythingLLM API key collected by the first-run
-// setup wizard, stored in the data volume (0600) — never required as an env
-// var. Env overrides stay supported for tests and non-interactive
-// deployments. There is no admin credential: the dashboard plane is
-// host-loopback only and reaching it is the proof.
+// Gateway's own state: the AnythingLLM base URL and API key, stored in the
+// data directory (0600) and fully self-contained — the gateway never reads
+// the client's config.json for new installs, so installing the client on
+// the same machine cannot disturb it. Env overrides stay supported for
+// tests and non-interactive deployments. There is no admin credential: the
+// dashboard plane is host-loopback only and reaching it is the proof.
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -15,15 +16,19 @@ export function createGatewayConfig({ dataDir }) {
       try {
         parsed = JSON.parse(await readFile(filePath, "utf8"));
       } catch (error) {
-        if (error?.code === "ENOENT") return { apiKey: "" };
+        if (error?.code === "ENOENT") return { apiKey: "", anythingllmBaseUrl: "" };
         throw error;
       }
-      return { apiKey: typeof parsed?.apiKey === "string" ? parsed.apiKey : "" };
+      return {
+        apiKey: typeof parsed?.apiKey === "string" ? parsed.apiKey : "",
+        anythingllmBaseUrl: typeof parsed?.anythingllmBaseUrl === "string" ? parsed.anythingllmBaseUrl : "",
+      };
     },
     async save(patch) {
       const current = await this.load();
       const next = {
         apiKey: patch.apiKey !== undefined ? String(patch.apiKey) : current.apiKey,
+        anythingllmBaseUrl: patch.anythingllmBaseUrl !== undefined ? String(patch.anythingllmBaseUrl) : current.anythingllmBaseUrl,
       };
       await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
       const temporary = `${filePath}.${process.pid}.tmp`;
@@ -34,7 +39,8 @@ export function createGatewayConfig({ dataDir }) {
       return next;
     },
     async configured() {
-      return Boolean((await this.load()).apiKey);
+      const state = await this.load();
+      return Boolean(state.apiKey && state.anythingllmBaseUrl);
     },
   };
 }
