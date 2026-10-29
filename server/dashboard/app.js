@@ -148,10 +148,11 @@ async function renderUsers() {
   name.placeholder = "user-name (lowercase-dash)";
   name.required = true;
   const role = element("select", "", "");
-  role.innerHTML = ["member", "admin", "reader"].map((value) =>
-    `<option value="${value}">${value}</option>`,
+  // Least privilege by default: new users start as readers; promote them.
+  role.innerHTML = ["reader", "member", "admin"].map((value) =>
+    `<option value="${value}"${value === "reader" ? " selected" : ""}>${value}</option>`,
   ).join("");
-  const roleHelp = element("span", "muted", "member: shared + own workspaces · admin: also manages the gateway with this token · reader: search only");
+  const roleHelp = element("span", "muted", "reader (default): search only · member: shared + own workspaces · admin: also manages the gateway with this token");
   form.append(name, role, element("button", "button button-primary", "Create user"), roleHelp);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -173,8 +174,9 @@ async function renderUsers() {
   async function fillList() {
     const { users } = await request("/api/gateway/users");
     list.replaceChildren(...(users.length ? users.map((user) => {
-      const row = element("div", "row item");
-      row.append(
+      const row = element("div", "row item columned");
+      const line = element("div", "row");
+      line.append(
         element("code", "", user.name),
         roleSelect(user),
         element("span", "muted", new Date(user.createdAt).toLocaleDateString()),
@@ -185,9 +187,22 @@ async function renderUsers() {
         const result = await request(`/api/gateway/users/${encodeURIComponent(user.name)}/reset-token`, { method: "POST" });
         revealToken(result.token, `New token for '${user.name}' (${result.user.role})`);
       });
-      row.append(reset, revokeButton(user, fillList));
+      line.append(reset, revokeButton(user, fillList));
+      row.append(line);
+      for (const slug of user.workspaces ?? []) {
+        const workspaceLine = element("div", "row workspace-line");
+        workspaceLine.append(element("span", "pill", "workspace"), element("code", "", slug));
+        const remove = element("button", "button button-quiet button-danger", "Delete");
+        remove.addEventListener("click", async () => {
+          if (!window.confirm(`Delete workspace '${slug}'? Its embeddings are removed from AnythingLLM and '${user.name}' loses it — their client must re-create the workspace before indexing works again.`)) return;
+          await request(`/api/gateway/workspaces/${encodeURIComponent(slug)}`, { method: "DELETE" });
+          await fillList();
+        });
+        workspaceLine.append(remove);
+        row.append(workspaceLine);
+      }
       return row;
-    }) : [element("p", "note", "No users yet — create one for each person or agent.")]));
+    }) : [element("p", "note", "No users yet — create one for each person or agent (they start as readers; promote when you trust them).")]));
   }
 
   function roleSelect(user) {

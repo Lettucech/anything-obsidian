@@ -30,7 +30,15 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
 
   return {
     async list() {
-      return (await read()).users.map(({ tokenHash, ...user }) => user);
+      const state = await read();
+      const byOwner = {};
+      for (const [slug, owner] of Object.entries(state.workspaces)) {
+        (byOwner[owner] ??= []).push(slug);
+      }
+      return state.users.map(({ tokenHash, ...user }) => ({
+        ...user,
+        workspaces: (byOwner[user.name] ?? []).sort(),
+      }));
     },
     async get(name) {
       return (await read()).users.find((user) => user.name === name) ?? null;
@@ -99,6 +107,13 @@ export function createUserStore({ dataDir, sharedWorkspaceSlug }) {
       state.workspaces[slug] = name;
       await write(state);
       return name;
+    },
+    async removeWorkspace(slug) {
+      const state = await read();
+      if (!state.workspaces[slug]) return false;
+      delete state.workspaces[slug];
+      await write(state);
+      return true;
     },
     async entitlements(name) {
       const state = await read();

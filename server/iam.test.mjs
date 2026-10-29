@@ -105,6 +105,27 @@ test("readers never receive write entitlements", async () => {
   });
 });
 
+test("users list their owned workspaces; a workspace record can be dropped", async () => {
+  const store = await setup();
+  await store.create({ name: "brian" });
+  await store.recordOwnership("any-obs-brian-02", "brian");
+  await store.recordOwnership("any-obs-brian-01", "brian");
+  await store.recordOwnership("shared-ghost", "ghost");
+
+  assert.deepEqual((await store.list()).find((user) => user.name === "brian").workspaces, [
+    "any-obs-brian-01",
+    "any-obs-brian-02",
+  ]);
+
+  assert.equal(await store.removeWorkspace("any-obs-brian-01"), true);
+  assert.deepEqual((await store.list()).find((user) => user.name === "brian").workspaces, ["any-obs-brian-02"]);
+  assert.deepEqual(await store.entitlements("brian"), {
+    read: ["shared", "any-obs-brian-02"],
+    write: ["any-obs-brian-02"],
+  });
+  assert.equal(await store.removeWorkspace("already-gone"), false);
+});
+
 test("token hashes are sha-256 of the raw token", async () => {
   const store = await setup();
   const { token } = await store.create({ name: "hash-check" });

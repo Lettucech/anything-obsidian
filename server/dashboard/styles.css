@@ -42,3 +42,4 @@ button { border: none; border-radius: 10px; padding: 9px 14px; font: inherit; fo
 .button-quiet { background: #22314e; color: #dce5f5; }
 .button-danger { background: #3a2030; color: #ff9a9a; }
 button:disabled { opacity: .5; cursor: default; }
+.workspace-line { margin: 2px 0 0 0; }

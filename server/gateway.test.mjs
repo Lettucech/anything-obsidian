@@ -272,6 +272,39 @@ test("resetting a token kills the old one on the spot", async () => {
   assert.equal((await fetchJson(`${adminUrl}/api/gateway/users/ghost/reset-token`, { method: "POST" })).status, 404);
 });
 
+test("admins delete a user's workspace: upstream goes first, then the ownership record", async () => {
+  const { adminUrl, publicUrl, upstream } = await startGateway();
+  const { userToken } = await createUser(adminUrl, publicUrl, "brian");
+  const auth = { Authorization: `Bearer ${userToken}` };
+
+  // The user's client mints its personal workspace through the proxy.
+  await fetchJson(`${publicUrl}/api/v1/workspace/new`, {
+    method: "POST", headers: auth, body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
+  });
+  assert.deepEqual((await fetchJson(`${adminUrl}/api/gateway/users`)).body.users
+    .find((user) => user.name === "brian").workspaces, ["any-obs-brians-mac-01"]);
+
+  // A member token cannot delete workspaces.
+  assert.equal((await fetchJson(`${publicUrl}/api/gateway/workspaces/any-obs-brians-mac-01`, {
+    method: "DELETE", headers: auth,
+  })).status, 404);
+
+  // The admin (loopback plane here) can; upstream is called with the admin
+  // key and the entitlement disappears entirely.
+  const removed = await fetchJson(`${adminUrl}/api/gateway/workspaces/any-obs-brians-mac-01`, { method: "DELETE" });
+  assert.equal(removed.status, 200);
+  assert.equal(upstream.calls.some((call) => call.method === "DELETE" && call.path.endsWith("/workspace/any-obs-brians-mac-01")), true);
+  assert.deepEqual((await fetchJson(`${adminUrl}/api/gateway/users`)).body.users
+    .find((user) => user.name === "brian").workspaces, []);
+  assert.deepEqual(await fetchJson(`${publicUrl}/api/v1/workspaces`, { headers: auth }).then((r) => r.body.workspaces.map((w) => w.slug)), [SHARED]);
+
+  // Deleting an upstream-already-gone workspace still clears the record.
+  await fetchJson(`${adminUrl}/api/gateway/users`, {
+    method: "POST", body: JSON.stringify({ name: "ghost" }),
+  });
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces/any-obs-ghost-404`, { method: "DELETE" })).status, 200);
+});
+
 function mcpTransport(baseUrl, token) {
   return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },

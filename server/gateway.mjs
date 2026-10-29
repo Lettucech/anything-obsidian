@@ -210,6 +210,24 @@ export function createGatewayServer({
       return reset ? sendJson(res, 200, reset) : sendJson(res, 404, { error: "User was not found" });
     }
 
+    const workspaceMatch = url.pathname.match(/^\/api\/gateway\/workspaces\/([a-z0-9-]+)$/);
+    if (workspaceMatch && req.method === "DELETE") {
+      adminOnly();
+      const slug = workspaceMatch[1];
+      const response = await fetchImpl(joinUrl(baseUrl, `/api/v1/workspace/${encodeURIComponent(slug)}`), {
+        method: "DELETE",
+        headers: { Accept: "application/json", Authorization: `Bearer ${apiKeyActive()}` },
+      });
+      // 404 means the workspace is already gone upstream; the ownership
+      // record dies either way so no entitlement ever points at a ghost.
+      if (!response.ok && response.status !== 404) {
+        const text = await response.text().catch(() => "");
+        throw httpError(502, `AnythingLLM API ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
+      }
+      await userStore.removeWorkspace(slug);
+      return sendJson(res, 200, { removed: slug });
+    }
+
     if (url.pathname === "/api/gateway/search" && req.method === "POST") {
       if (!identity) throw httpError(401, "Bearer token required");
       const entitlements = await entitlementsFor(identity);
