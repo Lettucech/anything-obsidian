@@ -147,23 +147,26 @@ export function createGatewayServer({
   }
 
   // The setup endpoint only exists while the gateway has no key; once the
-  // wizard completes it disappears (403) so it can never re-open.
+  // wizard completes it disappears (403) so it can never re-open. Later key
+  // changes go through the admin plane's settings endpoints.
   async function handleSetupApiKey(req, res) {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
     if (!(await needsSetup())) throw httpError(403, "Gateway is already configured; setup is closed");
     const body = await maybeJson(req);
     const candidate = stripTrailingSlash(String(body?.apiKey ?? "").trim());
     if (!candidate) throw httpError(400, "apiKey is required");
+    await verifyAndStoreApiKey(candidate);
+    return sendJson(res, 200, { configured: true });
+  }
 
+  async function verifyAndStoreApiKey(candidate) {
     // Verify against AnythingLLM before storing anything.
     const probe = await fetchImpl(`${baseUrl}/api/v1/workspaces`, {
       headers: { Accept: "application/json", Authorization: `Bearer ${candidate}` },
     });
     if (!probe.ok) throw httpError(400, `AnythingLLM rejected this API key (HTTP ${probe.status})`);
-
     await gatewayConfig.save({ apiKey: candidate });
     configuredApiKey = candidate;
-    return sendJson(res, 200, { configured: true });
   }
 
   async function handleGatewayApi({ req, res, url, identity, body }) {
@@ -174,6 +177,35 @@ export function createGatewayServer({
       if (identity?.kind === "user" && identity.role === "admin") return identity;
       throw httpError(404, "Not found");
     };
+
+    if (url.pathname === "/api/gateway/settings") {
+      adminOnly();
+      if (req.method === "GET") {
+        const state = await gatewayConfig.load();
+        const key = apiKeyActive();
+        let connected = false;
+        if (key) {
+          const probe = await fetchImpl(`${baseUrl}/api/v1/workspaces`, {
+            headers: { Accept: "application/json", Authorization: `Bearer ${key}` },
+          }).catch(() => null);
+          connected = Boolean(probe?.ok);
+        }
+        return sendJson(res, 200, {
+          anythingllmBaseUrl: baseUrl,
+          // Never the full key — enough to recognise which one is configured.
+          keyPreview: key ? `${key.slice(0, 4)}…${key.slice(-4)}` : "",
+          envKey: Boolean(anythingllmApiKey),
+          connected,
+        });
+      }
+    }
+    if (url.pathname === "/api/gateway/settings/api-key" && req.method === "POST") {
+      adminOnly();
+      const candidate = stripTrailingSlash(String(body?.apiKey ?? "").trim());
+      if (!candidate) throw httpError(400, "apiKey is required");
+      await verifyAndStoreApiKey(candidate);
+      return sendJson(res, 200, { updated: true });
+    }
 
     if (url.pathname === "/api/gateway/users") {
       if (req.method === "GET") {

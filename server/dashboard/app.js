@@ -102,6 +102,7 @@ function renderTabs(state) {
     ["Workspaces", renderWorkspaces],
     ["Users", renderUsers],
     ["Shared sources", renderSources],
+    ["Settings", renderSettings],
   ];
   const buttons = new Map();
   // One switch point: clear everything under the tab bar, then let the
@@ -287,6 +288,49 @@ async function renderOverview(state) {
     html("p", "note", `<strong>AnythingLLM UI</strong> stays off the network: open <code>${state.anythingllmUiUrl}</code> on the server, or <code>ssh -L 21501:127.0.0.1:21501 ${window.location.hostname}</code>.`),
   );
   els.status.textContent = "";
+  els.view.append(card);
+}
+
+async function renderSettings(state) {
+  const card = element("section", "card");
+  card.append(element("h2", "", "Settings"));
+  const info = element("div", "grid");
+  const status = element("span", "muted", "Checking connection…");
+  card.append(info, status);
+
+  const settings = await request("/api/gateway/settings");
+  info.replaceChildren(
+    metric("AnythingLLM", settings.anythingllmBaseUrl || "not configured"),
+    metric("API key", settings.keyPreview || "not set"),
+    metric("Connection", settings.connected ? "OK" : "failing"),
+  );
+  status.textContent = settings.connected ? "" : "The configured key is not answering — update it below.";
+
+  const form = element("form", "row");
+  const input = element("input", "", "");
+  input.type = "password";
+  input.placeholder = "New AnythingLLM developer API key";
+  input.required = true;
+  const submit = element("button", "button button-primary", "Update key");
+  form.append(input, submit);
+  const note = settings.envKey
+    ? element("p", "note", "The key is preset via the ANYTHINGLLM_API_KEY environment variable, which always wins over the stored one. Update it in server/.env or compose instead.")
+    : element("p", "note", "The new key is verified against AnythingLLM before it replaces the stored one.");
+  if (settings.envKey) { input.disabled = true; submit.disabled = true; }
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await request("/api/gateway/settings/api-key", { method: "POST", body: JSON.stringify({ apiKey: input.value }) });
+      input.value = "";
+      card.querySelector(".error")?.remove();
+      status.textContent = "Key updated.";
+      await renderSettings(state);
+    } catch (error) {
+      card.querySelector(".error")?.remove();
+      card.append(element("p", "error", error.message));
+    }
+  });
+  card.append(form, note);
   els.view.append(card);
 }
 

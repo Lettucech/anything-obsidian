@@ -362,6 +362,51 @@ test("reverse scan: upstream workspaces the gateway does not track show as untra
   })).status, 404);
 });
 
+test("settings: connection status, masked key, and updating the key later", async () => {
+  const { adminUrl, publicUrl, upstream, dataDir } = await startGateway({ envKey: false });
+
+  // Configure via the wizard first.
+  await fetchJson(`${adminUrl}/api/setup/api-key`, {
+    method: "POST", body: JSON.stringify({ apiKey: "minted-developer-key" }),
+  });
+
+  const settings = await fetchJson(`${adminUrl}/api/gateway/settings`);
+  assert.equal(settings.status, 200);
+  assert.equal(settings.body.anythingllmBaseUrl, "http://anythingllm.test");
+  assert.equal(settings.body.keyPreview, "mint…-key");
+  assert.equal(settings.body.envKey, false);
+  assert.equal(settings.body.connected, true);
+
+  // A wrong candidate is rejected and nothing changes.
+  const bad = await fetchJson(`${adminUrl}/api/gateway/settings/api-key`, {
+    method: "POST", body: JSON.stringify({ apiKey: "wrong" }),
+  });
+  assert.equal(bad.status, 400);
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/settings`)).body.keyPreview, "mint…-key");
+
+  // A valid candidate replaces it and the gateway immediately uses it.
+  const updated = await fetchJson(`${adminUrl}/api/gateway/settings/api-key`, {
+    method: "POST", body: JSON.stringify({ apiKey: "admin-key" }),
+  });
+  assert.equal(updated.status, 200);
+  assert.equal((await fetchJson(`${adminUrl}/api/gateway/settings`)).body.keyPreview, "admi…-key");
+
+  // An env-preset key reports itself; update is a no-op against env wins.
+  const envBased = await startGateway();
+  const envSettings = await fetchJson(`${envBased.adminUrl}/api/gateway/settings`);
+  assert.equal(envSettings.body.envKey, true);
+  assert.equal(envSettings.body.keyPreview, "admi…-key");
+
+  // The public plane has no settings surface at all.
+  const { userToken } = await createUser(adminUrl, publicUrl, "brian");
+  assert.equal((await fetchJson(`${publicUrl}/api/gateway/settings`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  })).status, 404);
+  assert.equal((await fetchJson(`${publicUrl}/api/gateway/settings/api-key`, {
+    method: "POST", headers: { Authorization: `Bearer ${userToken}` }, body: JSON.stringify({ apiKey: "x" }),
+  })).status, 404);
+});
+
 function mcpTransport(baseUrl, token) {
   return new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
