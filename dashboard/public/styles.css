@@ -333,3 +333,6 @@ dialog form { padding: clamp(22px, 4vw, 34px); }
 .vault-card.sync-failed .vault-id::after { content: " — sync failed"; color: var(--danger); font-weight: 650; }
 
 .update-badge { border: 1px solid var(--accent); background: var(--status-surface); color: var(--accent-strong); border-radius: 999px; padding: 6px 12px; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
+
+.workspace-pill { padding: 4px 12px; border-radius: 999px; background: #10314a; color: #92d8ff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
+.rag-workspaces { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }

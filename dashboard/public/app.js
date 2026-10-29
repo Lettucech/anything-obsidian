@@ -161,6 +161,7 @@ if (typeof document !== "undefined") {
     "agents", "agent-message", "add-agent", "agent-dialog", "agent-form", "agent-form-title",
     "agent-create-fields", "agent-token-reveal", "agent-token-value", "agent-submit", "cancel-agent", "agent-dialog-message",
     "import-browse", "import-browse-toggle", "import-tree-panel", "import-breadcrumb", "import-tree", "import-tree-note", "import-use-folder", "import-refresh-tree", "import-path-jump", "import-jump",
+    "rag-workspaces",
   ].map((id) => [id.replaceAll("-", ""), document.querySelector(`#${id}`)]));
 
   const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
@@ -498,6 +499,7 @@ if (typeof document !== "undefined") {
     els.power.textContent = systemPowerLabel(state.status.systemState);
     els.power.classList.toggle("is-on", state.status.systemState === "on");
     els.services.replaceChildren(...state.status.services.map(renderService));
+    renderRagWorkspaces();
     els.vaults.replaceChildren(...(state.vaults.length ? state.vaults.map(renderVault) : [emptyState()]));
     els.agents.replaceChildren(...(state.agents.length ? state.agents.map(renderAgent) : [element("p", "note", "No agent tokens yet. Create one, then name it in a vault's access policy allowlist.")]));
     els.vaultsummary.replaceChildren(...dashboardMetrics(state.status, state.vaults).map(renderMetric));
@@ -509,6 +511,20 @@ if (typeof document !== "undefined") {
     els.latestjob.textContent = latest
       ? `${latest.vaultId}: ${latest.label} — ${latest.status}${jobProgressLabel(latest)}`
       : "No dashboard worker job yet";
+  }
+
+  function renderRagWorkspaces() {
+    const workspaces = state.status.visibleWorkspaces ?? [];
+    const list = els.ragworkspaces;
+    if (!list) return;
+    if (!workspaces.length) {
+      list.replaceChildren(element("p", "note", "No RAG workspaces are visible yet. Add a vault to create this instance's own workspace, or ask your gateway admin to grant a shared workspace to this client."));
+      return;
+    }
+    list.replaceChildren(
+      ...workspaces.map((slug) => element("span", "pill workspace-pill", slug)),
+      element("span", "muted", "searchable by this instance's agents in one any_obs_rag_search query"),
+    );
   }
 
   function renderMetric(metric) {
