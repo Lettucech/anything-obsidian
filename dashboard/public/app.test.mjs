@@ -86,6 +86,7 @@ test("slugifyName turns a folder name into a valid vault id", () => {
 test("dashboard metrics summarize the unified workspace, schedules, and services", () => {
   assert.deepEqual(dashboardMetrics({
     workspace: { slug: "any-obs-test-01" },
+    visibleWorkspaces: ["any-obs-test-01", "company-kb"],
     services: [
       { running: true, health: { ok: true } },
       { running: true, health: { ok: false } },
@@ -93,11 +94,11 @@ test("dashboard metrics summarize the unified workspace, schedules, and services
     ],
   }, [{ enabled: true }, { enabled: false }]), [
     { label: "Managed vaults", value: 2 },
-    { label: "RAG workspace", value: "any-obs-test-01" },
+    { label: "RAG workspaces", value: 2 },
     { label: "Scheduled sync", value: 1 },
     { label: "Healthy services", value: "1/3" },
   ]);
-  assert.deepEqual(dashboardMetrics({ services: [] }, []).at(1), { label: "RAG workspace", value: "Not set up yet" });
+  assert.deepEqual(dashboardMetrics({ services: [] }, []).at(1), { label: "RAG workspaces", value: "Not set up yet" });
 });
 
 test("theme resolves a saved preference before the system preference", () => {

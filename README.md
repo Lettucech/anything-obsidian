@@ -328,7 +328,12 @@ your AnythingLLM's URL is then `http://localhost:21501`.
 
 - **any-obs clients** connect exactly as before —
   `--url http://<server>:21500 --api-key <user-token>`. The unified workspace
-  their client creates is recorded as that user's personal workspace.
+  their client creates is recorded as that user's personal workspace, and
+  granted shared workspaces are first-class on the client too: its
+  `any_obs_rag_search` fans out across everything the token can see and the
+  client dashboard shows the visible workspaces. (Grant a user a shared
+  workspace in the gateway's Workspaces tab first — a shared workspace with
+  an empty grants list is invisible by design.)
 - **Agents without a local any-obs** use the token-gated MCP endpoint at
   `http://<server>:21500/mcp`: `any_obs_rag_search` (fan-out),
   `any_obs_rag_answer`, `any_obs_shared_refresh`, `any_obs_job_get`.

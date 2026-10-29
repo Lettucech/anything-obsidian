@@ -76,7 +76,7 @@ export function dashboardMetrics(status, vaults) {
   const services = status.services ?? [];
   return [
     { label: "Managed vaults", value: vaults.length },
-    { label: "RAG workspace", value: status.workspace?.slug || "Not set up yet" },
+    { label: "RAG workspaces", value: status.visibleWorkspaces?.length || (status.workspace ? 1 : 0) || "Not set up yet" },
     { label: "Scheduled sync", value: vaults.filter((vault) => vault.enabled).length },
     { label: "Healthy services", value: `${services.filter((service) => service.running && service.health?.ok).length}/${services.length}` },
   ];

@@ -249,3 +249,67 @@ function restoreEnv(previous) {
     else process.env[key] = value;
   }
 }
+
+test("rag_search fans out across every workspace the key can see and merges by score", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-fanout-"));
+  const registryPath = path.join(root, "vaults.json");
+  await writeFile(registryPath, JSON.stringify({
+    workspace: { slug: "any-obs-own-01", name: "Anything Obsidian" },
+    vaults: [
+      { id: "work", name: "Work", directory: "work", enabled: true, accessMode: "open", allowlist: [] },
+    ],
+  }));
+
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), body: init.body });
+    const parsed = new URL(String(url));
+    if (parsed.pathname === "/api/v1/workspaces") {
+      // The gateway/proxy answers with exactly what this token may read.
+      return jsonResponse({ workspaces: [{ slug: "any-obs-own-01" }, { slug: "company-kb" }] });
+    }
+    const slug = decodeURIComponent(parsed.pathname.split("/")[4] ?? "");
+    return jsonResponse({
+      results: slug === "company-kb"
+        ? [{ score: 0.95, chunkSource: "work/handbook/intro.md", text: "shared best hit" }]
+        : [{ score: 0.7, chunkSource: "work/notes/a.md", text: "own hit" }],
+    });
+  };
+
+  const previous = captureEnv({
+    VAULT_REGISTRY_PATH: registryPath,
+    ANYTHINGLLM_BASE_URL: "http://anythingllm.test",
+    ANYTHINGLLM_API_KEY: "user-token",
+  });
+  try {
+    const [client, server] = await connect("local", ANONYMOUS_IDENTITY);
+    const search = JSON.parse((await client.callTool({
+      name: "any_obs_rag_search",
+      arguments: { query: "anything", topN: 5 },
+    })).content[0].text);
+
+    // Merged by score across both workspaces, each tagged with its own.
+    assert.deepEqual(search.results.map((chunk) => [chunk.workspace, chunk.text]), [
+      ["company-kb", "shared best hit"],
+      ["any-obs-own-01", "own hit"],
+    ]);
+    assert.equal(search.vaultAttribution.attributed, 2);
+    assert.deepEqual(search.workspaces.searched, ["any-obs-own-01", "company-kb"]);
+    assert.deepEqual(search.workspaces.failed, []);
+
+    await client.close();
+    await server.close();
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(previous);
+  }
+});
+
+function jsonResponse(data) {
+  return {
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify(data),
+  };
+}

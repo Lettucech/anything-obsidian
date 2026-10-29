@@ -400,12 +400,25 @@ async function statusPayload(context) {
     systemState: classifySystemState(services),
     services,
     workspace: await registry.getWorkspace(),
+    // Every RAG workspace the configured key can see: the instance's own
+    // unified workspace, plus gateway-granted shared workspaces when this
+    // client connects through a gateway.
+    visibleWorkspaces: await visibleWorkspaces(anythingllm).catch(() => []),
     latestJob: jobs.latest(),
     jobs: jobs.list?.() ?? [],
     config: publicConfig(env),
     update: { current, latest, available: Boolean(latest) && compareVersions(current, latest) < 0 },
     lan: { enabled: lanEnabled },
   });
+}
+
+async function visibleWorkspaces(anythingllm) {
+  try {
+    const workspaces = await anythingllm.listWorkspaces();
+    return workspaces.map((workspace) => workspace.slug);
+  } catch {
+    return [];
+  }
 }
 
 async function serviceSnapshot({ anythingllm, native, fetchImpl, env = {} }) {

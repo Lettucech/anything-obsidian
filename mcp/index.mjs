@@ -131,7 +131,7 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
 
   server.tool(
     "any_obs_rag_search",
-    "Search the unified vector index across every managed vault and return matching source chunks, each tagged with its vaultId and vault-relative path so the source file can be read from the owning vault. vaultId optionally filters results to one vault. Prefer this for agent RAG.",
+    "Search every RAG workspace this instance can see — its own unified index plus any gateway-granted shared workspaces — in one query. Chunks are merged by score and tagged with their workspace, vaultId, and vault-relative path so the source file can be read from the owning vault. vaultId optionally filters results to one vault. Prefer this for agent RAG.",
     {
       query: z.string().min(1),
       vaultId: z.string().min(1).optional(),
@@ -139,28 +139,101 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
       scoreThreshold: z.number().min(0).max(1).optional(),
     },
     async ({ query, vaultId, topN, scoreThreshold }) => {
-      const workspace = await requireUnifiedWorkspace(vaultRegistryPath);
+      const workspaces = await visibleRagWorkspaces(vaultRegistryPath, { baseUrl, apiKey });
       const vaults = await loadVaults(vaultRegistryPath);
       const accessible = visibleVaults(vaults, identity);
       if (vaultId) resolveVault(vaults, vaultId, identity);
       const accessibleIds = new Set(accessible.map((vault) => vault.id));
       const blockedVaultIds = vaults.filter((vault) => !accessibleIds.has(vault.id)).map((vault) => vault.id);
 
-      const data = await requestJson(vectorSearchPathTemplate.replace("{slug}", encodeURIComponent(workspace.slug)), {
-        method: "POST",
-        body: JSON.stringify({ query, topN, ...(scoreThreshold !== undefined ? { scoreThreshold } : {}) }),
-      }, { baseUrl, apiKey });
-      const { data: enriched, summary } = attributeRagResults(data, {
-        vaultIds: [...accessibleIds],
-        filterVaultId: vaultId ?? "",
-        blockedVaultIds,
-      });
-      if (enriched && typeof enriched === "object" && !Array.isArray(enriched)) {
-        enriched.vaultAttribution = summary;
+      const bodies = workspaces.map((slug) =>
+        requestJson(vectorSearchPathTemplate.replace("{slug}", encodeURIComponent(slug)), {
+          method: "POST",
+          body: JSON.stringify({ query, topN, ...(scoreThreshold !== undefined ? { scoreThreshold } : {}) }),
+        }, { baseUrl, apiKey })
+          .then((data) => ({ slug, data }))
+          .catch((error) => ({ slug, error: error instanceof Error ? error.message : String(error) })),
+      );
+      const responses = await Promise.all(bodies);
+
+      const merged = [];
+      const failures = [];
+      const attribution = { attributed: 0, dropped: 0 };
+      for (const response of responses) {
+        if (response.error) {
+          failures.push({ workspace: response.slug, error: response.error });
+          continue;
+        }
+        const { data: enriched, summary } = attributeRagResults(response.data, {
+          vaultIds: [...accessibleIds],
+          filterVaultId: vaultId ?? "",
+          blockedVaultIds,
+        });
+        attribution.attributed += summary.attributed;
+        attribution.dropped += summary.dropped;
+        for (const chunk of extractRagChunks(enriched)) {
+          merged.push({ ...chunk, workspace: response.slug });
+        }
       }
-      return asJsonContent(enriched);
+      merged.sort((a, b) => (typeof b.score === "number" ? b.score : 0) - (typeof a.score === "number" ? a.score : 0));
+      const payload = {
+        query,
+        results: merged.slice(0, topN),
+        vaultAttribution: attribution,
+        workspaces: { searched: workspaces, failed: failures },
+        ...(failures.length ? { note: "Results are partial: some workspaces failed to answer" } : {}),
+      };
+      return asJsonContent(payload);
     },
   );
+}
+
+// AnythingLLM has never committed to one vector-search response shape: find
+// the first array of chunk-looking objects anywhere in the payload.
+function extractRagChunks(data) {
+  const chunks = [];
+  walk(data);
+  return chunks;
+
+  function walk(value) {
+    if (Array.isArray(value)) {
+      if (value.some(looksLikeChunk)) {
+        chunks.push(...value.filter(looksLikeChunk));
+        return;
+      }
+      for (const item of value) walk(item);
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const inner of Object.values(value)) {
+        if (Array.isArray(inner) || (inner && typeof inner === "object")) walk(inner);
+      }
+    }
+  }
+
+  function looksLikeChunk(item) {
+    return Boolean(item) && typeof item === "object" && !Array.isArray(item) &&
+      (typeof item.text === "string" || typeof item.score === "number");
+  }
+}
+
+// One query across everything the configured key can see. Against plain
+// AnythingLLM that is exactly the instance's unified workspace (key = the
+// instance's developer key); against a gateway it is the filtered list the
+// proxy answers with — personal plus granted shared workspaces.
+async function visibleRagWorkspaces(vaultRegistryPath, { baseUrl, apiKey }) {
+  const workspace = await requireUnifiedWorkspace(vaultRegistryPath);
+  try {
+    const data = await requestJson("/api/v1/workspaces", { method: "GET" }, { baseUrl, apiKey });
+    const slugs = (data?.workspaces ?? []).map((workspace) => workspace.slug).filter(Boolean);
+    if (slugs.length && !slugs.includes(workspace.slug)) {
+      return [workspace.slug, ...slugs];
+    }
+    return slugs.length ? slugs : [workspace.slug];
+  } catch {
+    // Plain AnythingLLM quirks should never break the primary workspace.
+    return [workspace.slug];
+  }
 }
 
 async function requireUnifiedWorkspace(vaultRegistryPath) {
