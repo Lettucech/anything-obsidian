@@ -30,6 +30,19 @@ export async function decide({ method, pathname, identity, body, entitlements })
     return { action: "create-workspace" };
   }
 
+  // Synthesized route: the embed pipeline reconciles its document folder
+  // against the workspace, and a user token may see the document list of any
+  // workspace it can read — but not the workspace detail response that
+  // AnythingLLM carries it in.
+  const documentsList = pathname.match(/^\/api\/v1\/workspace\/([^/]+)\/documents$/);
+  if (documentsList && method === "GET") {
+    const slug = decodeURIComponent(documentsList[1]);
+    if (!isAdmin && !entitlements.read.includes(slug)) {
+      return deny(403, `Workspace is not readable by this user: ${slug}`);
+    }
+    return { action: "workspace-documents", slug };
+  }
+
   const workspaceAction = pathname.match(/^\/api\/v1\/workspace\/([^/]+)\/(vector-search|chat|update-embeddings)$/);
   if (workspaceAction && method === "POST") {
     const slug = decodeURIComponent(workspaceAction[1]);

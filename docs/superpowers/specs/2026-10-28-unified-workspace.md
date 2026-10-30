@@ -101,3 +101,17 @@ left in place, never deleted.
 restricted caller using answer (rather than search) can surface restricted
 vault content in prose. Per-agent deployment makes this moot in practice;
 revisit only if the central multi-agent model returns.
+
+## Embed reconciliation (added 2026-10-30)
+
+The migration's manifest wipe makes the next embed a full re-upload. AnythingLLM
+gives every upload a fresh location, so a re-upload into a workspace that still
+holds the previous copies — an attached rather than freshly created workspace,
+a moved state root, a re-created source — would duplicate every document with
+no way to delete the stale copies (both `update-embeddings` deletes and vault
+purges are manifest-driven, and the manifest is what was lost). Each embed run
+therefore reconciles: it lists the workspace's documents, claims the ones under
+its own folders (the per-vault folder plus the legacy
+`anything-obsidian-vault/<vaultId>/` layout), and passes everything unclaimed
+and untracked to `update-embeddings` as deletes. Reconciliation is best
+effort — when the workspace cannot be listed the embed proceeds without it.

@@ -106,7 +106,7 @@ test("worker sync logs progress", async () => {
     "Sync started",
     "Git sync completed; pushed=true",
     "Embedding started",
-    "Embedding completed; scanned=3 uploaded=2 removed=1 workspace=obsidian",
+    "Embedding completed; scanned=3 uploaded=2 removed=1 reconciled=0 workspace=obsidian",
     "Sync completed; embedded=true",
   ]);
 });

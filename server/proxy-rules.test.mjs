@@ -32,6 +32,20 @@ test("workspace creation is ownership-minting for users", async () => {
   assert.deepEqual(await decideAs(ADMIN, "POST", "/api/v1/workspace/new"), { action: "proxy" });
 });
 
+test("workspace documents are readable wherever the workspace is readable", async () => {
+  assert.deepEqual(await decideAs(USER, "GET", "/api/v1/workspace/any-obs-brian-01/documents"), {
+    action: "workspace-documents",
+    slug: "any-obs-brian-01",
+  });
+  assert.deepEqual(await decideAs(ADMIN, "GET", "/api/v1/workspace/shared/documents"), {
+    action: "workspace-documents",
+    slug: "shared",
+  });
+  const denied = await decideAs(USER, "GET", "/api/v1/workspace/other-secret/documents");
+  assert.equal(denied.action, "deny");
+  assert.match(denied.reason, /not readable/);
+});
+
 test("RAG reads require an entitled workspace slug", async () => {
   for (const slug of ["shared", "any-obs-brian-01"]) {
     for (const verb of ["vector-search", "chat"]) {

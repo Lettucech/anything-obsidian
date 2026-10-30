@@ -15,6 +15,12 @@ const repoRoot = path.resolve(path.dirname(__filename), "..");
 // variable part and registry ids are slugs.
 export const DEFAULT_DOCUMENT_UPLOAD_PATH_TEMPLATE = "/api/v1/document/upload/{folder}";
 
+// Folder layout before per-vault folders existed: one shared default folder
+// with the vault id as a subpath (`anything-obsidian-vault/<vaultId>/...`).
+// Stale-document reconciliation must claim that layout too, or old copies
+// survive a manifest loss forever.
+export const LEGACY_DOCUMENT_FOLDER = "anything-obsidian-vault";
+
 export async function embedVault({ config, all = false }) {
   const baseUrl = stripTrailingSlash(config.anythingllmBaseUrl);
   const apiKey = config.apiKey;
@@ -87,10 +93,35 @@ export async function embedVault({ config, all = false }) {
     console.log(`Marked deleted ${rel}`);
   }
 
+  // Reconciliation: anything sitting in this vault's folders that the
+  // manifest no longer tracks is a stale copy (a wiped or moved manifest
+  // made the last re-upload append without deletes). Folder documents are
+  // pipeline-owned derived data, so untracked ones are deleted here — the
+  // manifest is the only durable record of what was embedded, and without
+  // this pass the copies would never be removable again.
+  const trackedLocations = new Set(additions);
+  for (const entry of Object.values(nextManifest.files)) {
+    for (const location of entry?.locations ?? []) trackedLocations.add(location);
+  }
+  const { untracked, listed } = await findUntrackedFolderDocuments({
+    baseUrl,
+    apiKey,
+    workspaceSlug,
+    vaultId: config.vaultId,
+    documentFolder,
+    trackedLocations,
+  });
+  let reconciled = 0;
+  if (listed && untracked.length) {
+    reconciled = untracked.length;
+    deletions.push(...untracked);
+    console.log(`Reconciled ${reconciled} untracked document(s) in ${documentFolder}`);
+  }
+
   if (additions.length || deletions.length) {
     await updateEmbeddings({
       adds: additions,
-      deletes: deletions,
+      deletes: [...new Set(deletions)],
       baseUrl,
       apiKey,
       workspaceSlug,
@@ -104,6 +135,7 @@ export async function embedVault({ config, all = false }) {
     scanned: files.length,
     uploaded: additions.length,
     removed: deletions.length,
+    reconciled,
     workspaceSlug,
   };
 }
@@ -186,6 +218,67 @@ async function updateEmbeddings({
     body: JSON.stringify({ adds, deletes }),
   });
   return readResponse(response, "update embeddings");
+}
+
+// Documents of this vault in the target workspace that no manifest entry
+// tracks. Best effort: when the workspace cannot be listed (older backend,
+// denied route) the caller skips reconciliation and embedding proceeds.
+async function findUntrackedFolderDocuments({
+  baseUrl,
+  apiKey,
+  workspaceSlug,
+  vaultId,
+  documentFolder,
+  trackedLocations,
+}) {
+  const documents = await listWorkspaceDocuments({ baseUrl, apiKey, workspaceSlug });
+  if (!documents) return { untracked: [], listed: false };
+  const prefixes = ownedPathPrefixes({ documentFolder, vaultId });
+  if (!prefixes.length) return { untracked: [], listed: true };
+  const untracked = [];
+  for (const document of documents) {
+    const docpath = document?.docpath ?? document?.location;
+    if (typeof docpath !== "string" || !docpath) continue;
+    if (!prefixes.some((prefix) => docpath.startsWith(prefix))) continue;
+    if (!trackedLocations.has(docpath)) untracked.push(docpath);
+  }
+  return { untracked, listed: true };
+}
+
+function ownedPathPrefixes({ documentFolder, vaultId }) {
+  const prefixes = [`${documentFolder}/`];
+  // The shared legacy folder hosts every vault under a per-vault subpath, so
+  // there the vault-scoped prefix replaces the folder-wide one — claiming the
+  // whole folder would delete sibling vaults' documents.
+  if (documentFolder === LEGACY_DOCUMENT_FOLDER) prefixes.length = 0;
+  if (vaultId) prefixes.push(`${LEGACY_DOCUMENT_FOLDER}/${vaultId}/`);
+  return prefixes;
+}
+
+// AnythingLLM has no folder-listing endpoint; the workspace detail response
+// carries every document with its `docpath` (`<folder>/<...>/<name>.json`).
+// Gateways expose the same shape through a synthesized
+// `/workspace/{slug}/documents` route because user tokens may not read the
+// full workspace detail.
+async function listWorkspaceDocuments({ baseUrl, apiKey, workspaceSlug }) {
+  const slug = encodeURIComponent(workspaceSlug);
+  for (const apiPath of [`/api/v1/workspace/${slug}/documents`, `/api/v1/workspace/${slug}`]) {
+    let data = null;
+    try {
+      const response = await fetch(apiUrl(baseUrl, apiPath), {
+        headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+      });
+      if (!response.ok) continue;
+      const text = await response.text();
+      data = text ? safeJson(text) : null;
+    } catch {
+      continue;
+    }
+    const workspace = Array.isArray(data?.workspace) ? data.workspace[0] : data?.workspace;
+    if (Array.isArray(workspace?.documents)) return workspace.documents;
+    if (Array.isArray(data?.documents)) return data.documents;
+  }
+  return null;
 }
 
 async function readResponse(response, action) {

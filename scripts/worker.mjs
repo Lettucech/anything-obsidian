@@ -168,7 +168,7 @@ function formatLog(message) {
 }
 
 function formatEmbedResult(prefix, result) {
-  return `${prefix}; scanned=${result.scanned} uploaded=${result.uploaded} removed=${result.removed} workspace=${result.workspaceSlug}`;
+  return `${prefix}; scanned=${result.scanned} uploaded=${result.uploaded} removed=${result.removed} reconciled=${result.reconciled ?? 0} workspace=${result.workspaceSlug}`;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

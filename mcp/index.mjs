@@ -114,14 +114,19 @@ function registerLocalVaultTools(server, vaultFiles) {
 function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identity) {
   server.tool(
     "any_obs_rag_answer",
-    "Ask AnythingLLM to answer from the unified index of every managed vault at once. The answer can draw on any vault; use anythingllm rag search when you need attributed source chunks.",
+    "Ask AnythingLLM to answer from this instance's unified index of all managed vaults. Answer mode is RAG chat: queries whose retrieval scores fall below the workspace's relevance cutoff are refused, so generic queries may answer nothing — use any_obs_rag_search for raw attributed chunks regardless of score.",
     {
       question: z.string().min(1),
       mode: z.enum(["query", "chat"]).default("query"),
     },
     async ({ question, mode }) => {
       const visible = await visibleRagWorkspaces(vaultRegistryPath, { baseUrl, apiKey });
-      const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(visible[0])), {
+      // Cross-vault synthesis targets this instance's own unified workspace;
+      // gateway-granted shared workspaces stay search-only surfaces. Clients
+      // without their own workspace answer from the first visible one.
+      const own = await loadWorkspace(vaultRegistryPath).catch(() => null);
+      const slug = own && visible.includes(own.slug) ? own.slug : visible[0];
+      const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(slug)), {
         method: "POST",
         body: JSON.stringify({ message: question, mode }),
       }, { baseUrl, apiKey });

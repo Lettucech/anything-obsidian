@@ -46,6 +46,20 @@ Management tools (local profile only): `any_obs_vault_add`,
 `any_obs_agent_create`, `any_obs_agent_revoke`, `any_obs_status`,
 `any_obs_autostart`, `any_obs_lan`.
 
+Search and answer apply relevance differently. `any_obs_rag_search` is a raw
+vector search: with an explicit low `scoreThreshold` it returns the nearest
+chunks regardless of quality. `any_obs_rag_answer` is AnythingLLM RAG chat in
+query mode, which refuses when nothing scores above the workspace's relevance
+cutoff — generic queries can legitimately answer nothing while search still
+returns chunks. Reach for search first; reserve answer for questions that
+should be synthesised.
+
+Two more things worth knowing: answer targets this instance's own unified
+workspace (gateway-granted shared workspaces are search surfaces), and
+chunks from workspaces outside the local registry — for example shared
+team knowledge — carry only their `workspace` tag, no `vaultId`, because
+they cannot be resolved to a locally readable file.
+
 For a reusable retrieval and edit workflow, install the repository skill:
 
 ```bash

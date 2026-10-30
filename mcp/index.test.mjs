@@ -314,6 +314,52 @@ function jsonResponse(data) {
   };
 }
 
+test("rag_answer targets the instance's own unified workspace, not an arbitrary visible one", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-answer-own-"));
+  const registryPath = path.join(root, "vaults.json");
+  await writeFile(registryPath, JSON.stringify({
+    workspace: { slug: "any-obs-own-01", name: "Anything Obsidian" },
+    vaults: [],
+  }));
+
+  const originalFetch = globalThis.fetch;
+  const chatUrls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === "/api/v1/workspaces") {
+      // The own workspace is deliberately not first: answer mode must still
+      // pick it over the first-listed grant.
+      return jsonResponse({ workspaces: [{ slug: "company-kb" }, { slug: "any-obs-own-01" }] });
+    }
+    if (parsed.pathname.endsWith("/chat")) {
+      chatUrls.push(String(url));
+      return jsonResponse({ textResponse: "answered from own workspace" });
+    }
+    return jsonResponse({ results: [] });
+  };
+
+  const previous = captureEnv({
+    VAULT_REGISTRY_PATH: registryPath,
+    ANYTHINGLLM_BASE_URL: "http://anythingllm.test",
+    ANYTHINGLLM_API_KEY: "user-token",
+  });
+  try {
+    const [client, server] = await connect("local", ANONYMOUS_IDENTITY);
+    const answer = JSON.parse((await client.callTool({
+      name: "any_obs_rag_answer",
+      arguments: { question: "what changed?" },
+    })).content[0].text);
+    assert.equal(answer.textResponse, "answered from own workspace");
+    assert.deepEqual(chatUrls, ["http://anythingllm.test/api/v1/workspace/any-obs-own-01/chat"]);
+
+    await client.close();
+    await server.close();
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv(previous);
+  }
+});
+
 test("a consumer client with no vaults still searches gateway-granted shared workspaces", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-consumer-"));
   const registryPath = path.join(root, "vaults.json");

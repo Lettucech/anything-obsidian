@@ -424,6 +424,13 @@ export function createGatewayServer({
       );
       return sendJson(res, 200, { workspaces: visible });
     }
+    if (decision.action === "workspace-documents") {
+      // Only the document list crosses the proxy — never the workspace
+      // detail response it comes from.
+      const data = await anythingllmRequest(`/api/v1/workspace/${encodeURIComponent(decision.slug)}`, { method: "GET" });
+      const workspace = Array.isArray(data?.workspace) ? data.workspace[0] : data?.workspace;
+      return sendJson(res, 200, { documents: workspace?.documents ?? [] });
+    }
 
     const raw = bodyJson === null ? await readRawBody(req) : Buffer.from(JSON.stringify(bodyJson));
     const headers = {

@@ -202,6 +202,30 @@ test("public proxy: workspace listing is filtered and workspace creation mints o
   assert.equal((await fetchJson(`${publicUrl}/api/v1/admin/anything`, { method: "POST", headers: auth })).status, 403);
 });
 
+test("public proxy: workspace documents are visible to entitled readers only", async () => {
+  const { adminUrl, publicUrl, upstream } = await startGateway();
+  upstream.state.documents = {
+    "docs-ws": [{ docpath: "anything-obsidian-vault-docs-ws/note.md-1.json" }],
+  };
+  const { userToken } = await createUser(adminUrl, publicUrl, "brian");
+  const auth = { Authorization: `Bearer ${userToken}` };
+
+  await fetchJson(`${publicUrl}/api/v1/workspace/new`, {
+    method: "POST", headers: auth, body: JSON.stringify({ name: "docs-ws" }),
+  });
+
+  // The embed pipeline reconciles its folder through this route; the full
+  // workspace detail response never crosses the proxy.
+  const docs = await fetchJson(`${publicUrl}/api/v1/workspace/docs-ws/documents`, { headers: auth });
+  assert.equal(docs.status, 200);
+  assert.deepEqual(docs.body, {
+    documents: [{ docpath: "anything-obsidian-vault-docs-ws/note.md-1.json" }],
+  });
+
+  const denied = await fetchJson(`${publicUrl}/api/v1/workspace/other-secret/documents`, { headers: auth });
+  assert.equal(denied.status, 403);
+});
+
 test("workspaces tab data: list, pre-provision with an owner, all admin-only", async () => {
   const { adminUrl, publicUrl } = await startGateway();
   const { userToken } = await createUser(adminUrl, publicUrl, "brian");
@@ -530,6 +554,7 @@ function fakeAnythingllm() {
       "other-secret": [{ text: "secret hit", score: 0.95 }],
       "company-kb": [{ text: "kb hit", score: 0.9 }],
     },
+    documents: {},
   };
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
@@ -544,6 +569,11 @@ function fakeAnythingllm() {
       return jsonResponse(401, { error: "invalid api key" });
     }
     if (parsed.pathname === "/api/v1/workspaces") return jsonResponse(200, { workspaces: state.workspaces });
+    const detailMatch = parsed.pathname.match(/^\/api\/v1\/workspace\/([^/]+)$/);
+    if (detailMatch && init.method === "GET") {
+      const slug = decodeURIComponent(detailMatch[1]);
+      return jsonResponse(200, { workspace: [{ slug, documents: state.documents[slug] ?? [] }] });
+    }
     if (parsed.pathname === "/api/v1/workspace/new") {
       const name = safeJson(init.body)?.name ?? "unnamed";
       const workspace = { id: state.workspaces.length + 1, name, slug: name };
