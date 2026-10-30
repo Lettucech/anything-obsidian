@@ -5,6 +5,29 @@ const els = {
 };
 
 let viewController = new AbortController();
+const themeToggle = document.querySelector("#theme-toggle");
+const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+let theme = window.localStorage.getItem("anything-obsidian-theme");
+if (!["light", "dark"].includes(theme)) theme = themeMedia.matches ? "dark" : "light";
+applyTheme(theme);
+themeToggle.addEventListener("click", () => {
+  theme = theme === "dark" ? "light" : "dark";
+  window.localStorage.setItem("anything-obsidian-theme", theme);
+  applyTheme(theme);
+});
+themeMedia.addEventListener("change", (event) => {
+  if (window.localStorage.getItem("anything-obsidian-theme")) return;
+  theme = event.matches ? "dark" : "light";
+  applyTheme(theme);
+});
+
+function applyTheme(value) {
+  document.documentElement.dataset.theme = value;
+  document.querySelector('meta[name="theme-color"]').content = value === "dark" ? "#171c19" : "#ffffff";
+  themeToggle.textContent = value === "dark" ? "Dark" : "Light";
+  themeToggle.setAttribute("aria-label", `Switch to ${value === "dark" ? "light" : "dark"} theme`);
+}
+
 boot();
 
 async function boot() {
@@ -84,8 +107,9 @@ function renderWizard(state) {
     const input = element("input", "", "");
     input.type = "password";
     input.placeholder = "AnythingLLM developer API key";
+    input.setAttribute("aria-label", "AnythingLLM developer API key");
     input.required = true;
-    form.append(input);
+    form.append(input, element("button", "button button-primary", "Connect gateway"));
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
@@ -111,7 +135,7 @@ function renderWizard(state) {
 /* ---------- dashboard ---------- */
 
 async function renderDashboard(state) {
-  els.headline.textContent = "any-obs gateway";
+  els.headline.textContent = "Gateway";
   // renderTabs already shows the initial tab (Overview); rendering it here
   // as well produced two identical cards on landing.
   renderTabs(state);
@@ -119,6 +143,7 @@ async function renderDashboard(state) {
 
 function renderTabs(state) {
   const tabs = element("nav", "tabs");
+  tabs.setAttribute("aria-label", "Gateway sections");
   const views = [
     ["Overview", renderOverview],
     ["Workspaces", renderWorkspaces],
@@ -132,7 +157,11 @@ function renderTabs(state) {
   // chosen tab append its own cards. Render functions only ever append —
   // without this they would stack below the previous tab's DOM.
   const show = (label) => {
-    for (const [other, node] of buttons) node.classList.toggle("active", other === label);
+    for (const [other, node] of buttons) {
+      node.classList.toggle("active", other === label);
+      if (other === label) node.setAttribute("aria-current", "page");
+      else node.removeAttribute("aria-current");
+    }
     viewController.abort();
     viewController = new AbortController();
     const keep = tabs;
@@ -166,20 +195,24 @@ async function renderWorkspaces(state) {
     ),
   );
   const { users } = await request("/api/gateway/users");
-  const form = element("form", "row");
+  const form = element("form", "row form-layout");
   const name = element("input", "", "");
   name.placeholder = "workspace name";
+  name.setAttribute("aria-label", "Workspace name");
   name.required = true;
   const kind = element("select", "", "");
+  kind.setAttribute("aria-label", "Workspace kind");
   kind.innerHTML =
     '<option value="shared">shared (grant users read)</option><option value="personal">personal (one owner)</option>';
   const owner = element("select", "", "");
+  owner.setAttribute("aria-label", "Workspace owner");
   owner.innerHTML = users
     .map((user) => `<option value="${user.name}">${user.name}</option>`)
     .join("");
-  form.append(name, kind, owner, element("button", "button button-primary", "Create workspace"));
+  const ownerField = field("Owner", owner);
+  form.append(field("Workspace name", name), field("Kind", kind), ownerField, element("button", "button button-primary", "Create workspace"));
   const syncKind = () => {
-    owner.hidden = kind.value !== "personal";
+    ownerField.hidden = kind.value !== "personal";
   };
   kind.addEventListener("change", syncKind);
   syncKind();
@@ -212,7 +245,7 @@ async function renderWorkspaces(state) {
       ...workspaces.map((workspace) => {
         const row = element("div", "row item columned");
         const line = element("div", "row");
-        line.append(element("span", "pill", workspace.kind));
+        line.append(element("span", `pill kind-${workspace.kind}`, workspace.kind));
         line.append(element("code", "", workspace.slug));
         if (workspace.kind === "personal") {
           line.append(element("span", "muted", `owned by ${workspace.owner}`));
@@ -257,7 +290,7 @@ async function renderWorkspaces(state) {
       for (const workspace of untracked) {
         const row = element("div", "row item");
         row.append(
-          element("span", "pill", "untracked"),
+          element("span", "pill kind-untracked", "untracked"),
           element("code", "", workspace.slug),
           element("span", "muted", workspace.name),
         );
@@ -320,6 +353,7 @@ async function renderWorkspaces(state) {
       const chip = element("span", "pill", name);
       const revoke = element("button", "button button-quiet button-danger", "×");
       revoke.title = `Revoke ${name}`;
+      revoke.setAttribute("aria-label", `Revoke ${name} from ${workspace.slug}`);
       revoke.addEventListener("click", async () => {
         await request(
           `/api/gateway/workspaces/${encodeURIComponent(workspace.slug)}/grants/${encodeURIComponent(name)}`,
@@ -331,6 +365,7 @@ async function renderWorkspaces(state) {
       line.append(chip);
     }
     const select = element("select", "", "");
+    select.setAttribute("aria-label", `Grant a user access to ${workspace.slug}`);
     select.innerHTML =
       '<option value="">grant a user…</option>' +
       users
@@ -357,13 +392,13 @@ async function renderWorkspaces(state) {
 }
 
 async function renderOverview(state) {
-  const card = element("section", "card");
+  const card = element("section", "card overview");
   card.append(element("h2", "", "Overview"));
   const grid = element("div", "grid");
   try {
     const health = await request("/health", { method: "GET" });
     grid.append(
-      metric("Status", health.ok ? "Running" : "Down"),
+      metric("Status", health.ok ? "Running" : "Down", health.ok ? "success" : "danger"),
       metric("Users", health.users),
       metric("Gateway version", health.version),
     );
@@ -374,18 +409,18 @@ async function renderOverview(state) {
   card.append(
     html(
       "p",
-      "note",
+      "note connection-note",
       `<strong>Connect an any-obs client:</strong> <code>anything-obsidian setup --url ${state.publicUrl} --api-key &lt;user-token&gt;</code>`,
     ),
     html(
       "p",
-      "note",
+      "note connection-note",
       `<strong>Connect an agent (MCP):</strong> <code>${state.publicUrl}/mcp</code> with a user token as Bearer.`,
     ),
     html(
       "p",
-      "note",
-      `<strong>Configured AnythingLLM:</strong> <code>${state.anythingllmUiUrl}</code>. If bound to server loopback, forward its configured port over SSH.`,
+      "note connection-note",
+      `<strong>Configured AnythingLLM:</strong> <code>${state.anythingllmUiUrl}</code> If bound to server loopback, forward its configured port over SSH.`,
     ),
   );
   els.status.textContent = "";
@@ -403,19 +438,20 @@ async function renderSettings(state) {
   info.replaceChildren(
     metric("AnythingLLM", settings.anythingllmBaseUrl || "not configured"),
     metric("API key", settings.keyPreview || "not set"),
-    metric("Connection", settings.connected ? "OK" : "failing"),
+    metric("Connection", settings.connected ? "OK" : "failing", settings.connected ? "success" : "danger"),
   );
   status.textContent = settings.connected
     ? ""
     : "The configured key is not answering — update it below.";
 
-  const form = element("form", "row");
+  const form = element("form", "row form-layout key-form");
   const input = element("input", "", "");
   input.type = "password";
   input.placeholder = "New AnythingLLM developer API key";
+  input.setAttribute("aria-label", "New AnythingLLM developer API key");
   input.required = true;
   const submit = element("button", "button button-primary", "Update key");
-  form.append(input, submit);
+  form.append(field("AnythingLLM developer API key", input), submit);
   const note = element(
     "p",
     "note",
@@ -431,7 +467,7 @@ async function renderSettings(state) {
       input.value = "";
       card.querySelector(".error")?.remove();
       status.textContent = "Key updated.";
-      info.replaceChildren(metric("Connection", "OK"));
+      info.replaceChildren(metric("Connection", "OK", "success"));
     } catch (error) {
       card.querySelector(".error")?.remove();
       card.append(element("p", "error", error.message));
@@ -444,11 +480,13 @@ async function renderSettings(state) {
 async function renderUsers() {
   const card = element("section", "card");
   card.append(element("h2", "", "Users"));
-  const form = element("form", "row");
+  const form = element("form", "row form-layout");
   const name = element("input", "", "");
   name.placeholder = "user-name (lowercase-dash)";
+  name.setAttribute("aria-label", "User name");
   name.required = true;
   const role = element("select", "", "");
+  role.setAttribute("aria-label", "New user role");
   // Least privilege by default: new users start as readers; promote them.
   role.innerHTML = ["reader", "member", "admin"]
     .map(
@@ -461,7 +499,8 @@ async function renderUsers() {
     "muted",
     "reader (default): search only · member: shared + own workspaces · admin: also manages the gateway with this token",
   );
-  form.append(name, role, element("button", "button button-primary", "Create user"), roleHelp);
+  roleHelp.classList.add("form-help");
+  form.append(field("User name", name), field("Role", role), element("button", "button button-primary", "Create user"), roleHelp);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -543,6 +582,7 @@ async function renderUsers() {
 
   function roleSelect(user) {
     const select = element("select", "", "");
+    select.setAttribute("aria-label", `Role for ${user.name}`);
     select.innerHTML = ["member", "admin", "reader"]
       .map(
         (value) =>
@@ -600,7 +640,7 @@ async function renderSources() {
       "Knowledge enters the shared workspaces only through these sources: a git repository (pulled on refresh) or a directory on this server (read as-is). Each source targets one workspace — create it in the Workspaces tab first.",
     ),
   );
-  const form = element("form", "row");
+  const form = element("form", "row form-layout source-form");
   const id = element("input", "", "");
   id.placeholder = "source-id";
   id.required = true;
@@ -630,12 +670,12 @@ async function renderSources() {
   interval.min = "0";
   interval.setAttribute("aria-label", "Refresh interval in seconds (0 disables scheduling)");
   form.append(
-    id,
-    kind,
-    ref,
-    target,
-    branch,
-    interval,
+    field("Source ID", id),
+    field("Kind", kind),
+    field("Repository URL or server directory", ref),
+    field("Target workspace", target),
+    field("Git branch", branch),
+    field("Refresh interval (seconds)", interval),
     element("button", "button button-primary", "Add source"),
   );
   form.addEventListener("submit", async (event) => {
@@ -878,12 +918,18 @@ async function renderOperations() {
 
 /* ---------- helpers ---------- */
 
+function field(label, control) {
+  const node = element("label", "field");
+  node.append(element("span", "field-label", label), control);
+  return node;
+}
+
 function stepBadge(n) {
   return element("span", "badge", `Step ${n} of 2`);
 }
 
-function metric(label, value) {
-  const node = element("div", "metric");
+function metric(label, value, tone = "") {
+  const node = element("div", `metric ${tone}`.trim());
   node.append(element("dt", "", label), element("dd", "", String(value)));
   return node;
 }

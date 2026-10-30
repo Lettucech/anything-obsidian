@@ -3,121 +3,73 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f6f7ff" />
+    <meta name="theme-color" content="#ffffff" />
     <title>Anything Obsidian (any-obs)</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <header class="topbar">
       <a class="brand" href="/" aria-label="Anything Obsidian dashboard">
-        <span class="brand-mark" aria-hidden="true">AO</span>
-        <span>
-          <strong>Anything Obsidian</strong>
-          <span class="brand-subtitle">Vaults ↔ AnythingLLM bridge</span>
-        </span>
+        <svg class="brand-mark" viewBox="0 0 24 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 1.5h10l7 7v17H4z"/><path d="M14 1.5v7h7M8 14h9M8 19h6"/></svg>
+        <strong>Anything Obsidian</strong>
       </a>
       <div class="topbar-actions">
         <span id="system-state" class="system-status" aria-live="polite">Loading system state…</span>
-        <button id="update-badge" class="update-badge" type="button" hidden title="Run: anything-obsidian update">↻ Update available</button>
-        <button id="theme-toggle" class="button button-secondary theme-toggle" type="button" aria-label="Switch color theme">
-          <span id="theme-icon" class="theme-icon" aria-hidden="true">☼</span><span id="theme-label">Theme</span>
-        </button>
-        <button id="add-vault" class="button button-primary" type="button">Add vault</button>
+        <button id="update-badge" class="update-badge" type="button" hidden title="Run: anything-obsidian update">Update available</button>
+        <button id="theme-toggle" class="button button-secondary theme-toggle" type="button" aria-label="Switch color theme"><span id="theme-icon" hidden aria-hidden="true"></span><span id="theme-label">Theme</span></button>
         <button id="power" class="button button-secondary power-button" type="button">Loading</button>
       </div>
     </header>
     <main>
-      <section class="hero" aria-labelledby="dashboard-title">
-        <div class="hero-copy">
-          <p class="eyebrow">Local-first knowledge workspace</p>
-          <h1 id="dashboard-title">Your knowledge, continuously in sync.</h1>
-          <p>Manage Git-backed Obsidian vault directories, mirror them into your provided AnythingLLM index, and see the health of every service in one place.</p>
-        </div>
+      <section class="dashboard-heading" aria-labelledby="dashboard-title">
+        <div class="page-heading"><h1 id="dashboard-title">Dashboard</h1><button id="add-vault" class="button button-primary" type="button">Add vault</button></div>
         <dl id="vault-summary" class="metric-grid" aria-label="Vault summary"></dl>
-      </section>
-
-      <section class="section-shell rag-section" aria-labelledby="rag-title">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Retrieval</p>
-            <h2 id="rag-title">RAG workspaces</h2>
-            <p>Everything this instance's agents can search in one query — this instance's own index plus every shared workspace granted to it.</p>
-          </div>
-        </div>
-        <div id="rag-workspaces" class="rag-workspaces" aria-live="polite"></div>
       </section>
 
       <section class="section-shell vault-section" aria-labelledby="vaults-title">
         <div class="section-heading">
-          <div>
-            <p class="eyebrow">Vault management</p>
-            <h2 id="vaults-title">Managed vaults</h2>
-            <p>Repositories stay on your machine. The dashboard manages only their secure, shared vault root.</p>
-          </div>
-          <button id="add-vault-inline" class="button button-secondary" type="button">Add vault</button>
+          <div><h2 id="vaults-title">Managed vaults</h2><p>Local folders and their sync settings.</p></div>
         </div>
         <p id="sync-banner" class="message sync-banner" role="alert" hidden></p>
         <p id="vault-message" class="message" role="status"></p>
         <section id="vaults" class="vaults" aria-live="polite"></section>
       </section>
 
+      <section class="section-shell rag-section" aria-labelledby="rag-title">
+        <div class="section-heading"><div><h2 id="rag-title">RAG workspaces</h2><p>Indexes available to your agents.</p></div></div>
+        <div id="rag-workspaces" class="rag-workspaces" aria-live="polite"></div>
+      </section>
+
       <section class="section-shell agents-section" aria-labelledby="agents-title">
         <div class="section-heading">
-          <div>
-            <p class="eyebrow">MCP access</p>
-            <h2 id="agents-title">Agent access</h2>
-            <p>Named agent tokens scope MCP clients to the vaults whose allowlist names them. Connections without a token keep their current local access.</p>
-          </div>
+          <div><h2 id="agents-title">Agent access</h2><p>Named tokens control which vaults an agent can read.</p></div>
           <button id="add-agent" class="button button-secondary" type="button">Add agent</button>
         </div>
         <p id="agent-message" class="message" role="status"></p>
+        <div class="agent-columns" aria-hidden="true"><span>Agent name</span><span>Created</span><span>Actions</span></div>
         <section id="agents" class="agents" aria-live="polite"></section>
       </section>
 
       <section class="dashboard-grid" aria-label="System overview">
         <section class="section-shell service-section" aria-labelledby="services-title">
-          <div class="section-heading compact">
-            <div>
-              <p class="eyebrow">Infrastructure</p>
-              <h2 id="services-title">Service health</h2>
-            </div>
-            <span id="service-summary" class="section-status">Checking services</span>
-          </div>
+          <div class="section-heading compact"><h2 id="services-title">Service health</h2><span id="service-summary" class="section-status">Checking services</span></div>
           <div id="services" class="services"></div>
         </section>
-
-        <aside class="activity-card" aria-labelledby="activity-title">
-          <div class="activity-icon" aria-hidden="true">↻</div>
-          <div>
-            <p class="eyebrow">Latest activity</p>
-            <h2 id="activity-title">Worker activity</h2>
-            <p id="latest-job">No dashboard worker job yet</p>
-          </div>
-        </aside>
-      </section>
-
-      <section class="section-shell logs-section" aria-labelledby="logs-title">
-        <div class="section-heading compact">
-          <div>
-            <p class="eyebrow">Diagnostics</p>
-            <h2 id="logs-title">Recent sync logs</h2>
-          </div>
-          <span class="log-source">syncer</span>
+        <div class="activity-column">
+          <aside class="activity-section" aria-labelledby="activity-title"><h2 id="activity-title">Worker activity</h2><p id="latest-job">No dashboard worker job yet</p></aside>
+          <section class="logs-section" aria-labelledby="logs-title"><h3 id="logs-title">Recent sync logs</h3><pre id="logs" tabindex="0" aria-label="Recent sync logs"></pre></section>
         </div>
-        <pre id="logs"></pre>
       </section>
 
       <dialog id="vault-dialog" aria-labelledby="vault-form-title">
         <form id="vault-form">
           <div class="dialog-heading">
-            <div class="dialog-mark" aria-hidden="true">+</div>
             <div>
-              <p class="eyebrow">Vault management</p>
               <h2 id="vault-form-title">Add vault</h2>
             </div>
           </div>
           <section id="vault-source" class="form-section add-vault-fields">
-            <p id="add-vault-note" class="note">Add a repository by cloning it, or import one that already sits beneath the vault root. You can refine workspace, sync, embedding, and access settings after it has been added.</p>
+            <p id="add-vault-note" class="note">Clone a repository or import an existing folder. Imported folders stay where they are. You can refine sync, embedding, and access settings after adding the vault.</p>
             <div class="form-grid add-vault-grid">
               <label id="source-mode-field" class="form-grid-wide">Add from
                 <select name="sourceMode"><option value="clone">Clone a repository</option><option value="import">Import a local repository</option></select>
@@ -194,9 +146,7 @@
 
       <dialog id="lan-dialog" aria-labelledby="lan-title">
         <div class="dialog-heading">
-          <div class="dialog-mark" aria-hidden="true">◇</div>
           <div>
-            <p class="eyebrow">MCP access</p>
             <h2 id="lan-title">LAN endpoint enabled</h2>
           </div>
         </div>
@@ -208,9 +158,7 @@
       <dialog id="agent-dialog" aria-labelledby="agent-form-title">
         <form id="agent-form">
           <div class="dialog-heading">
-            <div class="dialog-mark" aria-hidden="true">◇</div>
             <div>
-              <p class="eyebrow">MCP access</p>
               <h2 id="agent-form-title">Add agent</h2>
             </div>
           </div>

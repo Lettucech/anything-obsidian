@@ -157,7 +157,7 @@ if (typeof document !== "undefined") {
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
     "source-mode-field", "import-help", "import-id-field", "import-directory-field", "import-path-field",
     "clone-url-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
-    "add-vault-inline", "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
+    "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
     "agents", "agent-message", "add-agent", "agent-dialog", "agent-form", "agent-form-title",
     "agent-create-fields", "agent-token-reveal", "agent-token-value", "agent-submit", "cancel-agent", "agent-dialog-message",
     "import-browse", "import-browse-toggle", "import-tree-panel", "import-breadcrumb", "import-tree", "import-tree-note", "import-use-folder", "import-refresh-tree", "import-path-jump", "import-jump",
@@ -173,7 +173,6 @@ if (typeof document !== "undefined") {
     await refresh();
   });
   els.addvault.addEventListener("click", () => showForm());
-  els.addvaultinline.addEventListener("click", () => showForm());
   els.themetoggle.addEventListener("click", () => {
     theme = nextTheme(theme);
     window.localStorage.setItem("anything-obsidian-theme", theme);
@@ -341,7 +340,7 @@ if (typeof document !== "undefined") {
     const importedPath = String(form.elements.importPath?.value || "").trim();
     const asImport = importMode && Boolean(importedPath);
     els.importpathfield.hidden = !importMode;
-    els.importdirectoryfield.hidden = importMode && Boolean(importedPath);
+    els.importdirectoryfield.hidden = !importMode || Boolean(importedPath);
     form.elements.importId.required = importMode;
     form.elements.importDirectory.required = importMode && !asImport;
     els.importbrowse.hidden = editing || !importMode;
@@ -359,9 +358,9 @@ if (typeof document !== "undefined") {
 
   function applyTheme(next) {
     document.documentElement.dataset.theme = next;
-    document.querySelector('meta[name="theme-color"]').content = next === "dark" ? "#111a2b" : "#f6f7ff";
+    document.querySelector('meta[name="theme-color"]').content = next === "dark" ? "#171c19" : "#ffffff";
     const switchingTo = nextTheme(next);
-    els.themelabel.textContent = switchingTo === "dark" ? "Dark mode" : "Light mode";
+    els.themelabel.textContent = next === "dark" ? "Dark" : "Light";
     els.themeicon.textContent = switchingTo === "dark" ? "◐" : "☼";
     els.themetoggle.setAttribute("aria-label", `Switch to ${switchingTo} theme`);
     els.themetoggle.title = `Switch to ${switchingTo} theme`;
@@ -508,6 +507,7 @@ if (typeof document !== "undefined") {
     els.servicesummary.textContent = `${healthy}/${total} healthy`;
     els.servicesummary.className = `section-status ${healthy === total ? "ok" : "warn"}`;
     const latest = state.status.latestJob;
+    els.latestjob.className = latest?.status === "succeeded" ? "job-success" : latest?.status === "failed" ? "job-failed" : "";
     els.latestjob.textContent = latest
       ? `${latest.vaultId}: ${latest.label} — ${latest.status}${jobProgressLabel(latest)}`
       : "No dashboard worker job yet";
@@ -521,14 +521,22 @@ if (typeof document !== "undefined") {
       list.replaceChildren(element("p", "note", "No RAG workspaces are visible yet. Add a vault to create this instance's own workspace, or ask your gateway admin to grant a shared workspace to this client."));
       return;
     }
-    list.replaceChildren(
-      ...workspaces.map((slug) => element("span", "pill workspace-pill", slug)),
-      element("span", "muted", "searchable by this instance's agents in one any_obs_rag_search query"),
-    );
+    list.replaceChildren(...workspaces.map((slug) => {
+      const local = slug === state.status.workspace?.slug;
+      const item = element("div", `workspace-label ${local ? "workspace-local" : "workspace-available"}`);
+      // The API supplies slugs, not upstream workspace kinds. An index other
+      // than our own is available, but is not necessarily a shared workspace.
+      item.append(element("span", "workspace-kind", local ? "Local" : "Available"), element("code", "", slug));
+      return item;
+    }));
   }
 
   function renderMetric(metric) {
     const item = element("div", "metric");
+    if (metric.label === "Healthy services") {
+      const [healthy, total] = String(metric.value).split("/").map(Number);
+      if (total > 0) item.classList.add(healthy === total ? "healthy" : "needs-attention");
+    }
     item.append(element("dt", "", metric.label), element("dd", "", metric.value));
     return item;
   }
@@ -549,7 +557,7 @@ if (typeof document !== "undefined") {
   }
 
   function renderVault(vault) {
-    const card = element("article", "vault-card");
+    const card = element("article", `vault-card ${vault.enabled ? "scheduled" : "paused"}`);
     const header = element("div", "vault-card-header");
     const identity = element("div", "vault-identity");
     identity.append(element("h3", "", vault.name), element("p", "vault-id", vault.id));
@@ -559,12 +567,13 @@ if (typeof document !== "undefined") {
     header.append(identity, pills);
     const details = element("dl", "vault-details");
     details.append(vaultDetail("Repository", `${vault.gitRemote}/${vault.gitBranch}`), vaultDetail("Sync", `Every ${vault.syncIntervalSeconds}s`), vaultDetail("Last sync", lastSyncLabel(vault.lastSync)));
+    if (vault.lastSync?.status === "succeeded") details.lastElementChild.classList.add("sync-ok");
     if (vault.lastSync?.status === "failed") card.classList.add("sync-failed");
     card.append(header, details);
     if (vault.accessMode === "restricted") card.append(element("p", "note", restrictedAccessNote(vault.allowlist)));
     const actions = element("div", "vault-actions");
     ["sync", "embed", "embed-all", "doctor", "edit", "remove"].forEach((action) => {
-      const button = element("button", action === "sync" ? "button button-primary" : action === "remove" ? "button button-quiet button-danger" : "button button-quiet", actionLabel(action));
+      const button = element("button", action === "remove" ? "button button-secondary button-danger" : "button button-secondary", actionLabel(action));
       button.dataset.vaultId = vault.id; button.dataset.action = action;
       const reason = ["edit", "remove"].includes(action) ? "" : actionDisabledReason(action, state.status, vault.id);
       button.disabled = Boolean(reason); button.title = reason;
@@ -583,13 +592,13 @@ if (typeof document !== "undefined") {
   function renderAgent(agent) {
     const card = element("article", "agent-card");
     const identity = element("div", "agent-identity");
-    identity.append(element("h3", "", agent.name), element("p", "agent-created", agentCreatedLabel(agent.createdAt)));
+    identity.append(element("h3", "", agent.name));
     const actions = element("div", "agent-actions");
-    const revoke = element("button", "button button-quiet button-danger", "Revoke");
+    const revoke = element("button", "button button-secondary button-danger", "Revoke");
     revoke.dataset.agentName = agent.name;
     revoke.dataset.agentAction = "revoke";
     actions.append(revoke);
-    card.append(identity, actions);
+    card.append(identity, element("p", "agent-created", agentCreatedLabel(agent.createdAt)), actions);
     return card;
   }
 
@@ -665,7 +674,7 @@ if (typeof document !== "undefined") {
   function emptyState() {
     const card = element("article", "empty-state");
     const copy = element("div", "");
-    copy.append(element("h3", "", "Bring your first vault online"), element("p", "", "Clone or import a Git repository beneath the configured vault root and let the dashboard synchronize and index it."));
+    copy.append(element("h3", "", "Bring your first vault online"), element("p", "", "Clone a repository or import an existing folder to start syncing and indexing your notes."));
     const button = element("button", "button button-primary", "Add your first vault");
     button.dataset.dashboardAction = "add-vault";
     card.append(copy, button);

@@ -3,15 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#111a2b" />
+    <meta name="theme-color" content="#ffffff" />
     <title>any-obs gateway</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Anything Obsidian gateway">
+        <svg class="brand-mark" viewBox="0 0 24 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 1.5h10l7 7v17H4z"/><path d="M14 1.5v7h7M8 14h9M8 19h6"/></svg>
+        <strong>Anything Obsidian</strong>
+      </a>
+      <div class="topbar-actions"><span class="gateway-label">Gateway</span><button id="theme-toggle" class="button button-quiet" type="button" aria-label="Switch color theme">Light</button></div>
+    </header>
     <main id="app">
       <header class="top">
         <div>
-          <p class="brand">anything obsidian <span class="muted">gateway</span></p>
           <h1 id="headline">Loading…</h1>
         </div>
         <p id="status-line" class="muted"></p>
