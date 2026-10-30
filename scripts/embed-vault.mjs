@@ -29,13 +29,23 @@ export async function embedVault({
   onProgress = async () => {},
   signal,
   fetchImpl = fetch,
+  pollIntervalMs,
 }) {
   const stateDir = config.stateDir ?? path.resolve(repoRoot, ".anything-obsidian-state");
-  const run = () => embedUnlocked({ config, stateDir, all, onProgress, signal, fetchImpl });
+  const run = () =>
+    embedUnlocked({ config, stateDir, all, onProgress, signal, fetchImpl, pollIntervalMs });
   return config.operationLockHeld ? run() : withFileLock(`${stateDir}.lock`, run, { signal });
 }
 
-async function embedUnlocked({ config, stateDir, all, onProgress, signal, fetchImpl }) {
+async function embedUnlocked({
+  config,
+  stateDir,
+  all,
+  onProgress,
+  signal,
+  fetchImpl,
+  pollIntervalMs = 5_000,
+}) {
   await config.assertRegistered?.();
   const { apiKey, workspaceSlug, vaultPath } = config;
   const baseUrl = stripTrailingSlash(config.anythingllmBaseUrl);
@@ -111,6 +121,9 @@ async function embedUnlocked({ config, stateDir, all, onProgress, signal, fetchI
       adds: additions,
       deletes: [],
       updateEmbeddingsPathTemplate,
+      onProgress,
+      phase: "embedding",
+      pollIntervalMs,
     });
     await verifyDocuments(remote, additions, []);
   }
@@ -121,6 +134,9 @@ async function embedUnlocked({ config, stateDir, all, onProgress, signal, fetchI
       adds: [],
       deletes: deletions,
       updateEmbeddingsPathTemplate,
+      onProgress,
+      phase: "cleaning",
+      pollIntervalMs,
     });
     await verifyDocuments(remote, [...trackedLocations], deletions);
   }
@@ -212,6 +228,15 @@ async function assertWorkspaceExists({ baseUrl, apiKey, workspaceSlug, fetchImpl
   );
 }
 
+// The upstream `update-embeddings` endpoint blocks server-side until the
+// whole batch is processed, and a vault-sized batch outlives any sane client
+// wait (the 120s fetch default used to abort the job while AnythingLLM kept
+// embedding fine on its own). So the request is fired without awaiting it and
+// the workspace document list is polled instead: pins land per document as
+// their chunks are inserted, so the poll reports real progress — and the
+// verified listing, not the request, decides success.
+const EMBED_REQUEST_TIMEOUT_MS = 30 * 60_000;
+
 async function updateEmbeddings({
   adds,
   deletes,
@@ -221,22 +246,77 @@ async function updateEmbeddings({
   updateEmbeddingsPathTemplate,
   fetchImpl,
   signal,
+  onProgress,
+  phase = "embedding",
+  pollIntervalMs = 5_000,
+  settledGracePolls = 3,
 }) {
   const url = apiUrl(
     baseUrl,
     updateEmbeddingsPathTemplate.replace("{slug}", encodeURIComponent(workspaceSlug)),
   );
-  const response = await fetchWithTimeout(fetchImpl, url, {
-    signal,
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+  const expectPresent = adds ?? [];
+  const expectAbsent = deletes ?? [];
+  const total = expectPresent.length + expectAbsent.length;
+  let requestError = null;
+  let requestSettled = false;
+  const request = fetchWithTimeout(
+    fetchImpl,
+    url,
+    {
+      signal,
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ adds, deletes }),
     },
-    body: JSON.stringify({ adds, deletes }),
-  });
-  return readResponse(response, "update embeddings");
+    EMBED_REQUEST_TIMEOUT_MS,
+  )
+    .then((response) => readResponse(response, "update embeddings"))
+    .catch((error) => {
+      requestError = error;
+    })
+    .finally(() => {
+      requestSettled = true;
+    });
+  try {
+    if (total === 0) {
+      await request;
+    } else {
+      const remote = { baseUrl, apiKey, workspaceSlug, fetchImpl, signal };
+      let grace = settledGracePolls;
+      let reported = -1;
+      for (;;) {
+        signal?.throwIfAborted();
+        if (requestError) break;
+        const documents = await listWorkspaceDocuments(remote);
+        if (Array.isArray(documents)) {
+          const locations = new Set(
+            documents.map((document) => document.docpath ?? document.location).filter(Boolean),
+          );
+          const completed =
+            expectPresent.filter((location) => locations.has(location)).length +
+            expectAbsent.filter((location) => !locations.has(location)).length;
+          if (completed !== reported) {
+            reported = completed;
+            if (onProgress) await onProgress({ phase, completed, total });
+          }
+          if (completed === total) break;
+        }
+        // Upstream says it is done but the listing disagrees (or is
+        // unreadable) — give it a few polls, then let the caller's
+        // verification describe the failure.
+        if (requestSettled && --grace <= 0) break;
+        await sleep(pollIntervalMs, signal);
+      }
+    }
+  } finally {
+    request.catch(() => {}); // never leave a dangling rejection when bailing early
+  }
+  if (requestError) throw requestError;
 }
 
 function ownedPathPrefixes({ documentFolder, vaultId }) {
@@ -349,6 +429,19 @@ async function readManifest(manifestPath, force) {
       throw new Error(`Cannot read embedding manifest: ${error.message}`);
     return { version: 2, files: {} };
   }
+}
+
+// Resolves early when the signal aborts; the loop's throwIfAborted reports it.
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    const done = () => {
+      signal?.removeEventListener("abort", done);
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
 }
 
 function safeJson(text) {

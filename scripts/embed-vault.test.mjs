@@ -27,7 +27,13 @@ async function fixture(t) {
     badUpload: false,
     unavailable: false,
     workspaces: ["shared", "other"],
+    deferEmbeddingResponse: false,
   };
+  let releaseEmbeddingResponse = () => {};
+  state.embeddingGate = new Promise((resolve) => {
+    releaseEmbeddingResponse = resolve;
+  });
+  state.releaseEmbeddingResponse = () => releaseEmbeddingResponse();
   const fetchImpl = async (url, init = {}) => {
     assert.ok(init.signal, "every request has a deadline");
     calls.push({ path: new URL(url).pathname, init });
@@ -45,6 +51,7 @@ async function fixture(t) {
         adds.forEach((location) => remote.add(location));
         deletes.forEach((location) => remote.delete(location));
       }
+      if (state.deferEmbeddingResponse) await state.embeddingGate;
       body = { workspace: { slug: "shared" } }; // Upstream can return 200 even when a vectorizer failed.
     } else if (pathname.endsWith("/documents")) {
       if (state.unavailable) return new Response("unavailable", { status: 503 });
@@ -52,7 +59,7 @@ async function fixture(t) {
     } else return new Response("missing", { status: 404 });
     return new Response(JSON.stringify(body), { status: 200 });
   };
-  const run = (options) => embedVault({ config, fetchImpl, ...options });
+  const run = (options) => embedVault({ config, fetchImpl, pollIntervalMs: 5, ...options });
   const manifest = () => readFile(root + "/state/embed-manifest.json", "utf8").then(JSON.parse);
   return { root, config, remote, calls, state, run, manifest };
 }
@@ -118,6 +125,21 @@ test("HTTP success without embedded documents fails, retaining the last good man
   await assert.rejects(f.run(), /verification failed/);
   assert.deepEqual(await f.manifest(), before);
   assert.deepEqual([...f.remote], old);
+});
+
+test("a slow upstream response never blocks a verified embed", async (t) => {
+  const f = await fixture(t);
+  // Upstream pins the documents right away but only answers the request much
+  // later — the old blocking wait sat on this response until the client
+  // deadline killed the job.
+  f.state.deferEmbeddingResponse = true;
+  const progress = [];
+  const result = await f.run({
+    onProgress: async (event) => progress.push(`${event.phase}:${event.completed ?? 0}/${event.total ?? 0}`),
+  });
+  assert.equal(result.verified, true);
+  assert.ok(progress.includes("embedding:1/1"));
+  f.state.releaseEmbeddingResponse(); // let the dangling request settle
 });
 
 test("upload failures and unverifiable remote state never report successful indexing", async (t) => {
