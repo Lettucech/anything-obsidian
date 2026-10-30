@@ -6,18 +6,44 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import test from "node:test";
 
+import { fakeServices } from "./test-services.mjs";
+import { readSchedulerStatus } from "./test-services.mjs";
 import { createDashboardServer } from "./server.mjs";
 import { WORKER_SCRIPT_PATH, createLocalJobManager } from "./local-jobs.mjs";
 import { importTree } from "./import-tree.mjs";
 
-function nativeApp({ env = nativeEnvObject(), anythingllm, spawnImpl, killImpl, execFileImpl, schedulerPidPath, schedulerLogPath } = {}) {
+function nativeApp({
+  env = nativeEnvObject(),
+  anythingllm,
+  spawnImpl,
+  killImpl,
+  execFileImpl,
+  schedulerPidPath,
+  schedulerLogPath,
+  services,
+} = {}) {
   return createDashboardServer({
     env,
-    anythingllm: anythingllm || { async listWorkspaces() { return []; } },
+    services:
+      services ||
+      fakeServices(
+        schedulerPidPath && killImpl
+          ? readSchedulerStatus({ pidPath: schedulerPidPath, killImpl })
+          : {},
+      ),
+    anythingllm: anythingllm || {
+      async listWorkspaces() {
+        return [];
+      },
+    },
     jobs: createLocalJobManager({ env }),
     native: {
-      schedulerPidPath: schedulerPidPath || path.join(tmpdir(), `ao-native-${Math.random().toString(36).slice(2)}.pid`),
-      schedulerLogPath: schedulerLogPath || path.join(tmpdir(), `ao-native-${Math.random().toString(36).slice(2)}.log`),
+      schedulerPidPath:
+        schedulerPidPath ||
+        path.join(tmpdir(), `ao-native-${Math.random().toString(36).slice(2)}.pid`),
+      schedulerLogPath:
+        schedulerLogPath ||
+        path.join(tmpdir(), `ao-native-${Math.random().toString(36).slice(2)}.log`),
       spawnImpl: spawnImpl || (() => ({ pid: 1000, unref() {} })),
       killImpl,
       execFileImpl: execFileImpl || (async () => ({ stdout: "git version 2.39.0\n" })),
@@ -28,7 +54,8 @@ function nativeApp({ env = nativeEnvObject(), anythingllm, spawnImpl, killImpl, 
 function nativeEnvObject() {
   return {
     VAULTS_ROOT: "/Users/x/Vaults",
-    VAULT_REGISTRY_PATH: "/Users/x/Library/Application Support/anything-obsidian/registry/vaults.json",
+    VAULT_REGISTRY_PATH:
+      "/Users/x/Library/Application Support/anything-obsidian/registry/vaults.json",
     VAULT_SECRETS_PATH: "/Users/x/Library/Application Support/anything-obsidian/secrets",
     VAULT_STATE_ROOT: "/Users/x/Library/Application Support/anything-obsidian/state",
     AGENT_TOKENS_PATH: "/Users/x/Library/Application Support/anything-obsidian/agent-tokens",
@@ -51,7 +78,10 @@ test("native status reports AnythingLLM, scheduler, and git services", async () 
   const response = await request(app, "GET", "/api/status");
 
   assert.equal(response.status, 200);
-  assert.deepEqual(response.body.services.map((service) => service.id), ["anythingllm", "scheduler", "mcp", "mcp-lan", "git"]);
+  assert.deepEqual(
+    response.body.services.map((service) => service.id),
+    ["anythingllm", "scheduler", "mcp", "mcp-lan", "git"],
+  );
   const byId = Object.fromEntries(response.body.services.map((service) => [service.id, service]));
   assert.equal(byId.anythingllm.running, true);
   assert.equal(byId.anythingllm.health.ok, true);
@@ -70,7 +100,11 @@ test("native status reflects an unreachable AnythingLLM and a live scheduler", a
   const pidPath = path.join(tmpdir(), `ao-native-live-${process.pid}.pid`);
   writeFileSync(pidPath, "4242\n");
   const app = nativeApp({
-    anythingllm: { async listWorkspaces() { throw new Error("AnythingLLM API 401"); } },
+    anythingllm: {
+      async listWorkspaces() {
+        throw new Error("AnythingLLM API 401");
+      },
+    },
     schedulerPidPath: pidPath,
     killImpl: (pid) => {
       if (pid === 4242) return;
@@ -92,47 +126,22 @@ test("native status reflects an unreachable AnythingLLM and a live scheduler", a
   assert.equal(response.body.systemState, "partial");
 });
 
-test("native system on starts the detached scheduler and system off stops it", async () => {
-  const spawned = [];
-  const child = { pid: 4321, unref() {} };
-  const alive = new Set();
-  const killImpl = (pid, signal) => {
-    if (signal !== 0) {
-      alive.delete(pid);
-      return;
-    }
-    if (!alive.has(pid)) {
-      const error = new Error("ESRCH");
-      error.code = "ESRCH";
-      throw error;
-    }
-  };
-  const schedulerPidPath = path.join(tmpdir(), `ao-native-onoff-${process.pid}.pid`);
-  const app = nativeApp({
-    spawnImpl: (nodePath, args, options) => {
-      spawned.push({ nodePath, args, options });
-      alive.add(child.pid);
-      return child;
-    },
-    killImpl,
-    schedulerPidPath,
-  });
-
-  const on = await request(app, "POST", "/api/system/on");
-  assert.equal(on.status, 200);
-  assert.equal(on.body.services.find((service) => service.id === "scheduler").running, true);
-  assert.equal(on.body.systemState, "on");
-  assert.equal(spawned.length, 1);
-  assert.deepEqual(spawned[0].args, [WORKER_SCRIPT_PATH, "scheduler"]);
-  assert.equal(spawned[0].options.detached, true);
-  assert.equal(spawned[0].options.env.VAULTS_ROOT, "/Users/x/Vaults");
-  assert.equal(spawned[0].options.env.ANYTHINGLLM_API_KEY, "key");
-  assert.equal(existsSync(schedulerPidPath), true);
-
-  const off = await request(app, "POST", "/api/system/off");
-  assert.equal(off.status, 200);
-  assert.equal(off.body.services.find((service) => service.id === "scheduler").running, false);
-  assert.equal(existsSync(schedulerPidPath), false);
+test("native power actions delegate to the shared service controller", async () => {
+  const services = fakeServices();
+  const app = nativeApp({ services });
+  assert.equal(
+    (await request(app, "POST", "/api/system/on")).body.services.find(
+      (service) => service.id === "scheduler",
+    ).running,
+    true,
+  );
+  assert.equal(
+    (await request(app, "POST", "/api/system/off")).body.services.find(
+      (service) => service.id === "scheduler",
+    ).running,
+    false,
+  );
+  assert.deepEqual(services.calls, ["start:scheduler", "stop:scheduler"]);
 });
 
 test("native logs serve the scheduler log tail for the syncer alias", async () => {
@@ -154,32 +163,60 @@ test("native logs serve the scheduler log tail for the syncer alias", async () =
   assert.match(unknown.body.error, /Unknown log service/);
 });
 
-test("native setup page points at anything-obsidian init instead of docker", async () => {
+test("native setup page points at anything-obsidian setup instead of docker", async () => {
   const app = nativeApp({
-    anythingllm: { async listWorkspaces() { throw new Error("AnythingLLM API 403"); } },
+    anythingllm: {
+      async listWorkspaces() {
+        throw new Error("AnythingLLM API 403");
+      },
+    },
   });
 
   const response = await requestText(app, "/");
 
   assert.equal(response.status, 200);
   assert.match(response.body, /AnythingLLM setup required/);
-  assert.match(response.body, /anything-obsidian init/);
+  assert.match(response.body, /anything-obsidian setup/);
   assert.doesNotMatch(response.body, /docker compose/);
 });
 
 test("native vault actions start spawn-based jobs gated on the AnythingLLM probe", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ao-native-actions-"));
   const registryPath = path.join(root, "registry", "vaults.json");
-  const env = { ...nativeEnvObject(), PATH: process.env.PATH, HOME: process.env.HOME, VAULT_REGISTRY_PATH: registryPath };
+  const env = {
+    ...nativeEnvObject(),
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    VAULT_REGISTRY_PATH: registryPath,
+  };
   await mkdir(path.dirname(registryPath), { recursive: true });
-  await writeFile(registryPath, JSON.stringify({
-    version: 1,
-    vaults: [{ id: "work", name: "work", directory: "work", workspaceSlug: "work", gitUserName: "A", gitUserEmail: "a@b.c" }],
-  }));
+  await writeFile(
+    registryPath,
+    JSON.stringify({
+      version: 1,
+      vaults: [
+        {
+          id: "work",
+          name: "work",
+          directory: "work",
+          workspaceSlug: "work",
+          gitUserName: "A",
+          gitUserEmail: "a@b.c",
+        },
+      ],
+    }),
+  );
   const app = createDashboardServer({
     env,
-    anythingllm: { async listWorkspaces() { return []; } },
-    native: { schedulerPidPath: path.join(root, "s.pid"), schedulerLogPath: path.join(root, "s.log") },
+    anythingllm: {
+      async listWorkspaces() {
+        return [];
+      },
+    },
+    native: {
+      schedulerPidPath: path.join(root, "s.pid"),
+      schedulerLogPath: path.join(root, "s.log"),
+    },
   });
 
   const notFound = await request(app, "POST", "/api/vaults/missing/actions/sync");
@@ -205,7 +242,10 @@ test("import tree lists only real subdirectories beneath the vault root", async 
 
   const rootListing = await request(app, "GET", "/api/import-tree");
   assert.equal(rootListing.status, 200);
-  assert.deepEqual(rootListing.body.directories.map((entry) => entry.name), ["personal-notes"]);
+  assert.deepEqual(
+    rootListing.body.directories.map((entry) => entry.name),
+    ["personal-notes"],
+  );
   assert.equal(rootListing.body.insideRoot, true);
   assert.equal(rootListing.body.canUseHere, false);
   assert.equal(rootListing.body.directories[0].canImport, true);
@@ -213,9 +253,16 @@ test("import tree lists only real subdirectories beneath the vault root", async 
   assert.equal(rootListing.body.importMode, null); // the root itself is never importable
   assert.equal(rootListing.body.parent, null);
 
-  const nested = await request(app, "GET", `/api/import-tree?path=${encodeURIComponent(path.join(root, "personal-notes"))}`);
+  const nested = await request(
+    app,
+    "GET",
+    `/api/import-tree?path=${encodeURIComponent(path.join(root, "personal-notes"))}`,
+  );
   assert.equal(nested.status, 200);
-  assert.deepEqual(nested.body.directories.map((entry) => entry.name), ["nested"]);
+  assert.deepEqual(
+    nested.body.directories.map((entry) => entry.name),
+    ["nested"],
+  );
   // A directory deeper than a direct child of the root can still be imported,
   // but only as a path the user owns (imported), never as a managed vault.
   assert.equal(nested.body.directories[0].canImport, true);
@@ -237,7 +284,11 @@ test("import tree browses outside the vault root and still rejects missing paths
   assert.ok(outside.body.directories.length > 0);
   assert.ok(outside.body.directories.every((entry) => entry.importMode === "imported"));
 
-  const missing = await request(app, "GET", `/api/import-tree?path=${encodeURIComponent(path.join(root, "does-not-exist"))}`);
+  const missing = await request(
+    app,
+    "GET",
+    `/api/import-tree?path=${encodeURIComponent(path.join(root, "does-not-exist"))}`,
+  );
   assert.equal(missing.status, 404);
 });
 
@@ -245,7 +296,10 @@ test("import tree module is directly reusable", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ao-import-tree-unit-"));
   await mkdir(path.join(root, "repo-a"));
   const tree = await importTree({ vaultsRoot: root });
-  assert.deepEqual(tree.directories.map((entry) => entry.name), ["repo-a"]);
+  assert.deepEqual(
+    tree.directories.map((entry) => entry.name),
+    ["repo-a"],
+  );
 });
 
 async function waitForJob(app, jobId) {
@@ -266,6 +320,7 @@ async function request(server, method, requestPath, body) {
         this.push(null);
       },
     });
+    req.headers = { "content-type": "application/json", host: "localhost" };
     req.method = method;
     req.url = requestPath;
 
@@ -296,7 +351,11 @@ async function request(server, method, requestPath, body) {
 async function requestText(server, requestPath) {
   return await new Promise((resolve) => {
     const chunks = [];
-    const req = new Readable({ read() { this.push(null); } });
+    const req = new Readable({
+      read() {
+        this.push(null);
+      },
+    });
     req.method = "GET";
     req.url = requestPath;
     const res = new Writable({

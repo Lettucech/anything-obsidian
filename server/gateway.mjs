@@ -14,8 +14,10 @@
 //
 // The gateway remains the sole holder of the AnythingLLM developer key.
 import { createServer } from "node:http";
-import { realpathSync } from "node:fs";
+import { realpathSync, readFileSync } from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -28,10 +30,16 @@ import { decide } from "./proxy-rules.mjs";
 import { fanoutSearch } from "./fanout.mjs";
 import { createSourceManager } from "./sources.mjs";
 import { joinUrl, stripTrailingSlash } from "./http-utils.mjs";
+import { defaultConfigRoot } from "../lib/app-config.mjs";
+import { fetchWithTimeout } from "../lib/http.mjs";
+import { redactSecretsText } from "../dashboard/redact.mjs";
+import { rotateLogs } from "../lib/log-rotate.mjs";
+import { assertLoopbackRequest } from "../lib/loopback-http.mjs";
+import { tailLogFile } from "../dashboard/local-jobs.mjs";
 
 export const DEFAULT_GATEWAY_PORT = 21500;
 export const DEFAULT_GATEWAY_ADMIN_PORT = 21505;
-const pkg = await readPackageInfo();
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const dashboardRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "dashboard");
 
 export function createGatewayServer({
@@ -40,78 +48,95 @@ export function createGatewayServer({
   userStore,
   sourceManager,
   gatewayConfig = createGatewayConfig({ dataDir: defaultDataDir(env) }),
-  anythingllmBaseUrl = env.ANYTHINGLLM_BASE_URL ?? "",
-  anythingllmApiKey = env.ANYTHINGLLM_API_KEY ?? "",
+  anythingllmBaseUrl = "",
+  anythingllmApiKey = "",
   fetchImpl = fetch,
+  logPath,
 }) {
   if (plane !== "public" && plane !== "admin") throw new Error(`Unknown gateway plane: ${plane}`);
   const baseUrl = stripTrailingSlash(anythingllmBaseUrl);
-  // The wizard-collected API key lives in the data volume; it is cached at
-  // boot and refreshed whenever setup writes it. configReady is awaited at
-  // the top of every request so no handler can race the initial load.
-  let configuredApiKey = "";
-  const configReady = gatewayConfig.load().then((state) => {
-    configuredApiKey = state.apiKey;
-  }).catch(() => {});
+  // Snapshot credentials per request. A slow read from an older request must
+  // never overwrite the credential used by a request arriving after rotation.
+  const credentials = new AsyncLocalStorage();
 
-  return createServer(async (req, res) => {
-    try {
-      await configReady;
-      const url = new URL(req.url || "/", "http://gateway");
-      const identity = plane === "admin"
-        ? { kind: "admin" } // loopback reach is the proof
-        : publicIdentity(req.headers.authorization);
+  return createServer((req, res) =>
+    credentials.run({}, async () => {
+      try {
+        if (plane === "admin") assertLoopbackRequest(req);
+        credentials.getStore().storedKey = (await gatewayConfig.load()).apiKey;
+        const url = new URL(req.url || "/", "http://gateway");
+        const identity =
+          plane === "admin"
+            ? { kind: "admin" } // loopback reach is the proof
+            : publicIdentity(req.headers.authorization);
 
-      if (req.method === "GET" && url.pathname === "/health") {
-        return await sendHealth(res);
-      }
+        if (req.method === "GET" && url.pathname === "/ready") {
+          const upstream = await upstreamReady();
+          return sendJson(res, upstream ? 200 : 503, {
+            ok: upstream,
+            name: "any-obs-gateway",
+            plane,
+            configured: Boolean(apiKeyActive()),
+            configRoot: defaultConfigRoot({ env }),
+          });
+        }
+        if (req.method === "GET" && url.pathname === "/health") {
+          return await sendHealth(res);
+        }
 
-      if (url.pathname.startsWith("/api/setup/") && plane !== "admin") {
+        if (url.pathname.startsWith("/api/setup/") && plane !== "admin") {
+          return sendJson(res, 404, { error: "Not found" });
+        }
+        if (plane === "admin" && url.pathname === "/api/setup/state" && req.method === "GET") {
+          return sendJson(res, 200, await setupState());
+        }
+        if (plane === "admin" && url.pathname === "/api/setup/api-key") {
+          return await handleSetupApiKey(req, res);
+        }
+
+        if (url.pathname === "/mcp") {
+          if (plane !== "public") return sendJson(res, 404, { error: "Not found" });
+          if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
+          if (!identity) return sendJson(res, 401, { error: "Bearer token required" });
+          const body = await readRawBody(req);
+          const server = buildMcpServer(identity);
+          const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+          res.on("close", () => {
+            transport.close();
+            server.close();
+          });
+          await server.connect(transport);
+          req.headers["content-type"] = "application/json";
+          return await transport.handleRequest(
+            req,
+            res,
+            body.length ? JSON.parse(body.toString("utf8")) : undefined,
+          );
+        }
+
+        if (url.pathname.startsWith("/api/gateway/")) {
+          return await handleGatewayApi({ req, res, url, identity, body: await maybeJson(req) });
+        }
+
+        if (url.pathname.startsWith("/api/")) {
+          return await handleProxy({ req, res, url, identity });
+        }
+
+        if (plane === "admin" && req.method === "GET") {
+          return await serveDashboard(res, url.pathname);
+        }
+
         return sendJson(res, 404, { error: "Not found" });
+      } catch (error) {
+        const detail = redactSecretsText(error instanceof Error ? error.message : String(error))
+          .split(apiKeyActive() || "\0")
+          .join("[redacted]");
+        const status = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+        if (!res.headersSent) return sendJson(res, status, { error: detail });
+        res.end();
       }
-      if (plane === "admin" && url.pathname === "/api/setup/state" && req.method === "GET") {
-        return sendJson(res, 200, await setupState());
-      }
-      if (plane === "admin" && url.pathname === "/api/setup/api-key") {
-        return await handleSetupApiKey(req, res);
-      }
-
-      if (url.pathname === "/mcp") {
-        if (plane !== "public") return sendJson(res, 404, { error: "Not found" });
-        if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
-        if (!identity) return sendJson(res, 401, { error: "Bearer token required" });
-        const body = await readRawBody(req);
-        const server = buildMcpServer(identity);
-        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-        res.on("close", () => {
-          transport.close();
-          server.close();
-        });
-        await server.connect(transport);
-        req.headers["content-type"] = "application/json";
-        return await transport.handleRequest(req, res, body.length ? JSON.parse(body.toString("utf8")) : undefined);
-      }
-
-      if (url.pathname.startsWith("/api/gateway/")) {
-        return await handleGatewayApi({ req, res, url, identity, body: await maybeJson(req) });
-      }
-
-      if (url.pathname.startsWith("/api/")) {
-        return await handleProxy({ req, res, url, identity });
-      }
-
-      if (plane === "admin" && req.method === "GET") {
-        return await serveDashboard(res, url.pathname);
-      }
-
-      return sendJson(res, 404, { error: "Not found" });
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      const status = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
-      if (!res.headersSent) return sendJson(res, status, { error: detail });
-      res.end();
-    }
-  });
+    }),
+  );
 
   function publicIdentity(header) {
     const match = /^Bearer\s+(.+)$/i.exec(String(header ?? ""));
@@ -119,7 +144,24 @@ export function createGatewayServer({
   }
 
   function apiKeyActive() {
-    return anythingllmApiKey || configuredApiKey;
+    return credentials.getStore()?.storedKey || anythingllmApiKey;
+  }
+
+  async function upstreamReady() {
+    if (!apiKeyActive() || !baseUrl) return false;
+    try {
+      const probe = await fetchWithTimeout(
+        fetchImpl,
+        `${baseUrl}/api/v1/workspaces`,
+        {
+          headers: { Authorization: `Bearer ${apiKeyActive()}` },
+        },
+        3000,
+      );
+      return probe.ok && Array.isArray((await probe.json()).workspaces);
+    } catch {
+      return false;
+    }
   }
 
   async function sendHealth(res) {
@@ -138,10 +180,14 @@ export function createGatewayServer({
   }
 
   async function setupState() {
+    const config = await gatewayConfig.load();
     return {
       needsSetup: await needsSetup(),
       anythingllmBaseUrl: baseUrl,
-      anythingllmUiUrl: "http://localhost:21501",
+      anythingllmUiUrl: baseUrl,
+      serverHost: os.hostname(),
+      publicUrl: `http://${os.hostname()}:${config.port ?? DEFAULT_GATEWAY_PORT}`,
+      adminPort: config.adminPort ?? DEFAULT_GATEWAY_ADMIN_PORT,
       hasApiKey: Boolean(apiKeyActive()),
     };
   }
@@ -151,9 +197,10 @@ export function createGatewayServer({
   // changes go through the admin plane's settings endpoints.
   async function handleSetupApiKey(req, res) {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
-    if (!(await needsSetup())) throw httpError(403, "Gateway is already configured; setup is closed");
+    if (!(await needsSetup()))
+      throw httpError(403, "Gateway is already configured; setup is closed");
     const body = await maybeJson(req);
-    const candidate = stripTrailingSlash(String(body?.apiKey ?? "").trim());
+    const candidate = String(body?.apiKey ?? "").trim();
     if (!candidate) throw httpError(400, "apiKey is required");
     await verifyAndStoreApiKey(candidate);
     return sendJson(res, 200, { configured: true });
@@ -161,12 +208,17 @@ export function createGatewayServer({
 
   async function verifyAndStoreApiKey(candidate) {
     // Verify against AnythingLLM before storing anything.
-    const probe = await fetchImpl(`${baseUrl}/api/v1/workspaces`, {
-      headers: { Accept: "application/json", Authorization: `Bearer ${candidate}` },
-    });
+    const probe = await fetchWithTimeout(
+      fetchImpl,
+      `${baseUrl}/api/v1/workspaces`,
+      {
+        headers: { Accept: "application/json", Authorization: `Bearer ${candidate}` },
+      },
+      5000,
+    );
     if (!probe.ok) throw httpError(400, `AnythingLLM rejected this API key (HTTP ${probe.status})`);
     await gatewayConfig.save({ apiKey: candidate });
-    configuredApiKey = candidate;
+    credentials.getStore().storedKey = candidate;
   }
 
   async function handleGatewayApi({ req, res, url, identity, body }) {
@@ -185,23 +237,28 @@ export function createGatewayServer({
         const key = apiKeyActive();
         let connected = false;
         if (key) {
-          const probe = await fetchImpl(`${baseUrl}/api/v1/workspaces`, {
-            headers: { Accept: "application/json", Authorization: `Bearer ${key}` },
-          }).catch(() => null);
+          const probe = await fetchWithTimeout(
+            fetchImpl,
+            `${baseUrl}/api/v1/workspaces`,
+            {
+              headers: { Accept: "application/json", Authorization: `Bearer ${key}` },
+            },
+            5000,
+          ).catch(() => null);
           connected = Boolean(probe?.ok);
         }
         return sendJson(res, 200, {
           anythingllmBaseUrl: baseUrl,
           // Never the full key — enough to recognise which one is configured.
           keyPreview: key ? `${key.slice(0, 4)}…${key.slice(-4)}` : "",
-          envKey: Boolean(anythingllmApiKey),
+          envKey: !credentials.getStore()?.storedKey && Boolean(anythingllmApiKey),
           connected,
         });
       }
     }
     if (url.pathname === "/api/gateway/settings/api-key" && req.method === "POST") {
       adminOnly();
-      const candidate = stripTrailingSlash(String(body?.apiKey ?? "").trim());
+      const candidate = String(body?.apiKey ?? "").trim();
       if (!candidate) throw httpError(400, "apiKey is required");
       await verifyAndStoreApiKey(candidate);
       return sendJson(res, 200, { updated: true });
@@ -222,18 +279,24 @@ export function createGatewayServer({
     if (userMatch && req.method === "DELETE") {
       adminOnly();
       const removed = await userStore.remove(userMatch[1]);
-      return removed ? sendJson(res, 200, { removed: true }) : sendJson(res, 404, { error: "User was not found" });
+      return removed
+        ? sendJson(res, 200, { removed: true })
+        : sendJson(res, 404, { error: "User was not found" });
     }
     if (userMatch && req.method === "PATCH") {
       adminOnly();
       const updated = await userStore.updateRole(userMatch[1], body?.role);
-      return updated ? sendJson(res, 200, updated) : sendJson(res, 404, { error: "User was not found" });
+      return updated
+        ? sendJson(res, 200, updated)
+        : sendJson(res, 404, { error: "User was not found" });
     }
     const resetMatch = url.pathname.match(/^\/api\/gateway\/users\/([a-z0-9-]+)\/reset-token$/);
     if (resetMatch && req.method === "POST") {
       adminOnly();
       const reset = await userStore.resetToken(resetMatch[1]);
-      return reset ? sendJson(res, 200, reset) : sendJson(res, 404, { error: "User was not found" });
+      return reset
+        ? sendJson(res, 200, reset)
+        : sendJson(res, 404, { error: "User was not found" });
     }
 
     if (url.pathname === "/api/gateway/workspaces") {
@@ -260,7 +323,8 @@ export function createGatewayServer({
         // kind "shared" starts ungranted and is fed by sources targeting it;
         // kind "personal" hands ownership to a user up front (also how
         // "attach an existing workspace" is done).
-        const kind = body?.kind === "shared" ? "shared" : body?.kind === "personal" ? "personal" : null;
+        const kind =
+          body?.kind === "shared" ? "shared" : body?.kind === "personal" ? "personal" : null;
         if (!kind) throw httpError(400, 'kind must be "shared" or "personal"');
         const owner = String(body?.owner ?? "").trim();
         if (kind === "personal") {
@@ -273,9 +337,16 @@ export function createGatewayServer({
         });
         const slug = created?.workspace?.slug ?? created?.slug;
         if (!slug) throw httpError(502, "AnythingLLM returned an invalid workspace");
-        const record = await userStore.recordWorkspace(slug, { kind, owner: kind === "personal" ? owner : null });
+        const record = await userStore.recordWorkspace(slug, {
+          kind,
+          owner: kind === "personal" ? owner : null,
+        });
         return sendJson(res, 201, {
-          workspace: { slug, kind, ...(kind === "personal" ? { owner: record.owner } : { grants: record.grants }) },
+          workspace: {
+            slug,
+            kind,
+            ...(kind === "personal" ? { owner: record.owner } : { grants: record.grants }),
+          },
         });
       }
     }
@@ -285,7 +356,8 @@ export function createGatewayServer({
       // Register a workspace that already exists upstream (reverse scan):
       // nothing is created, the slug must exist in AnythingLLM.
       const slug = String(body?.slug ?? "").trim();
-      const kind = body?.kind === "shared" ? "shared" : body?.kind === "personal" ? "personal" : null;
+      const kind =
+        body?.kind === "shared" ? "shared" : body?.kind === "personal" ? "personal" : null;
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw httpError(400, "slug is required");
       if (!kind) throw httpError(400, 'kind must be "shared" or "personal"');
       const owner = String(body?.owner ?? "").trim();
@@ -293,21 +365,31 @@ export function createGatewayServer({
         if (!owner) throw httpError(400, "A personal workspace requires an owner");
         if (!(await userStore.get(owner))) throw httpError(400, `Unknown owner: ${owner}`);
       }
-      if (await userStore.workspaceRecord(slug)) throw httpError(400, `Workspace is already tracked: ${slug}`);
+      if (await userStore.workspaceRecord(slug))
+        throw httpError(400, `Workspace is already tracked: ${slug}`);
       const upstream = await anythingllmRequest("/api/v1/workspaces", { method: "GET" });
       if (!(upstream?.workspaces ?? []).some((workspace) => workspace.slug === slug)) {
         throw httpError(400, `Workspace does not exist in AnythingLLM: ${slug}`);
       }
-      const record = await userStore.recordWorkspace(slug, { kind, owner: kind === "personal" ? owner : null });
+      const record = await userStore.recordWorkspace(slug, {
+        kind,
+        owner: kind === "personal" ? owner : null,
+      });
       return sendJson(res, 201, {
-        workspace: { slug, kind, ...(kind === "personal" ? { owner: record.owner } : { grants: record.grants }) },
+        workspace: {
+          slug,
+          kind,
+          ...(kind === "personal" ? { owner: record.owner } : { grants: record.grants }),
+        },
       });
     }
 
-    const grantsMatch = url.pathname.match(/^\/api\/gateway\/workspaces\/([a-z0-9-]+)\/grants\/?([a-z0-9-]*)$/);
+    const grantsMatch = url.pathname.match(
+      /^\/api\/gateway\/workspaces\/([a-z0-9-]+)\/grants\/?([a-z0-9-]*)$/,
+    );
     if (grantsMatch && (req.method === "POST" || req.method === "DELETE")) {
       adminOnly();
-      const [ , slug, grantedUser ] = grantsMatch;
+      const [, slug, grantedUser] = grantsMatch;
       if (req.method === "POST") {
         const name = String(body?.user ?? grantedUser ?? "").trim();
         if (!name) throw httpError(400, "user is required");
@@ -323,15 +405,22 @@ export function createGatewayServer({
     if (workspaceMatch && req.method === "DELETE") {
       adminOnly();
       const slug = workspaceMatch[1];
-      const response = await fetchImpl(joinUrl(baseUrl, `/api/v1/workspace/${encodeURIComponent(slug)}`), {
-        method: "DELETE",
-        headers: { Accept: "application/json", Authorization: `Bearer ${apiKeyActive()}` },
-      });
+      const response = await fetchWithTimeout(
+        fetchImpl,
+        joinUrl(baseUrl, `/api/v1/workspace/${encodeURIComponent(slug)}`),
+        {
+          method: "DELETE",
+          headers: { Accept: "application/json", Authorization: `Bearer ${apiKeyActive()}` },
+        },
+      );
       // 404 means the workspace is already gone upstream; the ownership
       // record dies either way so no entitlement ever points at a ghost.
       if (!response.ok && response.status !== 404) {
         const text = await response.text().catch(() => "");
-        throw httpError(502, `AnythingLLM API ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
+        throw httpError(
+          502,
+          `AnythingLLM API ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`,
+        );
       }
       await userStore.removeWorkspace(slug);
       return sendJson(res, 200, { removed: slug });
@@ -355,24 +444,67 @@ export function createGatewayServer({
     if (url.pathname === "/api/gateway/search" && req.method === "POST") {
       if (!identity) throw httpError(401, "Bearer token required");
       const entitlements = await entitlementsFor(identity);
-      return sendJson(res, 200, await fanoutSearch({
-        query: String(body?.query ?? ""),
-        topN: clampTopN(body?.topN),
-        scoreThreshold: typeof body?.scoreThreshold === "number" ? body.scoreThreshold : undefined,
-        workspaces: entitlements.read,
-        baseUrl,
-        apiKey: apiKeyActive(),
-        fetchImpl,
-      }));
+      return sendJson(
+        res,
+        200,
+        await fanoutSearch({
+          query: String(body?.query ?? ""),
+          topN: clampTopN(body?.topN),
+          scoreThreshold:
+            typeof body?.scoreThreshold === "number" ? body.scoreThreshold : undefined,
+          workspaces: entitlements.read,
+          baseUrl,
+          apiKey: apiKeyActive(),
+          fetchImpl,
+        }),
+      );
+    }
+
+    if (url.pathname === "/api/gateway/jobs" && req.method === "GET") {
+      adminOnly();
+      return sendJson(res, 200, { jobs: sourceManager.listJobs() });
+    }
+    if (url.pathname === "/api/gateway/logs" && req.method === "GET") {
+      adminOnly();
+      const key = apiKeyActive();
+      const logs = logPath
+        ? tailLogFile(logPath, 300)
+        : "Logs are also available with: anything-obsidian logs gateway --follow";
+      return sendJson(res, 200, {
+        logs: redactSecretsText(logs)
+          .split(key || "\0")
+          .join("[redacted]"),
+      });
+    }
+    const jobAction = url.pathname.match(/^\/api\/gateway\/jobs\/([a-z0-9-]+)\/(retry|cancel)$/);
+    if (jobAction && req.method === "POST") {
+      adminOnly();
+      const job = await sourceManager[jobAction[2]](jobAction[1]);
+      return job ? sendJson(res, 202, job) : sendJson(res, 404, { error: "Job was not found" });
     }
 
     if (url.pathname === "/api/gateway/sources") {
       if (req.method === "GET") {
         if (!identity) throw httpError(401, "Bearer token required");
-        return sendJson(res, 200, { sources: await sourceManager.list() });
+        const sources = await sourceManager.list();
+        if (plane === "admin" || identity.role === "admin") return sendJson(res, 200, { sources });
+        const entitlements = await entitlementsFor(identity);
+        return sendJson(res, 200, {
+          sources: sources
+            .filter((source) => entitlements.read.includes(source.workspace))
+            .map(({ id, workspace, enabled, lastRefresh }) => ({
+              id,
+              workspace,
+              enabled,
+              lastRefresh,
+            })),
+        });
       }
       if (req.method === "POST") {
         adminOnly();
+        const target = await userStore.workspaceRecord(String(body?.workspace ?? ""));
+        if (!target || target.kind !== "shared")
+          throw httpError(400, "Source must target a registered shared workspace");
         return sendJson(res, 201, await sourceManager.create(body));
       }
     }
@@ -380,20 +512,35 @@ export function createGatewayServer({
     if (sourceMatch && req.method === "DELETE") {
       adminOnly();
       const removed = await sourceManager.remove(sourceMatch[1]);
-      return removed ? sendJson(res, 200, { removed: true }) : sendJson(res, 404, { error: "Source was not found" });
+      return removed
+        ? sendJson(res, 202, removed)
+        : sendJson(res, 404, { error: "Source was not found" });
     }
     const refreshMatch = url.pathname.match(/^\/api\/gateway\/sources\/([a-z0-9-]+)\/refresh$/);
     if (refreshMatch && req.method === "POST") {
       if (!identity) throw httpError(401, "Bearer token required");
       const source = await sourceManager.get(refreshMatch[1]);
       if (!source) return sendJson(res, 404, { error: "Source was not found" });
-      return sendJson(res, 202, sourceManager.requestRefresh(source.id));
+      await authorizeSource(identity, source.workspace, true);
+      if (body?.force && plane !== "admin" && identity.role !== "admin")
+        throw httpError(403, "Only administrators may force a rebuild");
+      return sendJson(
+        res,
+        202,
+        await sourceManager.requestRefresh(source.id, { force: body?.force === true }),
+      );
     }
     const jobMatch = url.pathname.match(/^\/api\/gateway\/jobs\/([a-z0-9-]+)$/);
     if (jobMatch && req.method === "GET") {
       if (!identity) throw httpError(401, "Bearer token required");
       const job = sourceManager.job(jobMatch[1]);
-      return job ? sendJson(res, 200, job) : sendJson(res, 404, { error: "Job was not found" });
+      if (!job) return sendJson(res, 404, { error: "Job was not found" });
+      await authorizeSource(identity, job.workspace);
+      return sendJson(
+        res,
+        200,
+        plane === "admin" || identity.role === "admin" ? job : publicJob(job),
+      );
     }
 
     return sendJson(res, 404, { error: "Not found" });
@@ -427,7 +574,10 @@ export function createGatewayServer({
     if (decision.action === "workspace-documents") {
       // Only the document list crosses the proxy — never the workspace
       // detail response it comes from.
-      const data = await anythingllmRequest(`/api/v1/workspace/${encodeURIComponent(decision.slug)}`, { method: "GET" });
+      const data = await anythingllmRequest(
+        `/api/v1/workspace/${encodeURIComponent(decision.slug)}`,
+        { method: "GET" },
+      );
       const workspace = Array.isArray(data?.workspace) ? data.workspace[0] : data?.workspace;
       return sendJson(res, 200, { documents: workspace?.documents ?? [] });
     }
@@ -438,11 +588,15 @@ export function createGatewayServer({
       Authorization: `Bearer ${apiKeyActive()}`,
     };
     if (raw.length) headers["content-type"] = contentType(req);
-    const upstream = await fetchImpl(joinUrl(baseUrl, url.pathname + url.search), {
-      method: req.method,
-      headers,
-      body: raw.length ? raw : undefined,
-    });
+    const upstream = await fetchWithTimeout(
+      fetchImpl,
+      joinUrl(baseUrl, url.pathname + url.search),
+      {
+        method: req.method,
+        headers,
+        body: raw.length ? raw : undefined,
+      },
+    );
     const buffer = Buffer.from(await upstream.arrayBuffer());
 
     if (decision.action === "create-workspace" && upstream.ok) {
@@ -453,13 +607,15 @@ export function createGatewayServer({
 
     res.writeHead(upstream.status, {
       "content-type": upstream.headers.get("content-type") ?? "application/json",
-      ...(upstream.headers.get("content-length") ? { "content-length": String(buffer.length) } : {}),
+      ...(upstream.headers.get("content-length")
+        ? { "content-length": String(buffer.length) }
+        : {}),
     });
     res.end(buffer);
   }
 
   async function anythingllmRequest(apiPath, init) {
-    const response = await fetchImpl(joinUrl(baseUrl, apiPath), {
+    const response = await fetchWithTimeout(fetchImpl, joinUrl(baseUrl, apiPath), {
       ...init,
       headers: {
         Accept: "application/json",
@@ -468,8 +624,49 @@ export function createGatewayServer({
       },
     });
     const text = await response.text();
-    if (!response.ok) throw httpError(502, `AnythingLLM API ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
+    if (!response.ok)
+      throw httpError(
+        502,
+        `AnythingLLM API ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`,
+      );
     return text ? safeJson(text) : null;
+  }
+
+  async function authorizeSource(identity, workspace, write = false) {
+    if (plane === "admin" || identity?.role === "admin") return;
+    if (!identity) throw httpError(401, "Bearer token required");
+    const entitlements = await entitlementsFor(identity);
+    if (!entitlements.read.includes(workspace)) throw httpError(404, "Source or job was not found");
+    if (write && identity.role !== "member")
+      throw httpError(403, "Refreshing sources requires the member role");
+  }
+
+  function publicJob({
+    id,
+    sourceId,
+    workspace,
+    status,
+    phase,
+    progress,
+    startedAt,
+    finishedAt,
+    result,
+    error,
+  }) {
+    return {
+      id,
+      sourceId,
+      workspace,
+      status,
+      phase,
+      progress: progress
+        ? { phase: progress.phase, completed: progress.completed, total: progress.total }
+        : null,
+      startedAt,
+      finishedAt,
+      result,
+      error: error ? "Source refresh failed; ask the administrator for details" : null,
+    };
   }
 
   function buildMcpServer(identity) {
@@ -485,11 +682,17 @@ export function createGatewayServer({
       },
       async ({ query, topN, scoreThreshold }) => {
         const entitlements = await entitlementsFor(identity);
-        return asJson(await fanoutSearch({
-          query, topN, scoreThreshold,
-          workspaces: entitlements.read,
-          baseUrl, apiKey: apiKeyActive(), fetchImpl,
-        }));
+        return asJson(
+          await fanoutSearch({
+            query,
+            topN,
+            scoreThreshold,
+            workspaces: entitlements.read,
+            baseUrl,
+            apiKey: apiKeyActive(),
+            fetchImpl,
+          }),
+        );
       },
     );
 
@@ -499,15 +702,18 @@ export function createGatewayServer({
       {
         question: z.string().min(1),
         workspace: z.string().min(1),
-        mode: z.enum(["query", "chat"]).default("query"),
       },
-      async ({ question, workspace, mode }) => {
+      async ({ question, workspace }) => {
         const entitlements = await entitlementsFor(identity);
-        if (!entitlements.read.includes(workspace)) throw new Error(`Workspace is not readable by this caller: ${workspace}`);
-        const data = await anythingllmRequest(`/api/v1/workspace/${encodeURIComponent(workspace)}/chat`, {
-          method: "POST",
-          body: JSON.stringify({ message: question, mode }),
-        });
+        if (!entitlements.read.includes(workspace))
+          throw new Error(`Workspace is not readable by this caller: ${workspace}`);
+        const data = await anythingllmRequest(
+          `/api/v1/workspace/${encodeURIComponent(workspace)}/chat`,
+          {
+            method: "POST",
+            body: JSON.stringify({ message: question, mode: "query" }),
+          },
+        );
         return asJson(data);
       },
     );
@@ -515,13 +721,25 @@ export function createGatewayServer({
     server.tool(
       "any_obs_shared_refresh",
       "Queue a refresh+reindex job for the shared knowledge base (git pull or directory re-read, then reindex into the workspace its source targets). Returns the job records; poll any_obs_job_get. Never synchronous.",
-      { sourceId: z.string().min(1).optional() },
-      async ({ sourceId }) => {
-        const sources = (await sourceManager.list()).filter((source) =>
-          source.enabled && (!sourceId || source.id === sourceId),
+      { sourceId: z.string().min(1).optional(), force: z.boolean().default(false) },
+      async ({ sourceId, force }) => {
+        const entitlements = await entitlementsFor(identity);
+        if (identity.role !== "member" && identity.role !== "admin")
+          throw httpError(403, "Refreshing sources requires the member role");
+        if (force && identity.role !== "admin")
+          throw httpError(403, "Only administrators may force a rebuild");
+        const sources = (await sourceManager.list()).filter(
+          (source) =>
+            source.enabled &&
+            !source.cleanupPending &&
+            (!sourceId || source.id === sourceId) &&
+            (identity.role === "admin" || entitlements.read.includes(source.workspace)),
         );
-        if (!sources.length) throw new Error(sourceId ? `Source was not found: ${sourceId}` : "No enabled shared sources");
-        return asJson({ jobs: sources.map((source) => sourceManager.requestRefresh(source.id)) });
+        if (!sources.length) throw new Error("No permitted sources found");
+        const jobs = await Promise.all(
+          sources.map((source) => sourceManager.requestRefresh(source.id, { force })),
+        );
+        return asJson({ jobs: jobs.map(publicJob) });
       },
     );
 
@@ -532,7 +750,8 @@ export function createGatewayServer({
       async ({ jobId }) => {
         const job = sourceManager.job(jobId);
         if (!job) throw new Error(`Job was not found: ${jobId}`);
-        return asJson(job);
+        await authorizeSource(identity, job.workspace);
+        return asJson(identity.role === "admin" ? job : publicJob(job));
       },
     );
 
@@ -550,7 +769,8 @@ export function createGatewayServer({
   }
 
   async function serveDashboard(res, pathname) {
-    const file = pathname === "/" ? "index.html" : pathname.replace(/^\/dashboard\/?/, "").replace(/^\/+/, "");
+    const file =
+      pathname === "/" ? "index.html" : pathname.replace(/^\/dashboard\/?/, "").replace(/^\/+/, "");
     if (!file || file.includes("..")) return serveDashboardFile(res, "index.html");
     return serveDashboardFile(res, file);
   }
@@ -563,13 +783,18 @@ export function createGatewayServer({
     } catch {
       return sendJson(res, 404, { error: "Not found" });
     }
-    res.writeHead(200, { "content-type": file.endsWith(".js") ? "text/javascript; charset=utf-8" : file.endsWith(".css") ? "text/css; charset=utf-8" : "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "content-type": file.endsWith(".js")
+        ? "text/javascript; charset=utf-8"
+        : file.endsWith(".css")
+          ? "text/css; charset=utf-8"
+          : "text/html; charset=utf-8",
+    });
     res.end(body);
   }
 }
 
-function defaultDataDir(env, defaultConfigRoot) {
-  if (env.GATEWAY_DATA_DIR) return path.resolve(env.GATEWAY_DATA_DIR);
+function defaultDataDir(env) {
   // Native deployment: the gateway's state lives beside the rest of the
   // app's data, under the standard config root.
   const home = env.ANYTHING_OBSIDIAN_HOME
@@ -597,8 +822,11 @@ function contentType(req) {
 async function maybeJson(req) {
   const raw = await readRawBody(req);
   if (!raw.length) return {};
-  const parsed = safeJson(raw.toString("utf8"));
-  return parsed ?? {};
+  try {
+    return JSON.parse(raw.toString("utf8"));
+  } catch {
+    throw httpError(400, "Request body must be JSON");
+  }
 }
 
 function readRawBody(req, limit = 32 * 1024 * 1024) {
@@ -636,34 +864,15 @@ function asJson(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
-async function readPackageInfo() {
-  const { readFile } = await import("node:fs/promises");
-  try {
-    return JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-  } catch {
-    return { version: "0.0.0" };
-  }
-}
-
 if (import.meta.url === entryUrl()) {
   const env = process.env;
-  const { defaultConfigRoot } = await import("../lib/app-config.mjs");
 
-  // Native deployment, and fully self-contained: the gateway's base URL and
-  // key live in its own data dir (gateway/gateway.json), NOT in the client's
-  // config.json — an admin may install the client on the same machine later
-  // and rewriting that file must never touch the gateway. Resolution order:
-  // env, then gateway.json, then the legacy client config (older installs
-  // kept the URL there).
-  const dataDir = defaultDataDir(env, defaultConfigRoot);
+  const dataDir = defaultDataDir(env);
   const gatewayConfig = createGatewayConfig({ dataDir });
   const gatewayState = await gatewayConfig.load();
-  const baseUrlResolved = env.ANYTHINGLLM_BASE_URL
-    ? env.ANYTHINGLLM_BASE_URL
-    : gatewayState.anythingllmBaseUrl
-      || (await (await import("../lib/app-config.mjs")).createAppConfigStore({ rootDir: defaultConfigRoot({ env }) }).load())?.anythingllmBaseUrl;
+  const baseUrlResolved = gatewayState.anythingllmBaseUrl;
   if (!baseUrlResolved) {
-    console.error("No AnythingLLM base URL. Set one with: anything-obsidian init --server --url <url> --api-key <key>");
+    console.error("Gateway is not configured. Run: anything-obsidian setup --server");
     process.exit(1);
   }
 
@@ -673,41 +882,75 @@ if (import.meta.url === entryUrl()) {
     baseUrl: baseUrlResolved,
     // Resolve per job: the wizard- or Settings-collected key lives in the
     // data dir, not the process env.
-    apiKey: async () => env.ANYTHINGLLM_API_KEY || (await gatewayConfig.load()).apiKey,
+    apiKey: async () => (await gatewayConfig.load()).apiKey,
   });
   const shared = {
     userStore,
     sourceManager,
     gatewayConfig,
     anythingllmBaseUrl: baseUrlResolved,
-    anythingllmApiKey: env.ANYTHINGLLM_API_KEY ?? "",
+    logPath: path.join(path.dirname(dataDir), "logs", "gateway.log"),
   };
 
   const bootstrap = async () => {
     const state = await gatewayConfig.load();
-    const key = env.ANYTHINGLLM_API_KEY || state.apiKey;
+    const key = state.apiKey;
     if (!key) {
-      console.error(`[any-obs-gateway] no AnythingLLM key yet — open the admin dashboard (loopback :${env.GATEWAY_ADMIN_PORT ?? DEFAULT_GATEWAY_ADMIN_PORT}) and run the setup wizard`);
+      console.error(
+        `[any-obs-gateway] no AnythingLLM key yet — open the admin dashboard (loopback :${env.GATEWAY_ADMIN_PORT ?? DEFAULT_GATEWAY_ADMIN_PORT}) and run the setup wizard`,
+      );
       return;
     }
     const workspaces = await userStore.workspaces();
     if (!workspaces.some((workspace) => workspace.kind === "shared")) {
-      console.error(`[any-obs-gateway] no shared workspaces yet — create one in the admin dashboard (Workspaces tab), then point shared sources at it`);
+      console.error(
+        `[any-obs-gateway] no shared workspaces yet — create one in the admin dashboard (Workspaces tab), then point shared sources at it`,
+      );
     }
   };
-  bootstrap();
+  await sourceManager.ready;
+  await bootstrap();
 
-  const port = Number(env.GATEWAY_PORT ?? DEFAULT_GATEWAY_PORT);
-  createGatewayServer({ ...shared, plane: "public" }).listen(port, env.GATEWAY_BIND ?? "0.0.0.0", () => {
-    console.error(`[any-obs-gateway] public plane on ${env.GATEWAY_BIND ?? "0.0.0.0"}:${port} (MCP + user API; user token required)`);
-  });
+  const port = gatewayState.port ?? DEFAULT_GATEWAY_PORT;
+  const publicServer = createGatewayServer({ ...shared, plane: "public" }).listen(
+    port,
+    gatewayState.bind ?? "0.0.0.0",
+    () => {
+      console.error(
+        `[any-obs-gateway] public plane on ${gatewayState.bind ?? "0.0.0.0"}:${port} (MCP + user API; user token required)`,
+      );
+    },
+  );
 
-  const adminPort = Number(env.GATEWAY_ADMIN_PORT ?? DEFAULT_GATEWAY_ADMIN_PORT);
-  createGatewayServer({ ...shared, plane: "admin" }).listen(adminPort, env.GATEWAY_ADMIN_BIND ?? "127.0.0.1", () => {
-    console.error(`[any-obs-gateway] admin plane on ${env.GATEWAY_ADMIN_BIND ?? "127.0.0.1"}:${adminPort} (dashboard + setup; loopback reach is the credential)`);
-  });
+  const adminPort = gatewayState.adminPort ?? DEFAULT_GATEWAY_ADMIN_PORT;
+  const adminServer = createGatewayServer({ ...shared, plane: "admin" }).listen(
+    adminPort,
+    "127.0.0.1",
+    () => {
+      console.error(
+        `[any-obs-gateway] admin plane on ${"127.0.0.1"}:${adminPort} (dashboard + setup; loopback reach is the credential)`,
+      );
+    },
+  );
 
-  setInterval(() => {
+  let stopping = false;
+  const shutdown = async () => {
+    if (stopping) return;
+    stopping = true;
+    clearInterval(timer);
+    const closed = [publicServer, adminServer].map((server) => {
+      server.closeAllConnections();
+      return new Promise((resolve) => server.close(resolve));
+    });
+    await sourceManager.close();
+    await Promise.all(closed);
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+  const timer = setInterval(() => {
+    rotateLogs({ logsRoot: path.join(path.dirname(dataDir), "logs") }).catch((error) =>
+      console.error(`Log rotation failed: ${error.message}`),
+    );
     sourceManager.runDueSources().catch((error) => {
       console.error(`[any-obs-gateway] scheduled refresh failed: ${error?.message ?? error}`);
     });
@@ -715,6 +958,7 @@ if (import.meta.url === entryUrl()) {
 }
 
 function entryUrl() {
+  if (!process.argv[1]) return "";
   try {
     return pathToFileURL(realpathSync(process.argv[1])).href;
   } catch {

@@ -1,1074 +1,707 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { createReadStream, realpathSync } from "node:fs";
+import { mkdir, stat } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
+import os from "node:os";
 import path from "node:path";
-import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promisify } from "node:util";
-
-import { createAnythingllmClient } from "../dashboard/anythingllm.mjs";
-import { createDashboardServer } from "../dashboard/server.mjs";
-import { createFileJobStore } from "../dashboard/job-store.mjs";
-import { syncStatusPath } from "../lib/sync-status.mjs";
-import { rotateLogs } from "../lib/log-rotate.mjs";
-import { compareVersions, currentVersionValue, fetchLatestVersion } from "../lib/update-check.mjs";
+import { Writable } from "node:stream";
+import { parseArgs, promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import {
-  createLocalJobManager,
-  startDashboardProcess,
-  startSchedulerProcess,
-  stopSchedulerProcess,
-  readSchedulerStatus,
-  tailLogFile,
-  waitForHttp,
-  WORKER_SCRIPT_PATH,
-} from "../dashboard/local-jobs.mjs";
-import { createAppConfigStore, defaultConfigRoot, expandTilde, nativeEnv } from "../lib/app-config.mjs";
-import { createVaultRegistry } from "../lib/vault-registry.mjs";
-import { createServiceManager } from "../lib/autostart.mjs";
-import { randomBytes } from "node:crypto";
+  createAppConfigStore,
+  defaultConfigRoot,
+  expandTilde,
+  nativeEnv,
+} from "../lib/app-config.mjs";
+import { createInstallationStore } from "../lib/installation.mjs";
+import { createServiceController, installedServices, SERVICE_NAMES } from "../lib/services.mjs";
+import { createGatewayConfig } from "../server/gateway-config.mjs";
+import { fetchWithTimeout } from "../lib/http.mjs";
+import { redactSecretsText } from "../dashboard/redact.mjs";
+import { tailLogFile } from "../dashboard/local-jobs.mjs";
+import { rotateLogs } from "../lib/log-rotate.mjs";
+import { withFileLock } from "../lib/state.mjs";
+import { updateApplication } from "../lib/updater.mjs";
 
-const execFileAsync = promisify(execFile);
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const exec = promisify(execFile);
+export const REQUIRED_NODE_MAJOR = 22;
+export const MANAGED_VAULTS_ROOT = "~/.anything-obsidian/vaults";
 const USAGE = `Usage: anything-obsidian <command>
 
-Commands:
-  init       One-time setup: vault root, AnythingLLM URL and API key
-  start      Run the dashboard in the foreground and open it in a browser
-  start-bg   Start the background sync scheduler
-  stop       Stop the dashboard (if backgrounded) and the sync scheduler
-  status     Show install, config, and service health (--json for agents)
-  autostart  Keep the dashboard and scheduler running: on | off | status
-             (also: autostart gateway on | off | status for a server install)
-  gateway    Run the IAM gateway (shared deployments): foreground, --bg, stop
-  lan        Manage the LAN MCP endpoint: token <t> | on | off | status
-  update     Update the app in place (data and settings are kept)
+  setup       Connect and configure this machine; start its services
+  start       Start all configured services in the background (idempotent)
+  stop        Stop all configured services; preserve autostart preference
+  restart     Restart all configured services and verify readiness
+  status      Show configuration, readiness and startup guarantee (--json)
+  logs        Show logs: [dashboard|scheduler|mcp|mcp-lan|gateway] [-f|--follow]
+  autostart   on | off | status (changing this does not stop running services)
+  lan         on | off | token <value> | status
+  update      Stage, verify and activate an update; roll back failed activation
+  run         <service> in the foreground for diagnostics
 
-Options:
-  --vaults-root <path>       Vault root directory (init)
-  --url <url>                AnythingLLM base URL (init)
-  --api-key <key>            AnythingLLM API key (init)
-  --port <number>            Dashboard port, default 21502 (init)
-  --bg                       Start the dashboard in the background (start)
-  --no-browser               Do not open the browser (start)
-  --json                     Machine-readable output (status)
-  --help                     Show this help
+Setup defaults to a client. Use setup --server for a gateway; both can coexist.
+  --url <url>          Gateway URL (client) or AnythingLLM URL (server)
+  --api-key <value>    User token (client) or AnythingLLM developer key (server)
+  --vaults-root <path> Client vault root
+  --port <number>     Client dashboard port or server public port
+  --admin-port <port> Server admin port (loopback only)
+LAN: lan on --allowed-hosts <comma-separated hostnames or IPs>
 
-Init flags make setup non-interactive: when all of --vaults-root, --url,
-and --api-key are provided, no prompts are shown.`;
-
-export const REQUIRED_NODE_MAJOR = 22;
-
-// Managed vaults live inside the app's own home unless the user opts to
-// import directories that already live elsewhere.
-export const MANAGED_VAULTS_ROOT = "~/.anything-obsidian/vaults";
+Setup enables autostart by default. macOS starts after login; Linux gateways
+require loginctl enable-linger for operation at boot without a login.
+`;
 
 export function nodeVersionProblem(version = process.versions.node) {
-  const major = Number.parseInt(String(version ?? "").split(".")[0], 10);
-  if (Number.isInteger(major) && major >= REQUIRED_NODE_MAJOR) return null;
-  return [
-    `Anything Obsidian needs Node.js >= ${REQUIRED_NODE_MAJOR} (found ${version || "none"}).`,
-    "install.sh installs a managed Node runtime when the system has none:",
-    "  curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh",
-  ].join("\n");
+  const major = Number.parseInt(String(version).split(".")[0], 10);
+  return major >= REQUIRED_NODE_MAJOR
+    ? null
+    : `Anything Obsidian needs Node.js >= ${REQUIRED_NODE_MAJOR} (found ${version}). Re-run install.sh to install a managed runtime.`;
 }
 
 export async function runCli(argv = process.argv.slice(2), deps = {}) {
-  const io = deps.io || { input: process.stdin, output: process.stdout };
-  const env = deps.env || process.env;
-  const store = deps.store || createAppConfigStore({ rootDir: defaultConfigRoot({ env }) });
-  const fetchImpl = deps.fetchImpl || fetch;
-  const spawnImpl = deps.spawnImpl || spawn;
-  const killImpl = deps.killImpl || ((pid, signal) => process.kill(pid, signal));
-  const execFileImpl = deps.execFileImpl || execFileAsync;
-  const log = deps.log || ((message) => io.output.write(`${message}\n`));
-
-  const [command, ...rest] = argv;
-  const flags = parseFlags(rest);
-
-  const wantsHelp = command === undefined || ["-h", "--help", "help"].includes(command);
-  if (!wantsHelp) {
-    const problem = nodeVersionProblem(deps.nodeVersion);
-    if (problem) {
-      log(problem);
-      return 1;
-    }
-  }
-
-  switch (command) {
-    case "init":
-      return runInit({ flags, store, env, io, fetchImpl, log, promptFactory: deps.promptFactory });
-    case "start":
-      return runStart({ store, env, spawnImpl, fetchImpl, log, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform, background: "bg" in flags, noBrowser: "no-browser" in flags });
-    case "start-bg":
-      return runStartBg({ store, env, spawnImpl, killImpl, log });
-    case "scheduler-fg":
-      return runSchedulerFg({ store, env, spawnImpl, log });
-    case "stop":
-      return runStop({ store, killImpl, log, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform, env });
-    case "status":
-      return runStatus({ store, env, fetchImpl, execFileImpl, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
-    case "autostart":
-      return runAutostart({ subcommand: rest[0], rest, store, env, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
-    case "mcp-fg":
-      return runMcpFg({ store, env, spawnImpl, log, lan: rest.includes("--lan") || flags.lan === "" || flags.lan === "1" });
-    case "gateway":
-      return runGateway({ args: rest, store, env, spawnImpl, killImpl, log });
-    case "gateway-fg":
-      return runGatewayFg({ store, env, spawnImpl, log });
-    case "lan":
-      return runLan({ subcommand: rest[0], argument: rest[1], store, env, log, json: "json" in flags, launchctl: deps.launchctl, systemctl: deps.systemctl, platform: deps.platform });
-    case "update":
-      return runUpdate({ log, spawnImpl });
-    case "-h":
-    case "--help":
-    case "help":
-      log(USAGE);
-      return 0;
-    default:
-      log(USAGE);
-      return command === undefined ? 0 : 2;
-  }
-}
-
-function autostartManager({ store, env, log, launchctl, systemctl, platform = process.platform }) {
-  try {
-    return createServiceManager({
-      platform,
-      homedir: env.HOME || undefined,
-      logsRoot: store.paths.logsRoot,
-      ...(launchctl ? { launchctl } : {}),
-      ...(systemctl ? { systemctl } : {}),
-    });
-  } catch (error) {
-    log(`Autostart is unavailable here: ${error instanceof Error ? error.message : String(error)}`);
-    return null;
-  }
-}
-
-async function runAutostart({ subcommand, rest, store, env, log, json, launchctl, systemctl, platform }) {
-  const config = await loadConfigOrWarn(store, log);
-  if (!config) return 1;
-  await store.ensureLayout();
-  const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
-  if (!manager) return 1;
-
-  if (subcommand === "gateway") {
-    const action = rest[1] || "status";
-    if (action === "on") {
-      await manager.enableGateway?.({ gatewayLogPath: path.join(store.paths.logsRoot, "gateway.log") });
-      const state = await manager.status();
-      if (json) return log(JSON.stringify({ ok: true, gateway: "on", services: { gateway: state.gateway } }, null, 2));
-      log("Gateway autostart is on: it starts at every login and restarts if it crashes.");
-      log(`Admin dashboard: http://localhost:21505 (loopback only)`);
-      return 0;
-    }
-    if (action === "off") {
-      await manager.disableGateway?.();
-      if (json) return log(JSON.stringify({ ok: true, gateway: "off" }, null, 2));
-      log("Gateway autostart is off. Start it any time with: anything-obsidian gateway");
-      return 0;
-    }
-    const state = manager.status ? (await manager.status()).gateway : null;
-    if (json) return log(JSON.stringify({ ok: true, gateway: state ?? { loaded: false, running: false, pid: null } }, null, 2));
-    log(state
-      ? `Gateway autostart: ${state.running ? `running (pid ${state.pid})` : state.loaded ? "loaded, not running" : "not loaded"}`
-      : "Gateway autostart: not supported on this platform");
+  const env = deps.env ?? process.env;
+  const log = deps.log ?? ((text) => process.stdout.write(`${text}\n`));
+  const [command = "help", ...args] = argv;
+  if (["help", "--help", "-h"].includes(command)) {
+    log(USAGE);
     return 0;
   }
-
-  switch (subcommand) {
-    case "on": {
-      await manager.enable({
-        dashboardLogPath: store.paths.dashboardLogPath,
-        schedulerLogPath: store.paths.schedulerLogPath,
-        displayRoot: store.paths.displayRoot,
-      });
-      const state = await manager.status();
-      if (json) {
-        log(JSON.stringify({ ok: true, autostart: "on", services: state }, null, 2));
-      } else {
-        log("Autostart is on. The dashboard and sync scheduler are running and will");
-        log("start again at every login and restart automatically if they crash.");
-      }
-      return 0;
-    }
-    case "off": {
-      await manager.disable();
-      if (json) {
-        log(JSON.stringify({ ok: true, autostart: "off" }, null, 2));
-      } else {
-        log("Autostart is off. The dashboard and scheduler are stopped and will not");
-        log("start at login. Start them any time with: anything-obsidian start");
-      }
-      return 0;
-    }
-    case "status":
-    default: {
-      const enabled = await manager.enabled();
-      const services = enabled ? await manager.status() : { dashboard: { loaded: false, running: false, pid: null }, scheduler: { loaded: false, running: false, pid: null } };
-      if (json) {
-        log(JSON.stringify({ ok: true, autostart: { enabled, ...services } }, null, 2));
-        return 0;
-      }
-      const describe = (name, service) =>
-        `${name}: ${service.running ? `running (pid ${service.pid})` : service.loaded ? "loaded, not running" : "not loaded"}`;
-      log(`Autostart: ${enabled ? "on" : "off"}`);
-      log(`  ${describe("Dashboard", services.dashboard)}`);
-      log(`  ${describe("Scheduler", services.scheduler)}`);
-      return 0;
-    }
+  const problem = nodeVersionProblem(deps.nodeVersion);
+  if (problem) {
+    log(problem);
+    return 1;
   }
-}
-
-const GATEWAY_SCRIPT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "server", "gateway.mjs");
-
-function gatewayPaths(store) {
-  return {
-    pidPath: path.join(store.paths.runRoot, "gateway.pid"),
-    logPath: path.join(store.paths.logsRoot, "gateway.log"),
-    script: GATEWAY_SCRIPT_PATH,
-  };
-}
-
-function gatewayPid(pidPath, killImpl) {
-  let pid;
-  try {
-    pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
-  } catch {
-    return { running: false, pid: null };
-  }
-  if (!Number.isInteger(pid) || pid <= 0) return { running: false, pid: null };
-  try {
-    killImpl(pid, 0);
-    return { running: true, pid };
-  } catch (error) {
-    if (error?.code === "ESRCH") return { running: false, pid };
-    if (error?.code === "EPERM") return { running: true, pid };
-    throw error;
-  }
-}
-
-async function runGateway({ args, store, env, spawnImpl, killImpl, log }) {
-  const paths = gatewayPaths(store);
-
-  if (args[0] === "stop") {
-    const status = gatewayPid(paths.pidPath, killImpl);
-    if (!status.running) {
-      rmSync(paths.pidPath, { force: true });
-      log("Gateway is not running.");
-      return 0;
-    }
-    killImpl(status.pid, "SIGTERM");
-    rmSync(paths.pidPath, { force: true });
-    log(`Stopped gateway (pid ${status.pid}).`);
-    return 0;
-  }
-
-  const config = await loadConfigOrWarn(store, log);
-  if (!config) return 1;
-  await store.ensureLayout();
-
-  // Hand off to the service manager when it owns us (autostart gateway on).
-  const manager = autostartManager({ store, env, log });
-  if (args.includes("--bg") && manager && !env.AO_SUPERVISED && (await manager.gatewayEnabled?.())) {
-    await manager.enableGateway({ gatewayLogPath: paths.logPath });
-    log("Gateway is managed by the platform service manager (public :21500, admin :21505).");
-    return 0;
-  }
-
-  const childEnv = {
-    ...nativeEnv(config, store.paths, { env }),
-    ...(env.GATEWAY_PORT ? { GATEWAY_PORT: env.GATEWAY_PORT } : {}),
-    ...(env.GATEWAY_ADMIN_PORT ? { GATEWAY_ADMIN_PORT: env.GATEWAY_ADMIN_PORT } : {}),
-    AO_MODE: "native",
-  };
-  const adminPort = Number(env.GATEWAY_ADMIN_PORT ?? 21505);
-
-  if (args.includes("--bg")) {
-    const existing = gatewayPid(paths.pidPath, killImpl);
-    if (existing.running) {
-      log(`Gateway is already running (pid ${existing.pid}).`);
-      return 0;
-    }
-    mkdirSync(path.dirname(paths.pidPath), { recursive: true });
-    mkdirSync(path.dirname(paths.logPath), { recursive: true });
-    const fd = openSync(paths.logPath, "a");
-    let pid;
-    try {
-      const child = spawnImpl(process.argv[0] || process.execPath, [paths.script], {
-        cwd: path.dirname(paths.script),
-        env: childEnv,
-        detached: true,
-        stdio: ["ignore", fd, fd],
-        windowsHide: true,
-      });
-      writeFileSync(paths.pidPath, `${child.pid}\n`);
-      child.unref?.();
-      pid = child.pid;
-    } finally {
-      closeSync(fd);
-    }
-    const ready = await waitForHttp(`http://127.0.0.1:${adminPort}/health`, { fetchImpl: fetch });
-    log(ready
-      ? `Gateway is running (public :${Number(env.GATEWAY_PORT ?? 21500)}, admin dashboard http://localhost:${adminPort}). Pid file: ${paths.pidPath}`
-      : "Gateway did not become ready in time — check the log at " + paths.logPath);
-    return ready ? 0 : 1;
-  }
-
-  return runGatewayFg({ store, env, spawnImpl, log });
-}
-
-async function runGatewayFg({ store, env, spawnImpl, log }) {
-  const config = await loadConfigOrWarn(store, log);
-  if (!config) return 1;
-  await store.ensureLayout();
-
-  const paths = gatewayPaths(store);
-  if (env.AO_SUPERVISED) {
-    process.title = "anything-obsidian-gateway";
-  }
-  const child = spawnImpl(process.argv[0] || process.execPath, [paths.script], {
-    cwd: path.dirname(paths.script),
-    env: nativeEnv(config, store.paths, { env }),
-    stdio: "inherit",
-  });
-  const forward = (signal) => {
-    try {
-      child.kill(signal);
-    } catch {
-      // already gone
-    }
-  };
-  process.on("SIGTERM", () => forward("SIGTERM"));
-  process.on("SIGINT", () => forward("SIGINT"));
-  const code = await new Promise((resolve) => {
-    child.on("close", (exitCode) => resolve(exitCode ?? 0));
-    child.on("error", () => resolve(1));
-  });
-  return code;
-}
-
-async function runSchedulerFg({ store, env, spawnImpl, log }) {
-  const config = await loadConfigOrWarn(store, log);
-  if (!config) return 1;
-  await store.ensureLayout();
-
-  if (env.AO_SUPERVISED) {
-    process.title = "anything-obsidian-scheduler";
-  }
-  const child = spawnImpl(process.argv[0] || process.execPath, [WORKER_SCRIPT_PATH, "scheduler"], {
-    env: nativeEnv(config, store.paths, { env }),
-    stdio: "inherit",
-  });
-  const forward = (signal) => {
-    try {
-      child.kill(signal);
-    } catch {
-      // already gone
-    }
-  };
-  process.on("SIGTERM", () => forward("SIGTERM"));
-  process.on("SIGINT", () => forward("SIGINT"));
-  const code = await new Promise((resolve) => {
-    child.on("error", () => resolve(1));
-    child.on("close", resolve);
-  });
-  return code === 0 ? 0 : 1;
-}
-
-async function runInit({ flags, store, env, io, fetchImpl, log, promptFactory }) {
-  const serverInstall = "server" in flags;
-  const nonInteractive = Boolean(flags.url && flags["api-key"] && (serverInstall || flags["vaults-root"]));
-  const prompt = nonInteractive ? null : (promptFactory || createPrompt)(io);
-
-  try {
-    const existing = await store.load();
-    // A client install on a machine that runs the gateway rewrites only the
-    // client dashboard's config — say so, and never let it drop the server
-    // mode marker (that would stop `stop` from tearing the gateway down).
-    const serverModePresent = existing?.mode === "server" && !serverInstall;
-    if (existing && !nonInteractive) {
-      const overwrite = await prompt.confirm(
-        serverModePresent
-          ? "A gateway (server) install already exists on this machine. This rewrites the client dashboard's config only - the gateway and its data (gateway/) are untouched. Continue? [y/N] "
-          : `Config already exists at ${store.paths.configPath}. Overwrite? [y/N] `,
-        false);
-      if (!overwrite) {
-        log("Keeping the existing configuration.");
-        return 0;
-      }
-    }
-
-    log("Checking prerequisites…");
-    const gitOk = await checkGit();
-    log(gitOk ? "✓ git is available" : "✗ git was not found. Install git (e.g. `xcode-select --install`) and re-run init.");
-    if (!gitOk) return 1;
-
-    const vaultsRoot = serverInstall
-      ? expandTilde(MANAGED_VAULTS_ROOT)
-      : await resolveVaultsRoot({ flags, prompt, env, log });
-
-    // install.sh IS the client installer: gateway-first. The default flow
-    // asks for the gateway URL and the any-obs user token, nothing else.
-    // Solo setups pointing straight at an AnythingLLM still work — the
-    // post-connect probe (/api/gateway/me) detects "no gateway in front"
-    // and the summary says so; no architecture question is asked of anyone.
-    let anythingllmBaseUrl;
-    let apiKey;
-    if (serverInstall) {
-      anythingllmBaseUrl = flags.url || await prompt.question(`AnythingLLM base URL [http://localhost:21501] `, "http://localhost:21501");
-      apiKey = flags["api-key"] || await prompt.question("AnythingLLM API key (Settings → Developer API): ", "");
-    } else {
-      anythingllmBaseUrl = flags.url || await prompt.question(`Gateway base URL [http://localhost:21500] `, "http://localhost:21500");
-      apiKey = flags["api-key"] || await prompt.question("any-obs user token (from your admin): ", "");
-    }
-    const dashboardPort = Number(flags.port || 21502);
-
-    const client = createAnythingllmClient({ baseUrl: anythingllmBaseUrl, apiKey, fetchImpl });
-    log(`Testing the connection at ${anythingllmBaseUrl}…`);
-    let gatewayIdentity = null;
-    try {
-      // A gateway answers this with the token's own identity; plain
-      // AnythingLLM 404s it. Either way the list-workspaces test below is
-      // the real acceptance check.
-      const probe = await fetchImpl(`${anythingllmBaseUrl.replace(/\/+$/, "")}/api/gateway/me`, {
-        headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
-      }).catch(() => null);
-      if (probe?.ok) gatewayIdentity = await probe.json().catch(() => null);
-
-      const workspaces = await client.listWorkspaces();
-      if (gatewayIdentity) {
-        log(`✓ Connected to the gateway as '${gatewayIdentity.name}' (${gatewayIdentity.role}). ${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"} readable.`);
-        if (gatewayIdentity.role === "reader") {
-          log("  Note: reader tokens can search but cannot index — ask your admin for the member role to add vaults.");
+  const root = deps.store?.paths.root ?? defaultConfigRoot({ env, platform: deps.platform });
+  const store = deps.store ?? createAppConfigStore({ rootDir: root });
+  const installation = deps.installation ?? createInstallationStore(root);
+  const gateway = createGatewayConfig({ dataDir: path.join(root, "gateway") });
+  let services;
+  const controller = () =>
+    (services ??=
+      deps.services ??
+      createServiceController({
+        root,
+        env,
+        platform: deps.platform,
+        ...(deps.launchctl ? { launchctl: deps.launchctl } : {}),
+        ...(deps.systemctl ? { systemctl: deps.systemctl } : {}),
+        ...(deps.loginctl ? { loginctl: deps.loginctl } : {}),
+        installation,
+      }));
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const options =
+    command === "setup"
+      ? {
+          server: { type: "boolean" },
+          url: { type: "string" },
+          "api-key": { type: "string" },
+          "vaults-root": { type: "string" },
+          port: { type: "string" },
+          "admin-port": { type: "string" },
         }
-      } else {
-        log(`✓ Connected. ${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"} visible.`);
-      }
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      log(`✗ Could not connect: ${detail}`);
-      if (serverInstall) {
-        log("  Check that the URL is reachable and the API key comes from Settings → Developer API.");
-      } else {
-        log("  Check that the gateway URL is reachable and the token is the any-obs user token your admin issued.");
-        log("  (Pasting an AnythingLLM URL and developer key also works — that connects directly, solo setup.)");
-      }
-      return 1;
-    }
-
-    const config = await store.save({
-      vaultsRoot,
-      anythingllmBaseUrl,
-      apiKey,
-      dashboardPort: Number.isInteger(dashboardPort) ? dashboardPort : 21502,
-      ...(serverInstall ? { mode: "server" } : existing?.mode === "server" ? { mode: "server" } : {}),
+      : command === "logs"
+        ? { follow: { type: "boolean", short: "f" }, lines: { type: "string" } }
+        : command === "lan"
+          ? { json: { type: "boolean" }, "allowed-hosts": { type: "string" } }
+          : ["status", "autostart"].includes(command)
+            ? { json: { type: "boolean" } }
+            : {};
+  let machineReadable = false;
+  try {
+    const { values: flags, positionals } = parseArgs({
+      args,
+      options: { ...options, help: { type: "boolean", short: "h" } },
+      allowPositionals: true,
+      strict: true,
     });
-    await mkdir(config.vaultsRoot, { recursive: true });
+    machineReadable = flags.json === true;
+    if (flags.help) {
+      log(USAGE);
+      return 0;
+    }
+    const context = { root, env, store, installation, gateway, controller, fetchImpl, log, deps };
+    if (!["run", "logs", "autostart", "lan"].includes(command) && positionals.length)
+      throw new Error(`Unexpected argument: ${positionals[0]}`);
+    switch (command) {
+      case "setup": {
+        const configured = await setup(context, flags);
+        if (configured.reconfigure) await controller().restartRole(configured.role);
+        return await start(context, false);
+      }
+      case "start":
+        return await start(context, false);
+      case "restart":
+        return await start(context, true);
+      case "stop":
+        await controller().stop();
+        log("Services stopped. Autostart preference is unchanged.");
+        return 0;
+      case "status":
+        return await emitStatus(context, flags.json);
+      case "autostart": {
+        if (positionals.length > 1 || !["on", "off", "status"].includes(positionals[0] ?? "status"))
+          throw new Error("Usage: anything-obsidian autostart on|off|status");
+        if (positionals[0] !== "status" && positionals.length)
+          await controller().setAutostart(positionals[0] === "on");
+        const state = (await controller().status()).autostart;
+        log(
+          flags.json
+            ? JSON.stringify(state)
+            : `Autostart: ${state.enabled ? "on" : "off"} (${state.guarantee}). Running services are unchanged.`,
+        );
+        return 0;
+      }
+      case "lan": {
+        const [action = "status", token] = positionals;
+        if (
+          !["on", "off", "token", "status"].includes(action) ||
+          positionals.length > (action === "token" ? 2 : 1)
+        )
+          throw new Error("Usage: anything-obsidian lan on|off|token <value>|status");
+        let config = await requireClient(store);
+        if (flags["allowed-hosts"] !== undefined) {
+          if (action !== "on") throw new Error("--allowed-hosts is only valid with lan on");
+          const hosts = flags["allowed-hosts"].split(",").map((host) => host.trim());
+          if (hosts.some((host) => !/^[a-z0-9.:[\]-]+$/i.test(host)))
+            throw new Error("Allowed hosts must be hostnames or IP addresses");
+          config = await store.save({ ...config, mcpAllowedHosts: hosts.join(",") });
+        }
+        if (action === "token" || (action === "on" && !config.lanToken)) {
+          const value = token || (await import("node:crypto")).randomBytes(32).toString("hex");
+          if (action === "token" && !token) throw new Error("A token value is required");
+          await store.save({ ...config, lanToken: value });
+          if (action === "on") {
+            if (!flags.json) log(`Save this LAN token now: ${value}`);
+            context.lanToken = value;
+          }
+        }
+        if (action === "on" || action === "off") await controller().setLan(action === "on");
+        if (action === "token" && (await installation.load()).lan) {
+          await controller().stopService("mcp-lan");
+          await controller().startService("mcp-lan");
+        }
+        const profile = await installation.load();
+        log(
+          flags.json
+            ? JSON.stringify({
+                enabled: profile.lan,
+                ...(context.lanToken ? { token: context.lanToken } : {}),
+              })
+            : `LAN MCP: ${profile.lan ? "on" : "off"}`,
+        );
+        return 0;
+      }
+      case "logs":
+        if (positionals.length > 1)
+          throw new Error("Usage: anything-obsidian logs [service] [--follow]");
+        return await logs(context, positionals[0], flags);
+      case "run":
+        if (positionals.length !== 1) throw new Error("Usage: anything-obsidian run <service>");
+        return await runForeground(context, positionals[0]);
+      case "update":
+        await (deps.updateApplication ?? updateApplication)({
+          appRoot:
+            env.ANYTHING_OBSIDIAN_APP_HOME ||
+            path.join(env.HOME || os.homedir(), ".anything-obsidian"),
+          root,
+          controller: controller(),
+          verify: async () => {
+            const report = await waitReady(context);
+            return { ...report, ok: report.ready };
+          },
+          log,
+          env,
+        });
+        return 0;
+      default:
+        log(USAGE);
+        return 2;
+    }
+  } catch (error) {
+    const secrets = [
+      (await store.load().catch(() => null))?.apiKey,
+      (await gateway.load().catch(() => null))?.apiKey,
+    ].filter(Boolean);
+    let message = redactSecretsText(error.message);
+    for (const secret of secrets) message = message.split(secret).join("[redacted]");
+    log(
+      machineReadable
+        ? JSON.stringify({ ok: false, error: message, configRoot: root })
+        : `Error: ${message}`,
+    );
+    return error.code?.startsWith("ERR_PARSE_ARGS") ? 2 : 1;
+  }
+}
 
-    if (serverInstall) {
-      // The gateway must be immune to a later client install on this
-      // machine: its base URL and key live in its own data dir, never only
-      // in the client's config.json.
-      const { createGatewayConfig } = await import("../server/gateway-config.mjs");
-      const gatewayDataDir = path.join(store.paths.root, "gateway");
-      await createGatewayConfig({ dataDir: gatewayDataDir }).save({
+async function setup(ctx, flags) {
+  const { store, gateway, installation, env, fetchImpl, log, deps } = ctx;
+  const server = flags.server === true;
+  if (server && flags["vaults-root"]) throw new Error("--vaults-root is only valid for a client");
+  const previous = server ? await gateway.load() : await store.load();
+  const prompt =
+    flags.url && flags["api-key"] && (server || flags["vaults-root"] || previous?.vaultsRoot)
+      ? null
+      : (deps.promptFactory ?? createPrompt)(
+          deps.io ?? { input: process.stdin, output: process.stdout },
+        );
+  try {
+    await (deps.execFileImpl ?? exec)("git", ["--version"]);
+    if (
+      prompt &&
+      previous?.apiKey &&
+      !(await prompt.confirm(
+        `Replace this ${server ? "gateway" : "client"} configuration? [y/N] `,
+        false,
+      ))
+    )
+      throw new Error("Setup cancelled; existing configuration was kept");
+    const defaultUrl =
+      previous?.anythingllmBaseUrl ||
+      (server ? "http://localhost:21501" : "http://localhost:21500");
+    const anythingllmBaseUrl =
+      flags.url ||
+      (await prompt.question(
+        `${server ? "AnythingLLM" : "Gateway"} URL [${defaultUrl}] `,
+        defaultUrl,
+      ));
+    const parsed = new URL(anythingllmBaseUrl);
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("URL must use HTTP(S)");
+    const apiKey =
+      flags["api-key"] ||
+      (await (prompt.secret ?? prompt.question)(
+        server ? "AnythingLLM developer API key: " : "User token from your administrator: ",
+        previous?.apiKey || "",
+      ));
+    if (!apiKey) throw new Error("An API key or user token is required");
+    const probe = await fetchWithTimeout(
+      fetchImpl,
+      `${anythingllmBaseUrl.replace(/\/+$/, "")}/api/v1/workspaces`,
+      { headers: { Authorization: `Bearer ${apiKey}` } },
+      5000,
+    );
+    if (!probe.ok || !Array.isArray((await probe.json()).workspaces))
+      throw new Error(
+        `Could not connect: upstream rejected the URL or credential (HTTP ${probe.status})`,
+      );
+    if (server) {
+      await gateway.save({
+        anythingllmBaseUrl: anythingllmBaseUrl.replace(/\/+$/, ""),
+        apiKey,
+        port: Number(flags.port ?? previous?.port ?? 21500),
+        adminPort: Number(flags["admin-port"] ?? previous?.adminPort ?? 21505),
+      });
+    } else {
+      if (flags["admin-port"]) throw new Error("--admin-port is only valid for setup --server");
+      let vaultsRoot;
+      for (;;) {
+        vaultsRoot = expandTilde(
+          flags["vaults-root"] ||
+            (prompt
+              ? await prompt.question(
+                  `Vault root [${previous?.vaultsRoot || MANAGED_VAULTS_ROOT}] `,
+                  previous?.vaultsRoot || MANAGED_VAULTS_ROOT,
+                )
+              : previous.vaultsRoot),
+          env.HOME || os.homedir(),
+        );
+        if (!path.isAbsolute(vaultsRoot)) throw new Error("Vault root must be absolute");
+        const protectedPath = ["Documents", "Desktop"].some(
+          (name) =>
+            vaultsRoot === path.join(env.HOME || os.homedir(), name) ||
+            vaultsRoot.startsWith(path.join(env.HOME || os.homedir(), name) + path.sep),
+        );
+        if (
+          prompt &&
+          !flags["vaults-root"] &&
+          protectedPath &&
+          !(await prompt.confirm(
+            `This location causes macOS permission prompts. Use ${vaultsRoot}? [y/N] `,
+            false,
+          ))
+        )
+          continue;
+        break;
+      }
+      const config = await store.save({
+        vaultsRoot,
         anythingllmBaseUrl,
         apiKey,
+        dashboardPort: Number(flags.port ?? previous?.dashboardPort ?? 21502),
+        ...(previous
+          ? { mcpAllowedHosts: previous.mcpAllowedHosts, notifications: previous.notifications }
+          : {}),
+        ...(previous?.lanToken ? { lanToken: previous.lanToken } : {}),
       });
+      await mkdir(config.vaultsRoot, { recursive: true });
     }
-
-    log("");
-    log("Setup complete.");
-    log(`  Vault root:       ${config.vaultsRoot}`);
-    log(`  AnythingLLM:      ${config.anythingllmBaseUrl}${gatewayIdentity ? ` (via gateway, as '${gatewayIdentity.name}')` : " (direct — no gateway in front)"}`);
-    log(`  Dashboard:        http://localhost:${config.dashboardPort}`);
-    log(`  Config directory: ${store.paths.root}`);
-    log("");
-    if (config.mode === "server") {
-      log("Server install: start the gateway with anything-obsidian gateway --bg or");
-      log("anything-obsidian autostart gateway on (runs at login, restarts on crash).");
-      log("The admin dashboard is at http://localhost:21505 (loopback only).");
-      log("The client dashboard stays available for system checks: anything-obsidian start");
-    } else {
-      log("Start the dashboard with: anything-obsidian start");
-    }
-    return 0;
+    await store.ensureLayout();
+    await installation.addRole(server ? "gateway" : "client");
+    log(
+      `Configuration saved: ${server ? path.join(ctx.root, "gateway", "gateway.json") : store.paths.configPath}`,
+    );
+    return { role: server ? "gateway" : "client", reconfigure: Boolean(previous?.apiKey) };
   } finally {
     prompt?.close();
   }
 }
 
-async function resolveVaultsRoot({ flags, prompt, env, log }) {
-  if (flags["vaults-root"]) return expandTilde(flags["vaults-root"]);
-
-  while (true) {
-    const answer = await prompt.question(`Vault root directory [${MANAGED_VAULTS_ROOT}] `, MANAGED_VAULTS_ROOT);
-    const vaultsRoot = expandTilde(answer.trim());
-    if (!path.isAbsolute(vaultsRoot)) {
-      log("Please enter an absolute path.");
-      continue;
-    }
-    if (isTccProtected(vaultsRoot, env.HOME)) {
-      const proceed = await prompt.confirm(
-        `Volumes inside Documents or Desktop trigger repeated macOS permission prompts. Use ${vaultsRoot} anyway? [y/N] `,
-        false,
-      );
-      if (!proceed) continue;
-    }
-    return vaultsRoot;
-  }
+async function start(ctx, restart) {
+  await ctx.controller()[restart ? "restart" : "start"]();
+  const report = await waitReady(ctx);
+  printStatus(ctx.log, report);
+  if (!report.ok)
+    throw new Error(
+      report.detail ||
+        "Services did not become ready. Run: anything-obsidian logs; anything-obsidian status",
+    );
+  ctx.log("Services are ready.");
+  return 0;
 }
 
-function isTccProtected(candidate, home) {
-  if (!home) return false;
-  for (const protectedDir of ["Documents", "Desktop"]) {
-    const boundary = path.join(home, protectedDir);
-    if (candidate === boundary || candidate.startsWith(`${boundary}${path.sep}`)) return true;
-  }
-  return false;
+async function waitReady(ctx) {
+  const timeout = ctx.deps.readinessTimeoutMs ?? 15_000;
+  const started = Date.now();
+  let report;
+  do {
+    report = await status(ctx);
+    if (report.ok || report.startupBlocked || report.indexingDegraded) return report;
+    if (Date.now() - started >= timeout) break;
+    await (ctx.deps.sleep ?? delay)(200);
+  } while (true);
+  return report;
 }
 
-function createPrompt(io) {
-  const readline = createInterface({ input: io.input, output: io.output });
-  return {
-    async question(text, fallback) {
-      const answer = (await readline.question(text)).trim();
-      return answer || fallback;
-    },
-    async confirm(text, fallback) {
-      const answer = (await readline.question(text)).trim().toLowerCase();
-      return answer ? ["y", "yes"].includes(answer) : fallback;
-    },
-    close() {
-      readline.close();
-    },
+async function status(ctx) {
+  const runtime = await ctx.controller().status();
+  const profile = await ctx.installation.load();
+  const required = installedServices(profile);
+  const report = {
+    ok: false,
+    configRoot: ctx.root,
+    ...runtime,
+    services: { ...runtime.services },
+    startupBlocked: false,
   };
-}
-
-async function checkGit() {
+  if (!required.length) {
+    report.detail = "Not configured. Run: anything-obsidian setup";
+    return report;
+  }
   try {
-    await execFileAsync("git", ["--version"]);
-    return true;
+    await (ctx.deps.execFileImpl ?? exec)("git", ["--version"]);
+    report.git = true;
   } catch {
-    return false;
+    report.git = false;
+    report.detail = "Git is unavailable. Install Git and run start again.";
   }
+  const endpoints = [];
+  if (profile.roles.includes("client")) {
+    const config = await requireClient(ctx.store);
+    endpoints.push([
+      "dashboard",
+      `http://127.0.0.1:${config.dashboardPort}/ready`,
+      "any-obs-dashboard",
+    ]);
+    endpoints.push(["mcp", "http://127.0.0.1:21503/health", "anything-obsidian-mcp"]);
+    if (profile.lan)
+      endpoints.push(["mcp-lan", "http://127.0.0.1:21504/health", "anything-obsidian-mcp"]);
+    report.dashboardUrl = `http://localhost:${config.dashboardPort}`;
+  }
+  if (profile.roles.includes("gateway")) {
+    const config = await ctx.gateway.load();
+    endpoints.push([
+      "gateway",
+      `http://127.0.0.1:${config.port ?? 21500}/ready`,
+      "any-obs-gateway",
+    ]);
+    endpoints.push([
+      "gateway-admin",
+      `http://127.0.0.1:${config.adminPort ?? 21505}/ready`,
+      "any-obs-gateway",
+    ]);
+    report.gatewayUrl = `http://localhost:${config.adminPort ?? 21505}`;
+    if (runtime.autostart.enabled && runtime.autostart.linger === false) {
+      report.startupBlocked = true;
+      report.detail = `Gateway startup at boot is not configured. Run once: loginctl enable-linger ${ctx.env.USER || os.userInfo().username}`;
+    }
+  }
+  await Promise.all(
+    endpoints.map(async ([name, url, expectedName]) => {
+      let healthy = false,
+        detail;
+      try {
+        const response = await fetchWithTimeout(ctx.fetchImpl, url, {}, 3000);
+        const body = await response.json();
+        healthy =
+          response.ok &&
+          body.ok === true &&
+          (!expectedName || body.name === expectedName) &&
+          body.configRoot === ctx.root;
+        if (!healthy) detail = `Readiness failed (HTTP ${response.status})`;
+      } catch (error) {
+        detail = error.message;
+      }
+      report.services[name] = {
+        ...report.services[name],
+        healthy,
+        url,
+        ...(detail ? { detail } : {}),
+      };
+    }),
+  );
+  if (runtime.autostart.enabled && runtime.autostart.registered === false) {
+    report.startupBlocked = true;
+    report.detail = "Autostart registration is incomplete. Run: anything-obsidian start";
+  }
+  report.ready =
+    report.git &&
+    !report.startupBlocked &&
+    required.every((name) => report.services[name]?.running) &&
+    endpoints.every(([name]) => report.services[name]?.healthy);
+  report.indexing = {};
+  const read = async (url) => {
+    const response = await fetchWithTimeout(ctx.fetchImpl, url, {}, 3000);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  };
+  try {
+    if (report.services["gateway-admin"]?.healthy) {
+      const admin = report.gatewayUrl.replace("localhost", "127.0.0.1");
+      const [{ jobs = [] }, { sources = [] }] = await Promise.all([
+        read(`${admin}/api/gateway/jobs`),
+        read(`${admin}/api/gateway/sources`),
+      ]);
+      report.indexing.gateway = sources.map((source) => {
+        const job = jobs.find((job) => job.sourceId === source.id);
+        return {
+          source: source.id,
+          state: source.cleanupPending
+            ? "cleanup-pending"
+            : job && ["queued", "running"].includes(job.status)
+              ? job.status
+              : source.lastError || ["failed", "cancelled"].includes(job?.status)
+                ? "failed"
+                : source.lastRefresh
+                  ? "verified"
+                  : "pending",
+          lastVerified: source.lastRefresh,
+          error: source.lastError || job?.error || null,
+        };
+      });
+    }
+    if (report.services.dashboard?.healthy) {
+      const [{ jobs = [] }, { vaults = [] }] = await Promise.all([
+        read(`${report.dashboardUrl}/api/status`),
+        read(`${report.dashboardUrl}/api/vaults`),
+      ]);
+      report.indexing.client = vaults.map((vault) => {
+        const job = [...jobs].reverse().find((job) => job.vaultId === vault.id);
+        return {
+          source: vault.id,
+          state:
+            job && ["queued", "running"].includes(job.status)
+              ? job.status
+              : vault.lastSync?.status === "failed" || job?.status === "failed"
+                ? "failed"
+                : "idle",
+          error: vault.lastSync?.error || job?.error || null,
+        };
+      });
+    }
+  } catch (error) {
+    report.indexing.error = `Cannot read indexing status: ${error.message}`;
+  }
+  report.indexingDegraded =
+    Boolean(report.indexing.error) ||
+    [...(report.indexing.gateway || []), ...(report.indexing.client || [])].some((item) =>
+      ["failed", "cleanup-pending"].includes(item.state),
+    );
+  report.ok = report.ready && !report.indexingDegraded;
+  if (report.indexingDegraded)
+    report.detail =
+      "Indexing needs attention. Open the dashboard to inspect and retry failed jobs or pending cleanup.";
+  return report;
 }
 
-async function loadConfigOrWarn(store, log) {
+async function emitStatus(ctx, json) {
+  const report = await status(ctx);
+  if (json) ctx.log(JSON.stringify(report, null, 2));
+  else printStatus(ctx.log, report);
+  return report.ok ? 0 : 1;
+}
+function printStatus(log, report) {
+  log(`Config: ${report.configRoot}`);
+  log(`Roles: ${report.roles.join(", ") || "none"}`);
+  if (report.git === false) log("  ✗ Git: unavailable");
+  for (const [name, state] of Object.entries(report.services))
+    log(
+      `  ${state.running && state.healthy !== false ? "✓" : "✗"} ${name}: ${state.running ? (state.healthy === false ? "unhealthy" : "running") : "stopped"}${state.pid ? ` (pid ${state.pid})` : ""}`,
+    );
+  log(`Autostart: ${report.autostart.enabled ? "on" : "off"} (${report.autostart.guarantee})`);
+  if (report.dashboardUrl) log(`Dashboard: ${report.dashboardUrl}`);
+  if (report.gatewayUrl) log(`Gateway dashboard: ${report.gatewayUrl}`);
+  for (const items of [report.indexing?.client || [], report.indexing?.gateway || []])
+    for (const item of items)
+      log(
+        `Index ${item.source}: ${item.state}${item.error ? ` — ${redactSecretsText(item.error)}` : ""}`,
+      );
+  if (report.detail) log(report.detail);
+}
+
+async function requireClient(store) {
   const config = await store.load();
-  if (!config) {
-    log("This app is not initialized yet. Run: anything-obsidian init");
-    return null;
-  }
+  if (!config) throw new Error("Client is not configured. Run: anything-obsidian setup");
   return config;
 }
 
-async function runStart({ store, env, spawnImpl, fetchImpl, log, launchctl, systemctl, platform, background, noBrowser }) {
-  const config = await loadConfigOrWarn(store, log);
-  if (!config) return 1;
-  await store.ensureLayout();
+export function gatewayEnvironment(root, env = process.env) {
+  // Credentials, bind addresses and ports come exclusively from gateway.json.
+  return { HOME: env.HOME, PATH: env.PATH, ANYTHING_OBSIDIAN_HOME: root, AO_SUPERVISED: "1" };
+}
+async function runForeground(ctx, role) {
+  if (!SERVICE_NAMES.includes(role)) throw new Error(`Unknown service: ${role}`);
+  return withFileLock(
+    path.join(ctx.root, "run", `${role}.lock`),
+    () => spawnForeground(ctx, role),
+    { timeoutMs: 0 },
+  );
+}
 
-  const url = `http://localhost:${config.dashboardPort}`;
-  const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
-  // When a service manager spawned us (AO_SUPERVISED), it is the supervisor: run the
-  // server in-process and never self-detect as "already managed".
-  const autostartOn = manager && !env.AO_SUPERVISED ? await manager.enabled() : false;
-
-  if (background) {
-    if (autostartOn && manager) {
-      await manager.enable({
-        dashboardLogPath: store.paths.dashboardLogPath,
-        schedulerLogPath: store.paths.schedulerLogPath,
-      });
-      log(`Dashboard is managed by launchd and running at ${url}.`);
+async function spawnForeground(ctx, role) {
+  if (!SERVICE_NAMES.includes(role)) throw new Error(`Unknown service: ${role}`);
+  const profile = await ctx.installation.load();
+  if (!installedServices(profile).includes(role))
+    throw new Error(`Service is not configured: ${role}`);
+  let script,
+    args = [],
+    childEnv;
+  if (role === "gateway") {
+    script = path.join(repoRoot, "server", "gateway.mjs");
+    childEnv = gatewayEnvironment(ctx.root, ctx.env);
+  } else {
+    const config = await requireClient(ctx.store);
+    childEnv = nativeEnv(config, ctx.store.paths, { env: ctx.env });
+    if (role === "dashboard") script = path.join(repoRoot, "dashboard", "server.mjs");
+    else if (role === "scheduler") {
+      script = path.join(repoRoot, "scripts", "worker.mjs");
+      args = ["scheduler"];
     } else {
-      const childEnv = { ...nativeEnv(config, store.paths, { env }), AO_MODE: "native" };
-      const result = startDashboardProcess({
-        env: childEnv,
-        pidPath: store.paths.dashboardPidPath,
-        logPath: store.paths.dashboardLogPath,
-        spawnImpl,
+      script = path.join(repoRoot, "mcp", "index.mjs");
+      args = ["--http", ...(role === "mcp-lan" ? ["--lan"] : [])];
+      if (role === "mcp-lan" && !config.lanToken)
+        throw new Error("LAN token is missing. Run: anything-obsidian lan on");
+      Object.assign(childEnv, {
+        MCP_TRANSPORT: "http",
+        MCP_PROFILE: role === "mcp-lan" ? "lan" : "local",
+        ...(role === "mcp-lan" ? { MCP_AUTH_TOKEN: config.lanToken } : {}),
       });
-      if (result.alreadyRunning) {
-        log(`Dashboard is already running at ${url}.`);
-      } else {
-        log(`Starting dashboard (pid ${result.pid})…`);
-        const ready = await waitForHttp(`http://127.0.0.1:${config.dashboardPort}/api/status`, { fetchImpl });
-        if (!ready) {
-          const logTail = tailLogFile(store.paths.dashboardLogPath, 20);
-          log(`✗ Dashboard did not become ready. Last log lines:`);
-          log(logTail || `(no log output)`);
-          return 1;
-        }
-        log(`Dashboard running at ${url}.`);
-      }
-    }
-    if (!noBrowser) openBrowser(url, { spawnImpl });
-    return 0;
-  }
-
-  if (autostartOn && manager) {
-    const services = await manager.status();
-    if (services.dashboard.running) {
-      log(`Dashboard is already managed by launchd and running at ${url}.`);
-      return 0;
     }
   }
-
-  const childEnv = { ...nativeEnv(config, store.paths, { env }), AO_MODE: "native" };
-  if (env.AO_SUPERVISED) {
-    // The Activity Monitor name follows the process title and the executable;
-    // both carry the anything-obsidian role for launchd-spawned services.
-    process.title = "anything-obsidian-dashboard";
-  }
-  const server = createDashboardServer({
-    mode: "native",
-    env: childEnv,
-    jobs: createLocalJobManager({ env: childEnv, nodePath: process.argv[0] || process.execPath, jobStore: createFileJobStore({ filePath: store.paths.jobStorePath }) }),
-    native: {
-      schedulerPidPath: store.paths.schedulerPidPath,
-      schedulerLogPath: store.paths.schedulerLogPath,
-      jobStorePath: store.paths.jobStorePath,
-      lastSyncPath: syncStatusPath(store.paths.stateRoot),
-      spawnImpl,
-    },
-  });
-
-  server.listen(config.dashboardPort, "127.0.0.1", () => {
-    log(`Dashboard running at ${url} (Ctrl+C to stop)`);
-    openBrowser(url, { spawnImpl });
-  });
-  const shutdown = () => {
-    server.close();
-    process.exit(0);
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-  return 0;
-}
-
-async function runStartBg({ store, env, spawnImpl, killImpl, log }) {
-  const config = await loadConfigOrWarn(store, log);
-  if (!config) return 1;
-  await store.ensureLayout();
-
-  const result = startSchedulerProcess({
-    env: nativeEnv(config, store.paths, { env }),
-    pidPath: store.paths.schedulerPidPath,
-    logPath: store.paths.schedulerLogPath,
-    spawnImpl,
-    killImpl,
-  });
-
-  if (result.alreadyRunning) {
-    log(`Scheduler is already running (pid ${result.pid}).`);
-    return 0;
-  }
-  log(`Scheduler started (pid ${result.pid}). Logs: ${store.paths.schedulerLogPath}`);
-  return 0;
-}
-
-async function runStop({ store, killImpl, log, launchctl, systemctl, platform, env }) {
-  const config = await loadConfigOrWarn(store, log);
-  if (!config) return 1;
-
-  const manager = autostartManager({ store, env: env || process.env, log, launchctl, systemctl, platform });
-  const serverInstall = config.mode === "server";
-  if (manager && (await manager.enabled())) {
-    await manager.halt();
-    log("Dashboard and scheduler stopped (autostart services unloaded).");
-    log("They will start again at next login or reboot while autostart is on.");
-    log("Disable that permanently with: anything-obsidian autostart off");
-    if (serverInstall) await stopGatewayIfRunning({ store, manager, killImpl, log });
-    return 0;
-  }
-
-  const dashboard = await stopSchedulerProcess({ pidPath: store.paths.dashboardPidPath, killImpl });
-  log(dashboard.stopped ? `Dashboard stopped (pid ${dashboard.pid}).` : "Dashboard is not running.");
-  const scheduler = await stopSchedulerProcess({ pidPath: store.paths.schedulerPidPath, killImpl });
-  log(scheduler.stopped ? `Scheduler stopped (pid ${scheduler.pid}).` : "Scheduler is not running.");
-  if (serverInstall) await stopGatewayIfRunning({ store, manager, killImpl, log });
-  return 0;
-}
-
-async function stopGatewayIfRunning({ store, manager, killImpl, log }) {
-  // Server installs: `stop` covers the gateway too — background pid or
-  // service-managed, whichever is live.
-  const pidPath = path.join(store.paths.runRoot, "gateway.pid");
-  let pid;
-  try {
-    pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
-  } catch {
-    pid = null;
-  }
-  if (Number.isInteger(pid) && pid > 0) {
-    try {
-      killImpl(pid, "SIGTERM");
-      rmSync(pidPath, { force: true });
-      log(`Gateway stopped (pid ${pid}).`);
-      return;
-    } catch {
-      // fall through to the service manager
-    }
-  }
-  if (manager?.gatewayEnabled && (await manager.gatewayEnabled())) {
-    await manager.disableGateway();
-    log("Gateway autostart service removed.");
-    return;
-  }
-  log("Gateway is not running.");
-}
-
-async function runStatus({ store, env, fetchImpl, execFileImpl, log, json, launchctl, systemctl, platform, fetchLatest = fetchLatestVersion }) {
-  const config = await store.load();
-  const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
-  const autostartEnabled = manager ? await manager.enabled() : false;
-  const launchd = autostartEnabled && manager ? await manager.status() : null;
-  const report = {
-    ok: false,
-    platform: process.platform,
-    node: process.version.replace(/^v/, ""),
-    git: null,
-    config: null,
-    autostart: { enabled: autostartEnabled, ...(launchd ?? {}) },
-    anythingllm: { ok: false, detail: "not configured" },
-    dashboard: { running: false, pid: null, healthy: false, url: null },
-    scheduler: { running: false, pid: null },
-    mcp: { running: false, healthy: false, url: null },
-    mcpLan: { running: false, healthy: false, url: null },
-    vaults: null,
-  };
-
-  report.git = await gitVersion(execFileImpl);
-
-  if (!config) {
-    report.anythingllm = { ok: false, detail: "not configured (run: anything-obsidian init)" };
-    emit(report);
-    return 1;
-  }
-
-  const dashboardUrl = `http://localhost:${config.dashboardPort}`;
-  report.config = {
-    path: store.paths.configPath,
-    vaultsRoot: config.vaultsRoot,
-    anythingllmBaseUrl: config.anythingllmBaseUrl,
-    dashboardPort: config.dashboardPort,
-  };
-
-  let dashboardPid = null;
-  let dashboardRunning = false;
-  let schedulerPid = null;
-  let schedulerRunning = false;
-  let mcpRunning = false;
-  let mcpLanRunning = false;
-  if (launchd) {
-    dashboardPid = launchd.dashboard.pid;
-    dashboardRunning = launchd.dashboard.running;
-    schedulerPid = launchd.scheduler.pid;
-    schedulerRunning = launchd.scheduler.running;
-    mcpRunning = launchd.mcp?.running ?? false;
-    mcpLanRunning = launchd.mcpLan?.running ?? false;
-  } else {
-    const dashboard = readSchedulerStatus({ pidPath: store.paths.dashboardPidPath, killImpl: processKill });
-    dashboardPid = dashboard.pid;
-    dashboardRunning = dashboard.running;
-    const scheduler = readSchedulerStatus({ pidPath: store.paths.schedulerPidPath, killImpl: processKill });
-    schedulerPid = scheduler.pid;
-    schedulerRunning = scheduler.running;
-  }
-
-  let dashboardHealthy = false;
-  if (dashboardRunning) {
-    try {
-      const response = await fetchImpl(`http://127.0.0.1:${config.dashboardPort}/api/status`);
-      dashboardHealthy = response.ok;
-    } catch {
-      dashboardHealthy = false;
-    }
-  }
-  report.dashboard = { running: dashboardRunning, pid: dashboardPid, healthy: dashboardHealthy, url: dashboardUrl };
-  report.scheduler = { running: schedulerRunning, pid: schedulerPid };
-  const probeMcp = async (port) => {
-    try {
-      const response = await fetchImpl(`http://127.0.0.1:${port}/health`);
-      return { running: response.ok || response.status < 500, healthy: response.ok };
-    } catch {
-      return { running: false, healthy: false };
-    }
-  };
-  if (mcpRunning || !launchd) {
-    const local = await probeMcp(21503);
-    report.mcp = { ...local, url: "http://localhost:21503/mcp" };
-  } else {
-    report.mcp = { running: false, healthy: false, url: "http://localhost:21503/mcp" };
-  }
-  if (mcpLanRunning) {
-    const lan = await probeMcp(21504);
-    report.mcpLan = { ...lan, url: "http://<host>:21504/mcp" };
-  }
-
-  const client = createAnythingllmClient({
-    baseUrl: config.anythingllmBaseUrl,
-    apiKey: config.apiKey,
-    fetchImpl,
-  });
-  try {
-    const workspaces = await client.listWorkspaces();
-    report.anythingllm = { ok: true, detail: "connected", workspaces: workspaces.length };
-    // If the configured key is a gateway user token, say whose it is —
-    // this is how "which credential am I holding" stays answerable.
-    const me = await fetchImpl(`${String(config.anythingllmBaseUrl).replace(/\/+$/, "")}/api/gateway/me`, {
-      headers: { Accept: "application/json", Authorization: `Bearer ${config.apiKey}` },
-      signal: AbortSignal.timeout(3000),
-    }).catch(() => null);
-    if (me?.ok) {
-      const identity = await me.json().catch(() => null);
-      if (identity?.kind === "user") report.gateway = { user: identity.name, role: identity.role };
-    }
-  } catch (error) {
-    report.anythingllm = { ok: false, detail: error instanceof Error ? error.message : String(error) };
-  }
-
-  try {
-    const registry = createVaultRegistry({
-      rootPath: config.vaultsRoot,
-      registryPath: store.paths.registryPath,
-    });
-    report.vaults = (await registry.list()).length;
-    report.workspace = (await registry.getWorkspace())?.slug ?? null;
-  } catch {
-    report.vaults = null;
-  }
-
-  const current = await currentVersionValue();
-  const latest = await fetchLatest({ fetchImpl });
-  report.update = {
-    current,
-    latest,
-    available: Boolean(latest) && compareVersions(current, latest) < 0,
-  };
-  report.ok = Boolean(report.git) && report.anythingllm.ok;
-  emit(report);
-  return report.ok ? 0 : 1;
-
-  function emit(value) {
-    if (json) {
-      log(JSON.stringify(value, null, 2));
-      return;
-    }
-    const mark = (ok) => (ok ? "✓" : "✗");
-    log(`Anything Obsidian status`);
-    log(`  ${mark(Boolean(value.git))} git: ${value.git || "not found"}`);
-    log(`  ✓ node: ${value.node}`);
-    if (!value.config) {
-      log(`  ${mark(false)} config: not initialized (run: anything-obsidian init)`);
-      return;
-    }
-    log(`  ✓ config: ${value.config.path}`);
-    log(`      vault root: ${value.config.vaultsRoot}`);
-    log(`      vaults managed: ${value.vaults ?? "unknown"}`);
-    log(`      RAG workspace: ${value.workspace ?? "not created yet (appears with the first vault)"}`);
-    const viaGateway = value.gateway ? ` — via gateway, as '${value.gateway.user}' (${value.gateway.role})` : "";
-    log(`  ${mark(value.anythingllm.ok)} AnythingLLM: ${value.anythingllm.ok ? `${value.config.anythingllmBaseUrl} (${value.anythingllm.workspaces ?? 0} workspaces)${viaGateway}` : value.anythingllm.detail}`);
-    const dashboard = value.dashboard;
-    log(`  ${mark(dashboard.healthy)} Dashboard: ${dashboard.healthy ? `running at ${dashboard.url}` : dashboard.running ? `starting or unhealthy (pid ${dashboard.pid})` : "not running"}`);
-    log(`  ${mark(value.scheduler.running)} Scheduler: ${value.scheduler.running ? `running (pid ${value.scheduler.pid})` : "not running"}`);
-    log(`  ${mark(value.mcp.healthy)} Local MCP: ${value.mcp.healthy ? `running at ${value.mcp.url}` : value.mcp.running ? "starting or unhealthy" : "not running"}`);
-    log(`  ${mark(value.mcpLan.healthy)} LAN MCP: ${value.mcpLan.healthy ? "running (port 21504)" : "off or not running"}`);
-    log(`  ${mark(value.autostart.enabled)} Autostart: ${value.autostart.enabled ? "on (starts at login, restarts on crash)" : "off"}`);
-    if (value.update?.available) {
-      log(`  ↻ Update available: ${value.update.current} -> ${value.update.latest} (run: anything-obsidian update)`);
-    }
-  }
-}
-
-async function gitVersion(execFileImpl = execFileAsync) {
-  try {
-    const { stdout } = await execFileImpl("git", ["--version"]);
-    return String(stdout).trim().replace(/^git version /, "git ");
-  } catch {
-    return null;
-  }
-}
-
-function processKill(pid, signal) {
-  process.kill(pid, signal);
-}
-
-async function runMcpFg({ store, env, spawnImpl, log, lan }) {
-  const config = await loadConfigOrWarn(store, log);
-  if (!config) return 1;
-  await store.ensureLayout();
-
-  const childEnv = {
-    ...nativeEnv(config, store.paths, { env }),
-    MCP_TRANSPORT: "http",
-    MCP_PROFILE: lan ? "lan" : "local",
-    ...(lan && config.lanToken ? { MCP_AUTH_TOKEN: config.lanToken } : {}),
-  };
-  if (lan && !config.lanToken) {
-    log("LAN MCP requires a token. Run: anything-obsidian lan on");
-    return 1;
-  }
-  await rotateLogs({ logsRoot: store.paths.logsRoot });
-  if (env.AO_SUPERVISED) {
-    process.title = lan ? "anything-obsidian-mcp-lan" : "anything-obsidian-mcp";
-  }
-
-  const mcpPath = path.join(path.dirname(path.dirname(realpathSync(process.argv[1]))), "mcp", "index.mjs");
-  const child = spawnImpl(process.argv[0] || process.execPath, [mcpPath, "--http", ...(lan ? ["--lan"] : [])], {
+  await rotateLogs({ logsRoot: ctx.store.paths.logsRoot });
+  process.title = `anything-obsidian-${role}`;
+  const child = (ctx.deps.spawnImpl ?? spawn)(process.execPath, [script, ...args], {
     env: childEnv,
     stdio: "inherit",
   });
-  const forward = (signal) => {
-    try {
-      child.kill(signal);
-    } catch {
-      // already gone
-    }
-  };
-  process.on("SIGTERM", () => forward("SIGTERM"));
-  process.on("SIGINT", () => forward("SIGINT"));
-  const code = await new Promise((resolve) => {
-    child.on("error", () => resolve(1));
-    child.on("close", resolve);
-  });
-  return code === 0 ? 0 : 1;
-}
-
-async function runLan({ subcommand, argument, store, env, log, json, launchctl, systemctl, platform }) {
-  const config = await loadConfigOrWarn(store, log);
-  if (!config) return 1;
-  await store.ensureLayout();
-
-  switch (subcommand) {
-    case "token": {
-      const token = String(argument ?? "").trim();
-      if (!token) {
-        log("Usage: anything-obsidian lan token <value>");
-        return 2;
-      }
-      await store.save({ ...config, lanToken: token });
-      log("LAN token saved.");
-      log("Restart the LAN endpoint to apply it: anything-obsidian lan on");
-      return 0;
-    }
-    case "on": {
-      let effective = config;
-      if (!config.lanToken) {
-        const token = randomBytes(24).toString("base64url");
-        effective = await store.save({ ...config, lanToken: token });
-        log("Generated a LAN admin token (shown once, save it now):");
-        log(`  ${token}`);
-      }
-      const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
-      if (!manager) return 1;
-      await manager.enableLan({
-        mcpLanLogPath: store.paths.mcpLanLogPath || store.paths.schedulerLogPath,
-      });
-      log("LAN MCP is on at http://0.0.0.0:21504/mcp (RAG-only, Bearer token required).");
-      log("Per-agent tokens from the dashboard also work; they see only allowlisted vaults.");
-      return 0;
-    }
-    case "off": {
-      const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
-      if (!manager) return 1;
-      await manager.disableLan();
-      log("LAN MCP is off.");
-      return 0;
-    }
-    case "status":
-    default: {
-      const manager = autostartManager({ store, env, log, launchctl, systemctl, platform });
-      if (!manager) return 1;
-      const enabled = await manager.lanEnabled();
-      const state = enabled ? (await manager.status()).mcpLan : { loaded: false, running: false, pid: null };
-      if (json) {
-        log(JSON.stringify({ ok: true, lan: { enabled, ...state } }, null, 2));
-        return 0;
-      }
-      log(`LAN MCP: ${enabled ? "on" : "off"}`);
-      log(`  endpoint: ${state.running ? "running" : enabled ? "registered, not running" : "not registered"} (port 21504, RAG-only)`);
-      log(`  token: ${config.lanToken ? "configured" : "not set (anything-obsidian lan on generates one)"}`);
-      return 0;
-    }
+  const terminate = () => child.kill("SIGTERM");
+  const interrupt = () => child.kill("SIGINT");
+  process.on("SIGTERM", terminate);
+  process.on("SIGINT", interrupt);
+  try {
+    return await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => resolve(code ?? 1));
+    });
+  } finally {
+    process.off("SIGTERM", terminate);
+    process.off("SIGINT", interrupt);
   }
 }
 
-async function runUpdate({ log, spawnImpl }) {
-  const repo = process.env.ANYTHING_OBSIDIAN_REPO || "Lettucech/anything-obsidian";
-  const branch = process.env.ANYTHING_OBSIDIAN_BRANCH || "main";
-  const appRoot = process.env.ANYTHING_OBSIDIAN_APP_HOME || `${process.env.HOME}/.anything-obsidian`;
-  const appDir = path.join(appRoot, "app");
-  if (!existsSync(appDir)) {
-    log("No managed install found. Run the installer instead:");
-    log("  curl -fsSL https://raw.githubusercontent.com/" + repo + "/" + branch + "/install.sh | sh");
-    return 1;
+async function logs(ctx, role, flags) {
+  const profile = await ctx.installation.load();
+  role ??= profile.roles.includes("gateway") ? "gateway" : "scheduler";
+  if (!SERVICE_NAMES.includes(role)) throw new Error(`Unknown service: ${role}`);
+  const lines = Number(flags.lines ?? 100);
+  if (!Number.isInteger(lines) || lines < 1 || lines > 1000)
+    throw new Error("--lines must be between 1 and 1000");
+  const file = path.join(ctx.root, "logs", `${role}.log`);
+  const keys = [(await ctx.store.load())?.apiKey, (await ctx.gateway.load()).apiKey].filter(
+    Boolean,
+  );
+  const redact = (text) =>
+    keys.reduce((result, key) => result.split(key).join("[redacted]"), redactSecretsText(text));
+  ctx.log(redact(tailLogFile(file, lines)));
+  if (!flags.follow) return 0;
+  let offset = (await stat(file).catch(() => ({ size: 0 }))).size;
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    while (!controller.signal.aborted) {
+      await delay(500, undefined, { signal: controller.signal });
+      const size = (await stat(file).catch(() => ({ size: 0 }))).size;
+      if (size < offset) offset = 0;
+      if (size > offset) {
+        let text = "";
+        for await (const chunk of createReadStream(file, { start: offset, end: size - 1 }))
+          text += chunk;
+        ctx.log(redact(text));
+        offset = size;
+      }
+    }
+  } catch (error) {
+    if (error.name !== "AbortError") throw error;
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
   }
-  log(`Updating from github.com/${repo} (${branch})…`);
-  const staging = path.join(appRoot, "download.update.$$");
-  await mkdir(staging, { recursive: true });
-  const curl = spawnImpl("curl", ["-fsSL", `https://github.com/${repo}/archive/refs/heads/${branch}.tar.gz`], { stdio: ["ignore", "pipe", "inherit"] });
-  const tar = spawnImpl("tar", ["-xz", "-C", staging], { stdio: [curl.stdout, "ignore", "inherit"] });
-  curl.stderr?.on("data", () => {});
-  await new Promise((resolve, reject) => { curl.on("error", reject); tar.on("error", reject); tar.on("close", resolve); });
-  const sourceDir = readdirSync(staging).map((entry) => path.join(staging, entry)).find((entry) => statSync(entry).isDirectory());
-  if (!sourceDir) {
-    log("Downloaded archive was empty.");
-    return 1;
-  }
-  rmSync(appDir, { recursive: true, force: true });
-  renameSync(sourceDir, appDir);
-  rmSync(staging, { recursive: true, force: true });
-  log("  ✓ app updated");
-  const npmPath = path.join(path.dirname(process.argv[0] || process.execPath), "npm");
-  const npm = spawnImpl(npmPath === "npm" ? process.execPath : npmPath, ["ci", "--omit=dev"], { cwd: appDir, stdio: "inherit" });
-  const npmCode = await new Promise((resolve) => { npm.on("error", () => resolve(1)); npm.on("close", resolve); });
-  if (npmCode !== 0) {
-    log("  !! npm ci failed — MCP services may not start until you re-run the installer.");
-  } else {
-    log("  ✓ dependencies installed");
-  }
-  log("Restart services if autostart is on:");
-  log("  anything-obsidian autostart off && anything-obsidian autostart on");
   return 0;
 }
-
-function openBrowser(url, { spawnImpl = spawn, platform = process.platform } = {}) {
-  const command = platform === "darwin" ? "open" : platform === "win32" ? "cmd" : "xdg-open";
-  const args = platform === "win32" ? ["/c", "start", "", url] : [url];
-  try {
-    const child = spawnImpl(command, args, { detached: true, stdio: "ignore" });
-    child.unref?.();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function parseFlags(args) {
-  const flags = {};
-  for (let index = 0; index < args.length; index += 1) {
-    const key = args[index];
-    if (!key.startsWith("--")) continue;
-    const name = key.slice(2);
-    const value = args[index + 1] && !args[index + 1].startsWith("--") ? args[index + 1] : "";
-    if (value) index += 1;
-    flags[name] = value;
-  }
-  return flags;
+function createPrompt(io) {
+  let hidden = false;
+  const output = new Writable({
+    write(chunk, encoding, callback) {
+      if (hidden) callback();
+      else io.output.write(chunk, encoding, callback);
+    },
+  });
+  output.isTTY = io.output.isTTY;
+  output.columns = io.output.columns;
+  const input = createInterface({
+    input: io.input,
+    output,
+    terminal: Boolean(io.input.isTTY && io.output.isTTY),
+  });
+  return {
+    question: async (text, fallback) => (await input.question(text)).trim() || fallback,
+    secret: async (text, fallback) => {
+      io.output.write(text);
+      hidden = true;
+      try {
+        return (await input.question("")).trim() || fallback;
+      } finally {
+        hidden = false;
+        io.output.write("\n");
+      }
+    },
+    confirm: async (text, fallback) => {
+      const answer = (await input.question(text)).trim().toLowerCase();
+      return answer ? ["y", "yes"].includes(answer) : fallback;
+    },
+    close: () => input.close(),
+  };
 }
 
 function entryUrl() {
+  if (!process.argv[1]) return "";
   try {
     return pathToFileURL(realpathSync(process.argv[1])).href;
   } catch {
     return pathToFileURL(path.resolve(process.argv[1])).href;
   }
 }
-
-if (process.argv[1] && import.meta.url === entryUrl()) {
-  process.exitCode = await runCli();
-}
+if (import.meta.url === entryUrl()) process.exitCode = await runCli();

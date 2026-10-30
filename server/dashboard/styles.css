@@ -43,3 +43,8 @@ button { border: none; border-radius: 10px; padding: 9px 14px; font: inherit; fo
 .button-danger { background: #3a2030; color: #ff9a9a; }
 button:disabled { opacity: .5; cursor: default; }
 .workspace-line { margin: 2px 0 0 0; }
+.tabs { flex-wrap: wrap; }
+.log-output { max-height: 24rem; overflow: auto; padding: 12px; background: #0a1220; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; line-height: 1.5; }
+summary { cursor: pointer; padding: 8px 0; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid #92d8ff; outline-offset: 3px; }
+.item + .item { margin-top: 10px; }

@@ -7,8 +7,20 @@ const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..");
 
 export async function syncVaultOnce({ config, deps = {} }) {
-  const runner = deps.run ?? run;
-  const capturer = deps.capture ?? capture;
+  const runner = (command, args, options) => {
+    config.signal?.throwIfAborted();
+    return (deps.run ?? run)(command, args, {
+      ...options,
+      ...(config.signal ? { signal: config.signal } : {}),
+    });
+  };
+  const capturer = (command, args, options) => {
+    config.signal?.throwIfAborted();
+    return (deps.capture ?? capture)(command, args, {
+      ...options,
+      ...(config.signal ? { signal: config.signal } : {}),
+    });
+  };
   const env = gitEnv(config);
 
   await configureGit(config, runner);
@@ -82,6 +94,8 @@ async function run(command, args, options = {}) {
   await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
+      signal: options.signal,
+      timeout: 120_000,
       env: options.env ?? process.env,
       stdio: "inherit",
     });
@@ -99,6 +113,8 @@ async function capture(command, args, options = {}) {
     let stderr = "";
     const child = spawn(command, args, {
       cwd: options.cwd,
+      signal: options.signal,
+      timeout: 120_000,
       env: options.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });

@@ -30,9 +30,8 @@ loopback unless marked otherwise:
 
 AnythingLLM itself keeps its container port 3001 and is never published
 beyond the host loopback of the machine it runs on. Ports are overridable per
-surface (`--port` at init, `MCP_PORT`, `MCP_LAN_PORT`, `GATEWAY_PORT`);
-installs configured before the 21500-range defaults keep their recorded
-`dashboardPort` until `anything-obsidian init` is re-run.
+surface (`setup --port`; a server also accepts `--admin-port`). Gateway ports
+are stored in `gateway/gateway.json`, and the admin listener always binds loopback.
 
 ## Boundaries
 
@@ -58,100 +57,90 @@ installs configured before the 21500-range defaults keep their recorded
   repository or the user's files. Its derived chunks leave the shared index
   (so they stop appearing in searches); the workspace itself stays.
 
-## Getting started (one command)
+## Getting started
 
-any-obs runs as a plain Node app — there is no Docker stack to run for it.
-The installer bootstraps everything: if the machine has no supported Node.js
-(>= 22; Node 18 and 20 are end-of-life) it downloads a portable runtime
-automatically (no Homebrew, no sudo), and the CLI itself refuses to run on
-anything older. You provide the AnythingLLM instance (shared Docker
-deployment, AnythingLLM Desktop, or a remote server); any-obs talks to its
-API and never hosts it.
+Install once. The installer prepares the app and its dependencies, asks for
+connection details, then starts and verifies all required services:
 
-1. Install and set up in one command:
-
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh
-   ```
-
-   The installer checks prerequisites, installs the app under
-   `~/.anything-obsidian/`, puts `anything-obsidian` on your PATH, then asks
-   a few setup questions: a vault root (default `~/.anything-obsidian/vaults`,
-   inside the app's own home so nothing touches Documents or Desktop), the
-   **gateway base URL** (default `http://localhost:21500`), and the
-   **any-obs user token your admin issued** — clients always ride a gateway;
-   that token is what your admin hands out, never an AnythingLLM key. It
-   tests the connection before saving a 0600 config under
-   `~/Library/Application Support/anything-obsidian/`. When it finishes, the
-   dashboard is running and your browser opens at `http://localhost:21502`.
-
-   Prefer no prompts? Pass everything up front (also how agents install it):
-
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
-     --vaults-root ~/.anything-obsidian/vaults --url http://<gateway-host>:21500 --api-key <user-token> --no-browser
-   ```
-
-   Or let your AI agent do it: agents can load the
-   `anything-obsidian-setup` skill from this repo
-   (`npx skills add Lettucech/anything-obsidian --skill anything-obsidian-setup`)
-   and handle the whole flow — install, setup, and health checks.
-
-2. Manage everything in the browser at `http://localhost:21502`. The
-   dashboard can be stopped and restarted:
-
-   ```bash
-   anything-obsidian status       # health + setup check (--json for agents)
-   anything-obsidian start        # foreground, opens the browser
-   anything-obsidian start --bg --no-browser   # background, agent friendly
-   anything-obsidian stop         # stops the dashboard and the scheduler
-   ```
-
-3. Vault sync and the dashboard stay running on their own. The installer
-   registers per-user services (macOS LaunchAgents, or systemd user units on
-   Linux — no admin needed): both start at every login and restart
-   automatically if they crash. Control them any time:
-
-   ```bash
-   anything-obsidian status       # health + setup check (--json for agents)
-   anything-obsidian autostart status
-   anything-obsidian stop         # stop now (returns at next login/reboot)
-   anything-obsidian autostart off      # stop permanently
-   anything-obsidian autostart on       # turn auto-restart back on
-   ```
-
-   On a headless Linux server, run `sudo loginctl enable-linger $USER` once
-   and the services keep running even without an active login session. If you
-   declined autostart during install, `anything-obsidian start-bg` runs the
-   sync scheduler without it.
-
-Configuration, registry, secrets, agent tokens, state, and logs all live under
-one directory (`~/Library/Application Support/anything-obsidian/` on macOS;
-override with `ANYTHING_OBSIDIAN_HOME`).
-
-Update in place any time (data and settings are kept):
-
-```bash
-anything-obsidian update
+```sh
+curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh
 ```
 
-Installs configured before the unified-workspace release (0.3.0) migrate
-automatically: on the first sync or embed after updating, every vault
-re-embeds once into the shared workspace. That first run is slow and
-uploads everything — expected, not a fault.
+For unattended client setup, supply the gateway URL and the user token issued
+by its administrator (members can index; readers can search):
 
-Sync failures surface in the dashboard (a red banner plus a per-vault
-"Last sync" line) and as an OS notification; set `AO_NOTIFY=0` in the
-service environment to silence the notifications.
+```sh
+curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
+  --vaults-root "$HOME/.anything-obsidian/vaults" \
+  --url http://<gateway-host>:21500 --api-key <user-token> --no-browser
+```
 
-Uninstall in one command — it stops everything (including the LaunchAgents),
-removes the app and CLI, and keeps your data and vault folders by default:
+A solo client can use an AnythingLLM URL and developer key directly. AnythingLLM
+is always an external dependency, operated by the user.
 
-```bash
+The normal commands are the same on clients and gateways:
+
+```sh
+anything-obsidian start          # all configured services, in the background
+anything-obsidian stop           # stop now; preserve autostart preference
+anything-obsidian restart        # restart and verify readiness
+anything-obsidian status         # service readiness, startup and indexing health
+anything-obsidian status --json  # exit 0 and ok:true only when healthy
+anything-obsidian logs -f        # follow the primary role's log
+anything-obsidian logs mcp       # inspect a particular service
+```
+
+`start` is idempotent: repeating it leaves healthy services running. There is
+no `--bg`, `start-bg`, separate gateway start command, or detached PID-file
+lifecycle. `run dashboard|scheduler|mcp|mcp-lan|gateway` is a foreground diagnostic
+entry point; it uses the same configuration and rejects a second instance.
+
+Setup enables autostart for a new installation. Reconfiguration preserves the
+existing startup preference. Services restart after crashes:
+
+- macOS LaunchAgents start **after the user logs in**, not before login.
+- Linux clients use systemd user services. A gateway must have linger enabled
+  to run **at boot without a login**: run `loginctl enable-linger <user>` once
+  (the OS may require administrator authorization). Status checks and reports
+  this; setup cannot report success with an unfulfilled gateway startup guarantee.
+
+`autostart on|off|status` changes or inspects startup preference. Turning it off
+leaves running services alone. To stop now and prevent future automatic starts,
+run `anything-obsidian autostart off`, then `anything-obsidian stop`.
+
+The client dashboard is at [localhost:21502](http://localhost:21502). It manages
+vaults, sync policy, index rebuilds and agent access. Managed vaults live beneath
+the configured root; imported directories stay where their owner keeps them.
+
+Configuration lives under one absolute data root:
+
+- macOS: `~/Library/Application Support/anything-obsidian/`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/anything-obsidian/`
+- Override: `ANYTHING_OBSIDIAN_HOME`
+
+The installer pins the resolved root in its CLI launcher. Every service also
+records that root explicitly, so shell environment changes and login sessions
+cannot select another configuration accidentally. `status` prints the root.
+`installation.json` records installed roles and startup preference; `config.json`
+holds client settings; `gateway/gateway.json` holds gateway settings. Client and
+gateway can coexist without sharing upstream credentials.
+
+Update with `anything-obsidian update`. Dependencies and entry points validate in
+staging before the running release is replaced. Activation restarts installed
+services and checks readiness; a failed activation restores and verifies the
+previous release. Configuration and source files stay in the data/vault roots.
+
+**Breaking operations release:** old CLI commands are removed. Existing installs
+must run `anything-obsidian setup` (and `setup --server` for a gateway) to record
+their roles. Existing registries and source files are kept. Embedding manifests
+now record their target and are verified against the remote workspace; the first
+run may re-upload files whose old manifest cannot establish that identity.
+
+Uninstall keeps data and vault directories by default:
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/uninstall.sh | sh
 ```
-
-See `docs/superpowers/specs/2026-10-07-native-app.md` for the design notes.
 
 ## MCP access
 
@@ -242,10 +231,10 @@ see only open vaults plus the vaults that allowlist them. If a remote client
 resolves this machine by a LAN hostname or IP, register it first:
 
 ```bash
-export MCP_ALLOWED_HOSTS=obsidian-host.local,192.168.1.10
+anything-obsidian lan on --allowed-hosts obsidian-host.local,192.168.1.10
 ```
 
-(put it in the service environment, or re-run `lan on` after setting it).
+The allowed host list is saved in client configuration and reused after restart.
 Keep the dashboard and AnythingLLM management UI on loopback. A LAN bearer
 token grants access to RAG results, which may contain source content.
 
@@ -275,9 +264,8 @@ It publishes AnythingLLM on the server's loopback only (`127.0.0.1:21501`);
 your AnythingLLM's URL is then `http://localhost:21501`.
 
 1. **Install on the server** with the server entry point — it configures
-   for the gateway, registers the gateway service (not the client
-   dashboard), and leaves the client dashboard available for system
-   checks:
+   for the gateway, registers and verifies the gateway service. A client role can be
+   configured separately on the same machine:
 
    ```bash
    curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install-server.sh | sh -s -- \
@@ -288,23 +276,17 @@ your AnythingLLM's URL is then `http://localhost:21501`.
    question is skipped — a gateway doesn't manage local vaults.)
 
    The CLI installs as `anything-obsidian`, with `any-obs` as a short form —
-   `any-obs gateway --bg`, `any-obs status`, same thing.
+   `any-obs start`, `any-obs status`, same thing.
    The gateway reads the URL from this config; the key you paste here is
    only a starting point and can be rotated later in the dashboard. No
    Docker is needed — and because the gateway is native, **directory
    sources work on any path the server can read** (git sources clone into
    the data directory as usual).
 
-2. **Start it and keep it running:**
-
-   ```bash
-   anything-obsidian gateway --bg       # one-off background start
-   anything-obsidian autostart gateway on   # start at login, restart on crash
-   ```
-
-   On a headless Linux server, run `sudo loginctl enable-linger $USER` once
-   so the gateway (like every other any-obs service) keeps running without
-   an active login session.
+2. **Services start as part of setup.** Use `anything-obsidian start`,
+   `stop`, `restart`, `status` and `logs -f` for subsequent operation. To
+   reconfigure a gateway, use `anything-obsidian setup --server --url <url>
+   --api-key <developer-key>`. This never rewrites client configuration.
 
 3. **Open the admin dashboard** — it is loopback-only
    (`http://localhost:21505` on the server, or
@@ -330,7 +312,12 @@ your AnythingLLM's URL is then `http://localhost:21501`.
    `reader` is search-only, and new users default to reader — change roles
    later, reset a lost token), **Shared sources** (register the git repos or
    server directories that feed a workspace; each source targets one), and
-   the **Overview** with client and MCP connection snippets. Full API
+   the **Overview** with client and MCP connection snippets, plus **Operations**
+   with persistent job history, progress, redacted logs, cancellation and retry.
+   **Refresh changed** performs an incremental refresh; **Rebuild all** uploads
+   every eligible file and verifies replacements before removing old copies.
+   A source removal queues a tracked cleanup job and preserves its source files.
+   Failed cleanup stays visible and retryable. Full API
    surface: `docs/superpowers/specs/2026-10-28-iam-middleware.md`.
 
 - **Onboarding a user** (admin): create them in the gateway dashboard
@@ -361,17 +348,30 @@ your AnythingLLM's URL is then `http://localhost:21501`.
 
 ## Operations
 
-The dashboard is the normal interface for vault registration, per-vault sync
-policy, embedding policy, and service health. For recovery or explicitly
-requested maintenance, use the worker commands:
+Use the dashboard for registration and indexing policy; CLI and dashboard use
+the same OS service controller. Client scheduler/manual workers share a
+cross-process vault lock. Gateway jobs are accepted only after being persisted,
+coalesce concurrent refreshes for the same source, carry deadlines, and retain
+interrupted jobs for retry after restart. Active jobs are retained while bounded
+terminal history and log tails prevent unbounded growth.
 
-```bash
-anything-obsidian status
-tail -f "$HOME/Library/Application Support/anything-obsidian/logs/scheduler.log"
+The source directory is authoritative. Indexing checks remote document presence,
+repairs missing documents even when source hashes are unchanged, and commits an
+atomic manifest only after remote verification. Rebuild bypasses the local hash
+cache. If an embedding provider fails behind an HTTP 200, verification fails and
+the last good manifest remains available for recovery. Uploads from failed jobs
+are derived data; a later successful refresh reconciles stale indexed copies.
+
+```sh
+anything-obsidian status --json
+anything-obsidian logs scheduler --follow
+anything-obsidian logs gateway --follow
 ```
 
-These operations are outside the MCP surface. They can modify Git or derived
-RAG state according to the selected vault configuration.
+Gateway source discovery and job metadata respect workspace grants. Refresh
+requires a granted member or an administrator; force rebuild, retry, cancellation,
+full logs and source configuration require administration. Loopback administration
+also rejects cross-origin browser requests and DNS rebinding hostnames.
 
 ### AnythingLLM compatibility
 
@@ -383,8 +383,7 @@ folder (`anything-obsidian-vault/<vaultId>`) an earlier any-obs sent was never
 documented behaviour and now fails with `Folder name cannot contain path
 separators`. AnythingLLM ships on `:latest` and may tighten other endpoints
 without a version gate, so after upgrading either side run
-`node scripts/worker.mjs doctor --vault <id>` (or the `any_obs_vault_doctor`
-MCP tool) — it probes the real upload path, not just workspace reachability,
+**Run doctor** in the client dashboard (or the `any_obs_vault_doctor` MCP tool) — it probes the real upload path, not just workspace reachability,
 and fails loudly if the endpoint no longer accepts the configured folder.
 
 ## Safety notes

@@ -1,3 +1,4 @@
+import { access } from "node:fs/promises";
 import path from "node:path";
 
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
@@ -45,6 +46,21 @@ export async function loadVaultConfig(env, vaultId) {
 
   return {
     ...base,
+    assertRegistered: async () => {
+      try {
+        await access(path.join(stateRoot, "removals", `${vault.id}.json`));
+        throw new Error(
+          `Vault '${vault.id}' is pending index cleanup. Retry Remove in the dashboard.`,
+        );
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      const current = await registry.get(vault.id);
+      if (!current || registry.resolvePath(current) !== registry.resolvePath(vault))
+        throw new Error(`Vault '${vault.id}' is no longer registered at this location`);
+      if ((await registry.getWorkspace())?.slug !== workspace.slug)
+        throw new Error("Workspace changed while the job was queued; retry the operation");
+    },
     vaultId: vault.id,
     vaultPath: registry.resolvePath(vault),
     workspaceSlug: workspace.slug,

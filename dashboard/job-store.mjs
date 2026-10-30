@@ -1,6 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
-import path from "node:path";
+import { writeJson } from "../lib/state.mjs";
 
 const DEFAULT_MAX_JOBS = 50;
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
@@ -11,18 +11,20 @@ export function createFileJobStore({
   maxBytes = DEFAULT_MAX_BYTES,
 } = {}) {
   if (!filePath) throw new Error("filePath is required");
+  let writes = Promise.resolve();
 
-  const normalize = (jobs) => jobs.map((job) => (
-    job && (job.status === "queued" || job.status === "running")
-      ? {
-          ...job,
-          status: "failed",
-          exitCode: job.exitCode ?? null,
-          finishedAt: job.finishedAt ?? new Date().toISOString(),
-          error: "Interrupted by restart",
-        }
-      : job
-  ));
+  const normalize = (jobs) =>
+    jobs.map((job) =>
+      job && (job.status === "queued" || job.status === "running")
+        ? {
+            ...job,
+            status: "failed",
+            exitCode: job.exitCode ?? null,
+            finishedAt: job.finishedAt ?? new Date().toISOString(),
+            error: "Interrupted by restart",
+          }
+        : job,
+    );
 
   const readJobs = () => {
     try {
@@ -50,22 +52,30 @@ export function createFileJobStore({
       }
       return normalize(jobs);
     },
-    async save(jobs) {
+    save(jobs) {
       const kept = trimJobs(jobs, { maxJobs, maxBytes });
-      await mkdir(path.dirname(filePath), { recursive: true });
-      const temporary = `${filePath}.${process.pid}.tmp`;
-      await writeFile(temporary, `${JSON.stringify({ version: 1, jobs: kept }, null, 2)}\n`);
-      await rename(temporary, filePath);
-      return kept;
+      const snapshot = JSON.parse(JSON.stringify(kept));
+      const next = writes
+        .then(() => writeJson(filePath, { version: 1, jobs: snapshot }))
+        .then(() => snapshot);
+      writes = next.catch(() => {});
+      return next;
     },
   };
 }
 
 function trimJobs(jobs, { maxJobs, maxBytes }) {
-  let kept = jobs.slice(-maxJobs);
-  const size = () => kept.reduce((total, job) => total + JSON.stringify(job).length + 1, 40);
-  while (kept.length > 1 && size() > maxBytes) {
-    kept = kept.slice(1);
+  const active = (job) => ["queued", "running"].includes(job.status);
+  const retained = new Set(jobs.filter(active));
+  let bytes = JSON.stringify([...retained]).length;
+  let count = 0;
+  for (const job of [...jobs].reverse()) {
+    if (active(job)) continue;
+    const size = JSON.stringify(job).length + 1;
+    if (count >= maxJobs || bytes + size > maxBytes) continue;
+    retained.add(job);
+    bytes += size;
+    count++;
   }
-  return kept;
+  return jobs.filter((job) => retained.has(job));
 }

@@ -12,7 +12,7 @@ export function dashboardApi({ baseUrl = process.env.AO_DASHBOARD_URL ?? DEFAULT
         ...(body !== undefined ? { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } } : {}),
       });
     } catch (error) {
-      throw new Error(`The Anything Obsidian dashboard is not reachable at ${baseUrl}. Start it with: anything-obsidian start (or autostart on). (${error instanceof Error ? error.message : String(error)})`);
+      throw new Error(`The Anything Obsidian dashboard is not reachable at ${baseUrl}. Start it with: anything-obsidian start. (${error instanceof Error ? error.message : String(error)})`);
     }
     const text = await response.text();
     const data = text ? safeParse(text) : null;
@@ -155,7 +155,7 @@ export function registerManagementTools(server, api, { z }) {
 
   server.tool(
     "any_obs_autostart",
-    "Turn the login auto-start / crash auto-restart services on or off (dashboard, scheduler, and the MCP endpoint). action=off stops them permanently.",
+    "Turn the login auto-start / crash auto-restart services on or off (dashboard, scheduler, and the MCP endpoint). Changing startup preference leaves running services alone; use the CLI stop command to stop now.",
     { action: z.enum(["on", "off"]) },
     async ({ action }) => asJson(await api.setAutostart(action)),
   );

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { withFileLock, writeJson } from "../lib/state.mjs";
+import { fetchWithTimeout } from "../lib/http.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..");
@@ -21,123 +23,133 @@ export const DEFAULT_DOCUMENT_UPLOAD_PATH_TEMPLATE = "/api/v1/document/upload/{f
 // survive a manifest loss forever.
 export const LEGACY_DOCUMENT_FOLDER = "anything-obsidian-vault";
 
-export async function embedVault({ config, all = false }) {
-  const baseUrl = stripTrailingSlash(config.anythingllmBaseUrl);
-  const apiKey = config.apiKey;
-  const workspaceSlug = config.workspaceSlug;
-  const documentFolder = config.documentFolder ?? "anything-obsidian-vault";
-  const vaultPath = config.vaultPath;
+export async function embedVault({
+  config,
+  all = false,
+  onProgress = async () => {},
+  signal,
+  fetchImpl = fetch,
+}) {
   const stateDir = config.stateDir ?? path.resolve(repoRoot, ".anything-obsidian-state");
+  const run = () => embedUnlocked({ config, stateDir, all, onProgress, signal, fetchImpl });
+  return config.operationLockHeld ? run() : withFileLock(`${stateDir}.lock`, run, { signal });
+}
+
+async function embedUnlocked({ config, stateDir, all, onProgress, signal, fetchImpl }) {
+  await config.assertRegistered?.();
+  const { apiKey, workspaceSlug, vaultPath } = config;
+  const baseUrl = stripTrailingSlash(config.anythingllmBaseUrl);
+  const documentFolder = config.documentFolder ?? "anything-obsidian-vault";
   const manifestPath = path.join(stateDir, "embed-manifest.json");
-  const uploadPathTemplate =
-    config.documentUploadPathTemplate ?? DEFAULT_DOCUMENT_UPLOAD_PATH_TEMPLATE;
-  const updateEmbeddingsPathTemplate =
-    config.updateEmbeddingsPathTemplate ?? "/api/v1/workspace/{slug}/update-embeddings";
-
-  if (!apiKey) {
-    throw new Error("Missing ANYTHINGLLM_API_KEY. Re-run: anything-obsidian init");
-  }
-  await assertWorkspaceExists({ baseUrl, apiKey, workspaceSlug });
-
-  const manifest = await readManifest(manifestPath);
+  const remote = { baseUrl, apiKey, workspaceSlug, fetchImpl, signal };
+  if (!apiKey) throw new Error("No API key configured. Run: anything-obsidian setup");
+  await onProgress({ phase: "checking", completed: 0, total: 0 });
+  await assertWorkspaceExists(remote);
+  const documents = await listWorkspaceDocuments(remote);
+  if (!documents)
+    throw new Error("Cannot verify workspace documents; indexing has not been committed");
+  const remoteLocations = new Set(
+    documents.map((document) => document.docpath ?? document.location).filter(Boolean),
+  );
+  const identity = { baseUrl, workspaceSlug, documentFolder };
+  const previousManifest = await readManifest(manifestPath, all);
+  const sameTarget = JSON.stringify(previousManifest.target) === JSON.stringify(identity);
+  const manifest = sameTarget ? previousManifest : { files: {} };
   const files = await embeddableVaultFiles(vaultPath, {
     extensions: config.embedExtensions,
     excludeDirs: config.embedExcludeDirs,
   });
-  const seen = new Set();
+  const nextManifest = { version: 2, target: identity, files: {} };
   const additions = [];
-  const deletions = [];
-  const nextManifest = { version: 1, files: { ...manifest.files } };
-
-  for (const [fileIndex, file] of files.entries()) {
+  let repaired = 0;
+  for (const [index, file] of files.entries()) {
+    signal?.throwIfAborted();
     const rel = toPosix(path.relative(vaultPath, file));
-    seen.add(rel);
-    if (files.length > 5 && (fileIndex + 1) % 5 === 0 && fileIndex + 1 < files.length) {
-      console.log(`Embedding progress: ${fileIndex + 1}/${files.length}`);
-    }
-
     const hash = await sha256(file);
     const previous = manifest.files[rel];
-    if (!all && previous?.hash === hash && previous?.locations?.length) {
-      continue;
+    const present =
+      previous?.locations?.length &&
+      previous.locations.every((location) => remoteLocations.has(location));
+    if (!all && previous?.hash === hash && present) {
+      nextManifest.files[rel] = previous;
+    } else {
+      if (previous && !present) repaired++;
+      await onProgress({ phase: "uploading", file: rel, completed: index, total: files.length });
+      const uploaded = await uploadFile({
+        ...remote,
+        file,
+        rel,
+        vaultId: config.vaultId,
+        documentFolder,
+        uploadPathTemplate:
+          config.documentUploadPathTemplate ?? DEFAULT_DOCUMENT_UPLOAD_PATH_TEMPLATE,
+      });
+      const locations = uploaded?.documents
+        ?.map((document) => document.location)
+        .filter((location) => typeof location === "string" && location);
+      if (!locations?.length) throw new Error(`Upload returned no document locations for ${rel}`);
+      additions.push(...locations);
+      nextManifest.files[rel] = { hash, locations, embeddedAt: new Date().toISOString() };
     }
-
-    const uploaded = await uploadFile({
-      file,
-      rel,
-      baseUrl,
-      apiKey,
-      vaultId: config.vaultId,
-      documentFolder,
-      uploadPathTemplate,
-    });
-    const locations = uploaded.documents
-      ?.map((document) => document.location)
-      .filter(Boolean);
-
-    if (!locations?.length) {
-      console.warn(`No document locations returned for ${rel}; skipping embedding update.`);
-      continue;
-    }
-
-    additions.push(...locations);
-    if (previous?.locations?.length) deletions.push(...previous.locations);
-    nextManifest.files[rel] = { hash, locations, embeddedAt: new Date().toISOString() };
-    console.log(`Prepared ${rel}`);
+    await onProgress({ phase: "scanning", completed: index + 1, total: files.length });
   }
-
-  for (const [rel, previous] of Object.entries(manifest.files)) {
-    if (seen.has(rel)) continue;
-    if (previous?.locations?.length) deletions.push(...previous.locations);
-    delete nextManifest.files[rel];
-    console.log(`Marked deleted ${rel}`);
-  }
-
-  // Reconciliation: anything sitting in this vault's folders that the
-  // manifest no longer tracks is a stale copy (a wiped or moved manifest
-  // made the last re-upload append without deletes). Folder documents are
-  // pipeline-owned derived data, so untracked ones are deleted here — the
-  // manifest is the only durable record of what was embedded, and without
-  // this pass the copies would never be removable again.
-  const trackedLocations = new Set(additions);
-  for (const entry of Object.values(nextManifest.files)) {
-    for (const location of entry?.locations ?? []) trackedLocations.add(location);
-  }
-  const { untracked, listed } = await findUntrackedFolderDocuments({
-    baseUrl,
-    apiKey,
-    workspaceSlug,
-    vaultId: config.vaultId,
-    documentFolder,
-    trackedLocations,
-  });
-  let reconciled = 0;
-  if (listed && untracked.length) {
-    reconciled = untracked.length;
-    deletions.push(...untracked);
-    console.log(`Reconciled ${reconciled} untracked document(s) in ${documentFolder}`);
-  }
-
-  if (additions.length || deletions.length) {
+  const trackedLocations = new Set(
+    Object.values(nextManifest.files).flatMap((entry) => entry.locations),
+  );
+  const prefixes = ownedPathPrefixes({ documentFolder, vaultId: config.vaultId });
+  const deletions = [...remoteLocations].filter(
+    (location) =>
+      prefixes.some((prefix) => location.startsWith(prefix)) && !trackedLocations.has(location),
+  );
+  const updateEmbeddingsPathTemplate =
+    config.updateEmbeddingsPathTemplate ?? "/api/v1/workspace/{slug}/update-embeddings";
+  // Add and verify first. A failed replacement must not remove the last good index.
+  if (additions.length) {
+    await onProgress({ phase: "embedding", completed: 0, total: additions.length });
     await updateEmbeddings({
+      ...remote,
       adds: additions,
-      deletes: [...new Set(deletions)],
-      baseUrl,
-      apiKey,
-      workspaceSlug,
+      deletes: [],
       updateEmbeddingsPathTemplate,
     });
-    await mkdir(stateDir, { recursive: true });
-    await writeFile(manifestPath, `${JSON.stringify(nextManifest, null, 2)}\n`);
+    await verifyDocuments(remote, additions, []);
   }
-
-  return {
+  if (deletions.length) {
+    await onProgress({ phase: "cleaning", completed: 0, total: deletions.length });
+    await updateEmbeddings({
+      ...remote,
+      adds: [],
+      deletes: deletions,
+      updateEmbeddingsPathTemplate,
+    });
+    await verifyDocuments(remote, [...trackedLocations], deletions);
+  }
+  signal?.throwIfAborted();
+  await writeJson(manifestPath, nextManifest);
+  const result = {
     scanned: files.length,
     uploaded: additions.length,
     removed: deletions.length,
-    reconciled,
+    reconciled: deletions.length,
+    repaired,
     workspaceSlug,
+    verified: true,
   };
+  await onProgress({ phase: "completed", completed: files.length, total: files.length, ...result });
+  return result;
+}
+
+async function verifyDocuments(remote, expected, removed) {
+  const documents = await listWorkspaceDocuments(remote);
+  if (!documents)
+    throw new Error("Cannot verify the embedding result; the manifest was not advanced");
+  const actual = new Set(documents.map((document) => document.docpath ?? document.location));
+  const missing = expected.filter((location) => !actual.has(location));
+  const remaining = removed.filter((location) => actual.has(location));
+  if (missing.length || remaining.length)
+    throw new Error(
+      `Index verification failed: ${missing.length} missing, ${remaining.length} stale document(s). Retry the job.`,
+    );
 }
 
 async function uploadFile({
@@ -148,6 +160,8 @@ async function uploadFile({
   vaultId,
   documentFolder,
   uploadPathTemplate,
+  fetchImpl,
+  signal,
 }) {
   const url = apiUrl(
     baseUrl,
@@ -168,7 +182,8 @@ async function uploadFile({
     }),
   );
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(fetchImpl, url, {
+    signal,
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body,
@@ -176,8 +191,9 @@ async function uploadFile({
   return readResponse(response, `upload ${rel}`);
 }
 
-async function assertWorkspaceExists({ baseUrl, apiKey, workspaceSlug }) {
-  const response = await fetch(apiUrl(baseUrl, "/api/v1/workspaces"), {
+async function assertWorkspaceExists({ baseUrl, apiKey, workspaceSlug, fetchImpl, signal }) {
+  const response = await fetchWithTimeout(fetchImpl, apiUrl(baseUrl, "/api/v1/workspaces"), {
+    signal,
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${apiKey}`,
@@ -203,12 +219,15 @@ async function updateEmbeddings({
   apiKey,
   workspaceSlug,
   updateEmbeddingsPathTemplate,
+  fetchImpl,
+  signal,
 }) {
   const url = apiUrl(
     baseUrl,
     updateEmbeddingsPathTemplate.replace("{slug}", encodeURIComponent(workspaceSlug)),
   );
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(fetchImpl, url, {
+    signal,
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -218,31 +237,6 @@ async function updateEmbeddings({
     body: JSON.stringify({ adds, deletes }),
   });
   return readResponse(response, "update embeddings");
-}
-
-// Documents of this vault in the target workspace that no manifest entry
-// tracks. Best effort: when the workspace cannot be listed (older backend,
-// denied route) the caller skips reconciliation and embedding proceeds.
-async function findUntrackedFolderDocuments({
-  baseUrl,
-  apiKey,
-  workspaceSlug,
-  vaultId,
-  documentFolder,
-  trackedLocations,
-}) {
-  const documents = await listWorkspaceDocuments({ baseUrl, apiKey, workspaceSlug });
-  if (!documents) return { untracked: [], listed: false };
-  const prefixes = ownedPathPrefixes({ documentFolder, vaultId });
-  if (!prefixes.length) return { untracked: [], listed: true };
-  const untracked = [];
-  for (const document of documents) {
-    const docpath = document?.docpath ?? document?.location;
-    if (typeof docpath !== "string" || !docpath) continue;
-    if (!prefixes.some((prefix) => docpath.startsWith(prefix))) continue;
-    if (!trackedLocations.has(docpath)) untracked.push(docpath);
-  }
-  return { untracked, listed: true };
 }
 
 function ownedPathPrefixes({ documentFolder, vaultId }) {
@@ -260,12 +254,19 @@ function ownedPathPrefixes({ documentFolder, vaultId }) {
 // Gateways expose the same shape through a synthesized
 // `/workspace/{slug}/documents` route because user tokens may not read the
 // full workspace detail.
-async function listWorkspaceDocuments({ baseUrl, apiKey, workspaceSlug }) {
+export async function listWorkspaceDocuments({
+  baseUrl,
+  apiKey,
+  workspaceSlug,
+  fetchImpl = fetch,
+  signal,
+}) {
   const slug = encodeURIComponent(workspaceSlug);
   for (const apiPath of [`/api/v1/workspace/${slug}/documents`, `/api/v1/workspace/${slug}`]) {
     let data = null;
     try {
-      const response = await fetch(apiUrl(baseUrl, apiPath), {
+      const response = await fetchWithTimeout(fetchImpl, apiUrl(baseUrl, apiPath), {
+        signal,
         headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
       });
       if (!response.ok) continue;
@@ -284,7 +285,7 @@ async function listWorkspaceDocuments({ baseUrl, apiKey, workspaceSlug }) {
 async function readResponse(response, action) {
   const text = await response.text();
   const data = text ? safeJson(text) : null;
-  if (!response.ok) {
+  if (!response.ok || data?.success === false || data?.error) {
     throw new Error(`${action} failed with ${response.status}: ${text}`);
   }
   return data;
@@ -327,9 +328,7 @@ async function listVaultFiles(dir, { extensions, excludeDirs }) {
 }
 
 async function sha256(file) {
-  const info = await stat(file);
   const hash = createHash("sha256");
-  hash.update(`${info.size}:${info.mtimeMs}:`);
   await new Promise((resolve, reject) => {
     const stream = createReadStream(file);
     stream.on("data", (chunk) => hash.update(chunk));
@@ -339,13 +338,16 @@ async function sha256(file) {
   return hash.digest("hex");
 }
 
-async function readManifest(manifestPath) {
+async function readManifest(manifestPath, force) {
   try {
     const raw = await readFile(manifestPath, "utf8");
     const parsed = JSON.parse(raw);
-    return { version: 1, files: parsed.files ?? {} };
-  } catch {
-    return { version: 1, files: {} };
+    return { ...parsed, files: parsed.files ?? {} };
+  } catch (error) {
+    if (force && error instanceof SyntaxError) return { version: 2, files: {} };
+    if (error.code !== "ENOENT")
+      throw new Error(`Cannot read embedding manifest: ${error.message}`);
+    return { version: 2, files: {} };
   }
 }
 

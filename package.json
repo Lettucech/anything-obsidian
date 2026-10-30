@@ -1,7 +1,7 @@
 {
   "name": "anything-obsidian",
-  "version": "0.3.0",
-  "description": "any-obs — local bridge connecting Obsidian vault directories with a provided AnythingLLM RAG instance",
+  "version": "0.4.0",
+  "description": "any-obs \u2014 local bridge connecting Obsidian vault directories with a provided AnythingLLM RAG instance",
   "type": "module",
   "bin": {
     "anything-obsidian": "bin/anything-obsidian.mjs"
@@ -24,6 +24,7 @@
   "private": true,
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "proper-lockfile": "^4.1.2",
     "zod": "^3.24.1"
   }
 }

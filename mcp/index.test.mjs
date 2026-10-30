@@ -197,6 +197,8 @@ test("rag tools query the unified workspace with attribution and access filterin
       arguments: { question: "what changed?" },
     })).content[0].text);
     assert.deepEqual(requests.at(-1).url, "http://anythingllm.test/api/v1/workspace/any-obs-test-01/chat");
+    // The tool takes no mode argument: it always talks strict RAG query mode.
+    assert.deepEqual(JSON.parse(requests.at(-1).init.body), { message: "what changed?", mode: "query" });
     assert.equal(answer.results.length, 3);
 
     await client.close();

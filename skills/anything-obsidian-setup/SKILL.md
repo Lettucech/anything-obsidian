@@ -1,184 +1,127 @@
 ---
 name: anything-obsidian-setup
-description: Install, configure, verify, or remove Anything Obsidian on a user's machine — the one-command installer, agent-friendly setup flags, health checks, and uninstall.
+description: Install, configure, verify, update, stop, restart, or remove Anything Obsidian on a user's macOS or Linux machine using its native installer and unified service commands.
 ---
 
 # Anything Obsidian Setup
 
 ## When to Use
 
-Use this skill when an agent must:
-
-- install Anything Obsidian on a user's machine (macOS or Linux);
-- complete its one-time setup (vault root, AnythingLLM connection);
-- check whether an existing installation is healthy;
-- stop, restart, or uninstall it; or
-- onboard a non-technical user by doing all of the above for them.
+Use when the user wants an installation, machine configuration, service health
+check, update, restart, or uninstall. The user supplies their connection details;
+resolve the CLI, platform and current state on the target machine.
 
 ## Do Not Use When
 
-The app is already installed and the user only wants to manage vaults day to
-day — point them at the browser dashboard, or use the
-`anything-obsidian-vault-workflow` skill for vault work. This skill is only
-about machine setup.
+For ordinary vault registration, sync policy or indexing, use the dashboard or
+local MCP management tools. For searching/verifying/editing notes, use the
+`anything-obsidian-vault-workflow` skill and the vault's own rules.
 
-## What Anything Obsidian is
+## Boundaries
 
-Anything Obsidian (short name: any-obs) is a local bridge between Obsidian
-vault directories and a provided AnythingLLM instance. It registers vaults
-(cloned under a vaults root or imported from any existing directory), syncs
-them over Git when configured, and mirrors their content into the RAG index
-of an AnythingLLM the user provides and runs themselves (shared Docker
-deployment, AnythingLLM Desktop, or a remote server) — it never hosts
-AnythingLLM. The app itself is a plain Node process: no Docker, no admin
-rights, no sudo needed.
+Anything Obsidian is a native Node bridge. AnythingLLM is an external dependency
+that its operator provides; never start or manage AnythingLLM on their behalf
+as an implicit part of this setup. No Docker or desktop shell is required for
+the bridge. Source directories are the user's notes and must be preserved.
 
-All vaults of one install embed into a single unified AnythingLLM workspace
-(created automatically with the first vault, or attachable to an existing
-one) — agents search it once and results name the owning vault. RAG search
-never requires picking a vault first.
+Client and gateway are separate roles that may coexist on one machine:
 
-## Two install personas
+- Client: collect its gateway URL and administrator-issued user token. Members
+  can index their own vaults; readers can search. For a solo deployment the user
+  may supply a direct AnythingLLM URL and developer API key instead.
+- Gateway: collect the external AnythingLLM URL and developer API key from
+  Settings → Developer API. Its key belongs only on the server.
 
-- **User/solo** — the normal `install.sh`: connects to the user's own
-  AnythingLLM (direct) or to a shared gateway (user token). Registering
-  vaults, sync, dashboard.
-- **Server** — `install-server.sh` (i.e. `install.sh --server`): for the
-  machine running the IAM gateway for a shared deployment. The credential
-  here IS the AnythingLLM developer key; the vault-root prompt is skipped;
-  autostart registers the gateway service. Verify with
-  `anything-obsidian status` and the gateway admin dashboard on loopback
-  :21505.
+Never invent credentials or send them anywhere except the configured upstream.
+Propose `~/.anything-obsidian/vaults` for managed vaults. Existing note directories
+are imported later; do not move them into the managed root. Avoid Documents and
+Desktop defaults on macOS because of repeated permission prompts.
 
-## Install (one command, zero prompts when flags are given)
+## Install and configure
+
+For a client, supply the collected values to avoid prompts:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
-  --vaults-root <absolute-path> --url <anythingllm-base-url> --api-key <key> [--port <n>] [--no-browser]
+  --vaults-root <absolute-path> --url <gateway-url> --api-key <user-token> --no-browser
 ```
 
-- The installer bootstraps everything: if the machine has no node ≥ 22 it
-  downloads a portable Node into `~/.anything-obsidian/runtime/`; no
-  Homebrew and no sudo are required. git must exist (on a bare macOS run
-  `xcode-select --install` first).
-- As an agent, prefer the non-interactive flags above. Before installing,
-  collect from the user:
-  1. **vaults-root** — propose the default `~/.anything-obsidian/vaults`
-     (never Documents/Desktop — macOS permission prompts); create nothing
-     yourself, the installer does it. If the user already keeps notes in an
-     existing folder, keep this default and import that folder later with
-     `sourceMode: "import"` + its absolute `importPath`.
-  2. **Client installs are gateway-first**: collect the **gateway URL**
-     (`http://<server>:21500`) and the **any-obs user token** issued by the
-     admin — never an AnythingLLM key. A reader token can search but not
-     index; indexing needs member.
-  3. Solo setups pointing straight at an AnythingLLM still work without
-     asking anything: init tries `/api/gateway/me`, falls back to direct
-     mode, and reports "direct — no gateway in front". Never invent a key
-     or token.
-- Interactive humans can drop the flags entirely: the installer asks the same
-  questions.
+For a gateway use `install.sh --server --url <anythingllm-url> --api-key <key>`
+(or the `install-server.sh` wrapper). Interactive users can omit the values.
+Git is required; the installer downloads a supported Node runtime if necessary.
+It stages dependencies and validates the app before installation.
 
-## Keeping it current
+For an existing app, configure with `anything-obsidian setup` or `setup --server`.
+`--url`, `--api-key`, `--vaults-root`, `--port` and server `--admin-port` avoid
+prompts. Setup validates the credential before saving it, records the role,
+starts its services and checks readiness. Client setup never overwrites gateway
+credentials. Reconfiguration keeps the existing autostart preference.
 
-```sh
-anything-obsidian update   # re-downloads the app + dependencies, keeps all data
-```
+A new installation enables autostart. macOS starts after the user logs in.
+Linux gateways require `loginctl enable-linger <user>` for boot without login;
+the OS may require administrator authorization. Follow the reported remedy and
+recheck. Never describe after-login startup as pre-login boot availability.
 
-On the first sync or embed after updating to a release with the unified
-workspace (0.3.0+), an existing install migrates automatically: the unified
-workspace is created, and every vault re-embeds once. That first sync is
-slow and uploads everything — expected, not a fault. Check
-`status --json` → `workspace` afterwards; it holds the unified workspace
-slug once the first vault exists.
+## Verify completion
 
-## Verify (do this after every install or change)
+Run after installation and every operational change:
 
 ```sh
 anything-obsidian status --json
 ```
 
-(Short form: `any-obs` — every command below works as `any-obs <command>` too.)
+Require exit code 0 and `ok:true`. Inspect:
 
-Exit code `0` plus `"ok": true` means: config present, git found, AnythingLLM
-reachable. Check these fields:
+- `configRoot` and `roles`: the intended absolute data root and installed roles.
+- `services`: every required service running and each HTTP endpoint healthy.
+- `autostart`: preference, actual registration and startup guarantee; a Linux
+  gateway must report `at-boot` when autostart is enabled.
+- `indexing`: failed jobs or pending cleanup require attention even when the
+  service processes are running. A fresh source may be pending its first job.
 
-- `workspace: null` with `vaults: 0` → normal fresh install; the unified RAG
-  workspace appears with the first added vault. `workspace: null` with
-  `vaults` ≥ 1 → the unified workspace was never initialised (vault add
-  failed midway or an old install never ran a sync since updating); adding
-  any vault or running one sync/embed creates it.
+Do not claim reboot or live embedding-provider verification unless performed.
 
-- `anythingllm.ok: false` with `AnythingLLM API 401/403` → the API key is
-  wrong; re-run `anything-obsidian init --vaults-root … --url … --api-key …`
-  with a fresh key from Settings → Developer API.
-- `dashboard.healthy: false` but `dashboard.running: true` → wait a few
-  seconds and re-check; if still false, read
-  `~/Library/Application Support/anything-obsidian/logs/dashboard.log`
-  (Linux: `~/.config/anything-obsidian/logs/dashboard.log`).
-- `scheduler.running: false` → background sync is off; start it with
-  `anything-obsidian start-bg` if the user wants scheduled syncs.
+## Operate and recover
 
-Human-readable form: `anything-obsidian status`.
+- `start`: all configured services, backgrounded through the OS supervisor;
+  repeated calls leave healthy services running.
+- `stop`: stop now, preserving startup preference.
+- `restart`: restart configured services and verify readiness.
+- `logs [service] --follow`: redacted logs; service names are dashboard,
+  scheduler, mcp, mcp-lan and gateway. `any-obs` is a short form of the same CLI.
+- `autostart on|off|status`: startup preference only; it does not stop running
+  services. To stop permanently, use `autostart off` followed by `stop`.
+- `lan on --allowed-hosts <hostnames-or-IPs>`: optional token-gated LAN RAG MCP;
+  the token and allowed hosts persist across restarts. Save newly generated
+  tokens when shown once. Local management tools are never exposed over LAN.
 
-## Everyday control
+The client dashboard defaults to localhost:21502; gateway administration to
+localhost:21505 on the server (use an SSH tunnel remotely). Gateway Operations
+shows persistent jobs, progress, logs, cancellation and retry. Refresh changed
+is incremental; Rebuild all bypasses the local file-hash cache and verifies
+remote documents. Interrupted jobs remain visible after restart. Failed removal
+keeps a disabled source pending cleanup; retry the cleanup, never delete notes.
 
-- `anything-obsidian start` — dashboard in the foreground (Ctrl+C stops it),
-  opens the browser.
-- `anything-obsidian start --bg --no-browser` — dashboard as a detached
-  background process (agent friendly; does not block the terminal).
-- `anything-obsidian start-bg` — background sync scheduler only.
-- `anything-obsidian stop` — stops the dashboard and the scheduler.
-- `anything-obsidian autostart on|off|status` — keep both running: `on`
-  registers per-user services (macOS LaunchAgents, Linux systemd user units)
-  so the dashboard and scheduler start at every login and restart
-  automatically if they crash. While autostart is on, `stop` unloads the
-  services for now (they return at next login) — say so when reporting to the
-  user, and use `autostart off` for a permanent stop.
-- On a headless Linux server without an active session, autostart needs
-  `sudo loginctl enable-linger <user>` once; without it the installer falls
-  back to a plain background start.
-- The dashboard URL is `http://localhost:21502` unless a `--port` was set.
-After setup, a local agent can also operate Anything Obsidian through the
-MCP management tools (`any_obs_*` on the loopback endpoint, e.g.
-`any_obs_status`, `any_obs_vault_add`, `any_obs_vault_sync`, `any_obs_lan`)
-— tokenless on loopback, never available on the LAN profile.
+Use `anything-obsidian update` for staged validation, activation, readiness checks
+and rollback. This breaking release removes `init`, `start-bg`, `--bg`, and the
+separate gateway start/stop command. Existing installations need setup to record
+their roles; preserve their registry, data and source files.
 
-The installer turns autostart on by default (opt out with `--no-autostart`).
-All state lives under one data directory (`~/Library/Application Support/
-anything-obsidian` on macOS) plus the app itself in `~/.anything-obsidian/`.
-Never edit files in those directories directly; use the CLI or the dashboard.
-
-## Agent skills are opt-in via npx
-
-The installer does not install agent skills itself — its final output tells
-the user how. To install them (as the user's agent, or on their request):
-
-```sh
-npx skills add Lettucech/anything-obsidian --skill anything-obsidian-setup
-npx skills add Lettucech/anything-obsidian --skill anything-obsidian-vault-workflow
-```
-
-`npx skills` manages the copies (install target, updates, removal) — do not
-hand-copy skill directories into `~/.zcode/skills` or similar.
+The installer pins the data root in the launcher and each service definition.
+Configuration defaults to the OS app-support/config directory; the override is
+`ANYTHING_OBSIDIAN_HOME`. Do not edit installation state to imitate a successful
+setup or discard manifests as a repair shortcut. If the supported controls do
+not recover the installation, report the relevant redacted error and limitation.
 
 ## Uninstall
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/uninstall.sh | sh -s -- --yes            # keep user data
-curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/uninstall.sh | sh -s -- --purge-data    # also remove config/secrets/registry
+curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/uninstall.sh | sh -s -- --yes
 ```
 
-The uninstaller stops running processes, removes the app, the CLI launcher,
-and its PATH entry. **Vault folders (the user's actual notes) are never
-deleted** — it prints their location instead. Confirm with the user before
-passing `--purge-data`, and always report where the vaults live afterwards.
+This keeps data and vault directories. `--purge-data` is a separate destructive
+request: obtain explicit user authorization before using it. Always report the
+retained vault location. Never delete source directories implicitly.
 
-## Safety boundaries
-
-- Never delete or move anything inside the vault root except through the
-  user's explicit request; the notes are the user's source of truth.
-- Never send the API key anywhere except the AnythingLLM base URL the user
-  configured.
-- If `status` reports something you cannot fix with the commands above, show
-  the user the relevant log line instead of improvising with manual edits.
+Agent-skill installation is opt-in: use `npx skills add Lettucech/anything-obsidian
+--skill <name>` when requested; do not hand-copy installed skills.

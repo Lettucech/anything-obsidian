@@ -22,3 +22,6 @@ Thumbs.db
 
 # Agent tooling session state
 .zcode/
+
+# Dependencies are installed from package-lock.json
+node_modules/

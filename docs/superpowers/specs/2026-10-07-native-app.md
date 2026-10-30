@@ -1,5 +1,9 @@
 # Native App (npm Distribution) Design
 
+Historical design: operational commands and lifecycle below are superseded by
+[production operations](../plans/2026-10-30-production-operations.md) and the
+current README.
+
 Date: 2026-10-07
 Status: implemented (phase 1)
 

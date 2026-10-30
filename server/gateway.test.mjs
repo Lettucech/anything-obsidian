@@ -3,6 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { request as httpRequest } from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -26,7 +27,15 @@ test("public plane: health is public, everything else wants a user token", async
 
   // No admin surface, no setup, no dashboard on the public plane.
   assert.equal((await fetchJson(`${publicUrl}/api/gateway/users`, { method: "GET" })).status, 404);
-  assert.equal((await fetchJson(`${publicUrl}/api/setup/api-key`, { method: "POST", body: JSON.stringify({ apiKey: "x" }) })).status, 404);
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/setup/api-key`, {
+        method: "POST",
+        body: JSON.stringify({ apiKey: "x" }),
+      })
+    ).status,
+    404,
+  );
   assert.equal((await fetch(`${publicUrl}/`)).status, 404);
 });
 
@@ -45,7 +54,10 @@ test("admin plane: dashboard serves, management is loopback-trusted, public-only
   const passthrough = await fetchJson(`${adminUrl}/api/v1/admin/anything`, { method: "POST" });
   assert.equal(passthrough.status, 200);
   // …but not the MCP endpoint.
-  assert.equal((await fetchJson(`${adminUrl}/mcp`, { method: "POST", body: JSON.stringify({}) })).status, 404);
+  assert.equal(
+    (await fetchJson(`${adminUrl}/mcp`, { method: "POST", body: JSON.stringify({}) })).status,
+    404,
+  );
 });
 
 test("setup wizard on the admin plane: verify, store, close; restart persists", async () => {
@@ -70,16 +82,28 @@ test("setup wizard on the admin plane: verify, store, close; restart persists", 
   // A source refresh runs the embed pipeline with the wizard-collected key
   // (not the empty env one).
   await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
-    method: "POST", body: JSON.stringify({ name: "company-kb", kind: "shared" }),
+    method: "POST",
+    body: JSON.stringify({ name: "company-kb", kind: "shared" }),
   });
   await fetchJson(`${adminUrl}/api/gateway/sources`, {
-    method: "POST", body: JSON.stringify({ id: "team-kb", kind: "dir", ref: "/srv/kb", workspace: "company-kb" }),
+    method: "POST",
+    body: JSON.stringify({ id: "team-kb", kind: "dir", ref: "/srv/kb", workspace: "company-kb" }),
   });
-  const refresh = await fetchJson(`${adminUrl}/api/gateway/sources/team-kb/refresh`, { method: "POST" });
+  const refresh = await fetchJson(`${adminUrl}/api/gateway/sources/team-kb/refresh`, {
+    method: "POST",
+  });
   await waitFor(() => upstream.embeds.at(-1)?.config);
   assert.equal(upstream.embeds.at(-1).config.apiKey, "minted-developer-key");
 
-  assert.equal((await fetchJson(`${adminUrl}/api/setup/api-key`, { method: "POST", body: JSON.stringify({ apiKey: "x" }) })).status, 403);
+  assert.equal(
+    (
+      await fetchJson(`${adminUrl}/api/setup/api-key`, {
+        method: "POST",
+        body: JSON.stringify({ apiKey: "x" }),
+      })
+    ).status,
+    403,
+  );
 
   // A gateway restarted on the same data volume stays configured and the
   // wizard-collected key is what reaches AnythingLLM.
@@ -92,7 +116,9 @@ test("setup wizard on the admin plane: verify, store, close; restart persists", 
     headers: { Authorization: `Bearer ${userToken}` },
     body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
   });
-  assert.ok(restarted.upstream.calls.some((call) => call.headers === "Bearer minted-developer-key"));
+  assert.ok(
+    restarted.upstream.calls.some((call) => call.headers === "Bearer minted-developer-key"),
+  );
 });
 
 test("nothing is pre-created: a fresh user searches an empty world until granted", async () => {
@@ -106,7 +132,10 @@ test("nothing is pre-created: a fresh user searches an empty world until granted
   assert.ok(created.body.token.length > 20);
 
   const listed = await fetchJson(`${adminUrl}/api/gateway/users`, { method: "GET" });
-  assert.deepEqual(listed.body.users.map((user) => user.name), ["brian"]);
+  assert.deepEqual(
+    listed.body.users.map((user) => user.name),
+    ["brian"],
+  );
 
   const search = await fetchJson(`${publicUrl}/api/gateway/search`, {
     method: "POST",
@@ -115,7 +144,10 @@ test("nothing is pre-created: a fresh user searches an empty world until granted
   });
   assert.equal(search.status, 200);
   assert.deepEqual(search.body.results, []);
-  assert.deepEqual(upstream.calls.filter((call) => call.path.endsWith("vector-search")), []);
+  assert.deepEqual(
+    upstream.calls.filter((call) => call.path.endsWith("vector-search")),
+    [],
+  );
 });
 
 test("shared workspaces: admin creates, grants users, search and answer respect grants", async () => {
@@ -132,31 +164,43 @@ test("shared workspaces: admin creates, grants users, search and answer respect 
   assert.deepEqual(created.body.workspace, { slug: "company-kb", kind: "shared", grants: [] });
 
   const invalidKind = await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
-    method: "POST", body: JSON.stringify({ name: "x", kind: "wizard" }),
+    method: "POST",
+    body: JSON.stringify({ name: "x", kind: "wizard" }),
   });
   assert.equal(invalidKind.status, 400);
 
   const granted = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
-    method: "POST", body: JSON.stringify({ user: "brian" }),
+    method: "POST",
+    body: JSON.stringify({ user: "brian" }),
   });
   assert.deepEqual(granted.body, { slug: "company-kb", grants: ["brian"] });
   const ghostGrant = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
-    method: "POST", body: JSON.stringify({ user: "ghost" }),
+    method: "POST",
+    body: JSON.stringify({ user: "ghost" }),
   });
   assert.equal(ghostGrant.status, 500);
   assert.match(ghostGrant.body.error, /Unknown user/);
 
   const listed = await fetchJson(`${adminUrl}/api/gateway/workspaces`);
-  assert.deepEqual(listed.body.workspaces, [{ slug: "company-kb", kind: "shared", grants: ["brian"] }]);
+  assert.deepEqual(listed.body.workspaces, [
+    { slug: "company-kb", kind: "shared", grants: ["brian"] },
+  ]);
 
   const brianToken = await getToken(publicUrl, adminUrl, "brian");
   const brianSearch = await fetchJson(`${publicUrl}/api/gateway/search`, {
-    method: "POST", headers: { Authorization: `Bearer ${brianToken}` }, body: JSON.stringify({ query: "anything" }),
+    method: "POST",
+    headers: { Authorization: `Bearer ${brianToken}` },
+    body: JSON.stringify({ query: "anything" }),
   });
-  assert.deepEqual(brianSearch.body.results.map((chunk) => chunk.workspace), ["company-kb"]);
+  assert.deepEqual(
+    brianSearch.body.results.map((chunk) => chunk.workspace),
+    ["company-kb"],
+  );
 
   const answer = await fetchJson(`${publicUrl}/api/v1/workspace/company-kb/chat`, {
-    method: "POST", headers: { Authorization: `Bearer ${brianToken}` }, body: JSON.stringify({ message: "hi" }),
+    method: "POST",
+    headers: { Authorization: `Bearer ${brianToken}` },
+    body: JSON.stringify({ message: "hi" }),
   });
   assert.equal(answer.status, 200);
 
@@ -164,17 +208,30 @@ test("shared workspaces: admin creates, grants users, search and answer respect 
   // by admins only.
   const scoutToken = await getToken(publicUrl, adminUrl, "scout");
   const scoutSearch = await fetchJson(`${publicUrl}/api/gateway/search`, {
-    method: "POST", headers: { Authorization: `Bearer ${scoutToken}` }, body: JSON.stringify({ query: "anything" }),
+    method: "POST",
+    headers: { Authorization: `Bearer ${scoutToken}` },
+    body: JSON.stringify({ query: "anything" }),
   });
   assert.deepEqual(scoutSearch.body.results, []);
-  assert.equal((await fetchJson(`${publicUrl}/api/v1/workspace/company-kb/chat`, {
-    method: "POST", headers: { Authorization: `Bearer ${scoutToken}` }, body: JSON.stringify({ message: "hi" }),
-  })).status, 403);
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/v1/workspace/company-kb/chat`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${scoutToken}` },
+        body: JSON.stringify({ message: "hi" }),
+      })
+    ).status,
+    403,
+  );
 
-  const revoked = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants/brian`, { method: "DELETE" });
+  const revoked = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants/brian`, {
+    method: "DELETE",
+  });
   assert.deepEqual(revoked.body, { slug: "company-kb", grants: [] });
   const afterRevoke = await fetchJson(`${publicUrl}/api/gateway/search`, {
-    method: "POST", headers: { Authorization: `Bearer ${brianToken}` }, body: JSON.stringify({ query: "anything" }),
+    method: "POST",
+    headers: { Authorization: `Bearer ${brianToken}` },
+    body: JSON.stringify({ query: "anything" }),
   });
   assert.deepEqual(afterRevoke.body.results, []);
 });
@@ -186,20 +243,43 @@ test("public proxy: workspace listing is filtered and workspace creation mints o
 
   // Mint the personal workspace through the proxy, as the client does.
   const created = await fetchJson(`${publicUrl}/api/v1/workspace/new`, {
-    method: "POST", headers: auth, body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
   });
   assert.equal(created.status, 200);
 
   const visible = await fetchJson(`${publicUrl}/api/v1/workspaces`, { headers: auth });
-  assert.deepEqual(visible.body.workspaces.map((workspace) => workspace.slug), ["any-obs-brians-mac-01"]);
+  assert.deepEqual(
+    visible.body.workspaces.map((workspace) => workspace.slug),
+    ["any-obs-brians-mac-01"],
+  );
 
-  assert.equal((await fetchJson(`${publicUrl}/api/v1/workspace/any-obs-brians-mac-01/vector-search`, {
-    method: "POST", headers: auth, body: JSON.stringify({ query: "x", topN: 1 }),
-  })).status, 200);
-  assert.equal((await fetchJson(`${publicUrl}/api/v1/workspace/other-secret/vector-search`, {
-    method: "POST", headers: auth, body: JSON.stringify({ query: "x" }),
-  })).status, 403);
-  assert.equal((await fetchJson(`${publicUrl}/api/v1/admin/anything`, { method: "POST", headers: auth })).status, 403);
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/v1/workspace/any-obs-brians-mac-01/vector-search`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ query: "x", topN: 1 }),
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/v1/workspace/other-secret/vector-search`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ query: "x" }),
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await fetchJson(`${publicUrl}/api/v1/admin/anything`, { method: "POST", headers: auth }))
+      .status,
+    403,
+  );
 });
 
 test("public proxy: workspace documents are visible to entitled readers only", async () => {
@@ -211,18 +291,24 @@ test("public proxy: workspace documents are visible to entitled readers only", a
   const auth = { Authorization: `Bearer ${userToken}` };
 
   await fetchJson(`${publicUrl}/api/v1/workspace/new`, {
-    method: "POST", headers: auth, body: JSON.stringify({ name: "docs-ws" }),
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({ name: "docs-ws" }),
   });
 
   // The embed pipeline reconciles its folder through this route; the full
   // workspace detail response never crosses the proxy.
-  const docs = await fetchJson(`${publicUrl}/api/v1/workspace/docs-ws/documents`, { headers: auth });
+  const docs = await fetchJson(`${publicUrl}/api/v1/workspace/docs-ws/documents`, {
+    headers: auth,
+  });
   assert.equal(docs.status, 200);
   assert.deepEqual(docs.body, {
     documents: [{ docpath: "anything-obsidian-vault-docs-ws/note.md-1.json" }],
   });
 
-  const denied = await fetchJson(`${publicUrl}/api/v1/workspace/other-secret/documents`, { headers: auth });
+  const denied = await fetchJson(`${publicUrl}/api/v1/workspace/other-secret/documents`, {
+    headers: auth,
+  });
   assert.equal(denied.status, 403);
 });
 
@@ -232,7 +318,9 @@ test("workspaces tab data: list, pre-provision with an owner, all admin-only", a
 
   // The client mints its personal workspace through the proxy.
   await fetchJson(`${publicUrl}/api/v1/workspace/new`, {
-    method: "POST", headers: { Authorization: `Bearer ${userToken}` }, body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
+    method: "POST",
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
   });
 
   const listed = await fetchJson(`${adminUrl}/api/gateway/workspaces`);
@@ -246,19 +334,33 @@ test("workspaces tab data: list, pre-provision with an owner, all admin-only", a
     body: JSON.stringify({ name: "team-kb", kind: "personal", owner: "brian" }),
   });
   assert.equal(provisioned.status, 201);
-  assert.deepEqual(provisioned.body.workspace, { slug: "team-kb", kind: "personal", owner: "brian" });
+  assert.deepEqual(provisioned.body.workspace, {
+    slug: "team-kb",
+    kind: "personal",
+    owner: "brian",
+  });
   const missingOwner = await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
-    method: "POST", body: JSON.stringify({ name: "x", kind: "personal" }),
+    method: "POST",
+    body: JSON.stringify({ name: "x", kind: "personal" }),
   });
   assert.equal(missingOwner.status, 400);
 
   const searchable = await fetchJson(`${publicUrl}/api/v1/workspace/team-kb/vector-search`, {
-    method: "POST", headers: { Authorization: `Bearer ${userToken}` }, body: JSON.stringify({ query: "x", topN: 2 }),
+    method: "POST",
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ query: "x", topN: 2 }),
   });
   assert.equal(searchable.status, 200);
 
   // The member token gets 404 on the whole admin surface, listing included.
-  assert.equal((await fetchJson(`${publicUrl}/api/gateway/workspaces`, { headers: { Authorization: `Bearer ${userToken}` } })).status, 404);
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/gateway/workspaces`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      })
+    ).status,
+    404,
+  );
 });
 
 test("sources CRUD on the admin plane; refresh and jobs over the public plane", async () => {
@@ -268,13 +370,15 @@ test("sources CRUD on the admin plane; refresh and jobs over the public plane", 
 
   // Sources need a shared workspace to target.
   await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
-    method: "POST", body: JSON.stringify({ name: "company-kb", kind: "shared" }),
+    method: "POST",
+    body: JSON.stringify({ name: "company-kb", kind: "shared" }),
   });
   const missingTarget = await fetchJson(`${adminUrl}/api/gateway/sources`, {
-    method: "POST", body: JSON.stringify({ id: "no-target", kind: "dir", ref: "/srv/kb" }),
+    method: "POST",
+    body: JSON.stringify({ id: "no-target", kind: "dir", ref: "/srv/kb" }),
   });
-  assert.equal(missingTarget.status, 500);
-  assert.match(missingTarget.body.error, /target a workspace/);
+  assert.equal(missingTarget.status, 400);
+  assert.match(missingTarget.body.error, /target.*shared workspace/);
 
   const source = await fetchJson(`${adminUrl}/api/gateway/sources`, {
     method: "POST",
@@ -283,15 +387,21 @@ test("sources CRUD on the admin plane; refresh and jobs over the public plane", 
   assert.equal(source.status, 201);
 
   const listed = await fetchJson(`${publicUrl}/api/gateway/sources`, { headers: auth });
-  assert.equal(listed.body.sources.length, 1);
-  assert.equal(listed.body.sources[0].workspace, "company-kb");
+  assert.equal(listed.body.sources.length, 0);
 
+  await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
+    method: "POST",
+    body: JSON.stringify({ user: "brian" }),
+  });
   const refresh = await fetchJson(`${publicUrl}/api/gateway/sources/team-kb/refresh`, {
-    method: "POST", headers: auth,
+    method: "POST",
+    headers: auth,
   });
   assert.equal(refresh.status, 202);
 
-  const job = await fetchJson(`${publicUrl}/api/gateway/jobs/${refresh.body.id}`, { headers: auth });
+  const job = await fetchJson(`${publicUrl}/api/gateway/jobs/${refresh.body.id}`, {
+    headers: auth,
+  });
   assert.equal(job.status, 200);
   assert.equal(job.body.sourceId, "team-kb");
 });
@@ -324,22 +434,35 @@ test("MCP on the public plane is token-gated with the four RAG/pipeline tools", 
   assert.equal(noWorkspace.isError, true);
 
   await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
-    method: "POST", body: JSON.stringify({ name: "company-kb", kind: "shared" }),
+    method: "POST",
+    body: JSON.stringify({ name: "company-kb", kind: "shared" }),
   });
   await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
-    method: "POST", body: JSON.stringify({ user: "brian" }),
+    method: "POST",
+    body: JSON.stringify({ user: "brian" }),
   });
 
-  const search = JSON.parse((await client.callTool({
-    name: "any_obs_rag_search",
-    arguments: { query: "anything" },
-  })).content[0].text);
-  assert.deepEqual(search.results.map((chunk) => chunk.workspace), ["company-kb"]);
+  const search = JSON.parse(
+    (
+      await client.callTool({
+        name: "any_obs_rag_search",
+        arguments: { query: "anything" },
+      })
+    ).content[0].text,
+  );
+  assert.deepEqual(
+    search.results.map((chunk) => chunk.workspace),
+    ["company-kb"],
+  );
 
-  const answer = JSON.parse((await client.callTool({
-    name: "any_obs_rag_answer",
-    arguments: { question: "hi", workspace: "company-kb" },
-  })).content[0].text);
+  const answer = JSON.parse(
+    (
+      await client.callTool({
+        name: "any_obs_rag_answer",
+        arguments: { question: "hi", workspace: "company-kb" },
+      })
+    ).content[0].text,
+  );
   assert.equal(answer.textResponse, "answer");
 
   const denied = await client.callTool({
@@ -359,7 +482,9 @@ test("reverse scan: upstream workspaces the gateway does not track show as untra
   // The fake upstream pre-seeds "other-secret" (made outside the gateway)
   // and the client mints a personal one through the proxy.
   await fetchJson(`${publicUrl}/api/v1/workspace/new`, {
-    method: "POST", headers: { Authorization: `Bearer ${userToken}` }, body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
+    method: "POST",
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ name: "any-obs-brians-mac-01" }),
   });
 
   const listed = await fetchJson(`${adminUrl}/api/gateway/workspaces`);
@@ -367,7 +492,8 @@ test("reverse scan: upstream workspaces the gateway does not track show as untra
 
   // Adopt it as shared.
   const adopted = await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
-    method: "POST", body: JSON.stringify({ slug: "other-secret", kind: "shared" }),
+    method: "POST",
+    body: JSON.stringify({ slug: "other-secret", kind: "shared" }),
   });
   assert.equal(adopted.status, 201);
   assert.deepEqual(adopted.body.workspace, { slug: "other-secret", kind: "shared", grants: [] });
@@ -376,26 +502,52 @@ test("reverse scan: upstream workspaces the gateway does not track show as untra
   assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces`)).body.untracked.length, 0);
 
   // Adopt guards: already-tracked, upstream-missing, bad kind.
-  assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
-    method: "POST", body: JSON.stringify({ slug: "other-secret", kind: "shared" }),
-  })).status, 400);
-  assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
-    method: "POST", body: JSON.stringify({ slug: "ghost-space", kind: "shared" }),
-  })).status, 400);
-  assert.equal((await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
-    method: "POST", body: JSON.stringify({ slug: "company-kb", kind: "wizard" }),
-  })).status, 400);
+  assert.equal(
+    (
+      await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
+        method: "POST",
+        body: JSON.stringify({ slug: "other-secret", kind: "shared" }),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
+        method: "POST",
+        body: JSON.stringify({ slug: "ghost-space", kind: "shared" }),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
+        method: "POST",
+        body: JSON.stringify({ slug: "company-kb", kind: "wizard" }),
+      })
+    ).status,
+    400,
+  );
 
   // Adopting as personal requires a known owner.
   const personal = await fetchJson(`${adminUrl}/api/gateway/workspaces/adopt`, {
-    method: "POST", body: JSON.stringify({ slug: "company-kb", kind: "personal", owner: "ghost" }),
+    method: "POST",
+    body: JSON.stringify({ slug: "company-kb", kind: "personal", owner: "ghost" }),
   });
   assert.equal(personal.status, 400);
 
   // A member token sees 404 on the adopt surface.
-  assert.equal((await fetchJson(`${publicUrl}/api/gateway/workspaces/adopt`, {
-    method: "POST", headers: { Authorization: `Bearer ${userToken}` }, body: JSON.stringify({ slug: "x", kind: "shared" }),
-  })).status, 404);
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/gateway/workspaces/adopt`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+        body: JSON.stringify({ slug: "x", kind: "shared" }),
+      })
+    ).status,
+    404,
+  );
 });
 
 test("settings: connection status, masked key, and updating the key later", async () => {
@@ -403,7 +555,8 @@ test("settings: connection status, masked key, and updating the key later", asyn
 
   // Configure via the wizard first.
   await fetchJson(`${adminUrl}/api/setup/api-key`, {
-    method: "POST", body: JSON.stringify({ apiKey: "minted-developer-key" }),
+    method: "POST",
+    body: JSON.stringify({ apiKey: "minted-developer-key" }),
   });
 
   const settings = await fetchJson(`${adminUrl}/api/gateway/settings`);
@@ -415,19 +568,21 @@ test("settings: connection status, masked key, and updating the key later", asyn
 
   // A wrong candidate is rejected and nothing changes.
   const bad = await fetchJson(`${adminUrl}/api/gateway/settings/api-key`, {
-    method: "POST", body: JSON.stringify({ apiKey: "wrong" }),
+    method: "POST",
+    body: JSON.stringify({ apiKey: "wrong" }),
   });
   assert.equal(bad.status, 400);
   assert.equal((await fetchJson(`${adminUrl}/api/gateway/settings`)).body.keyPreview, "mint…-key");
 
   // A valid candidate replaces it and the gateway immediately uses it.
   const updated = await fetchJson(`${adminUrl}/api/gateway/settings/api-key`, {
-    method: "POST", body: JSON.stringify({ apiKey: "admin-key" }),
+    method: "POST",
+    body: JSON.stringify({ apiKey: "admin-key" }),
   });
   assert.equal(updated.status, 200);
   assert.equal((await fetchJson(`${adminUrl}/api/gateway/settings`)).body.keyPreview, "admi…-key");
 
-  // An env-preset key reports itself; update is a no-op against env wins.
+  // A supplied bootstrap key is reported until the first stored key replaces it.
   const envBased = await startGateway();
   const envSettings = await fetchJson(`${envBased.adminUrl}/api/gateway/settings`);
   assert.equal(envSettings.body.envKey, true);
@@ -435,12 +590,140 @@ test("settings: connection status, masked key, and updating the key later", asyn
 
   // The public plane has no settings surface at all.
   const { userToken } = await createUser(adminUrl, publicUrl, "brian");
-  assert.equal((await fetchJson(`${publicUrl}/api/gateway/settings`, {
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/gateway/settings`, {
+        headers: { Authorization: `Bearer ${userToken}` },
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/gateway/settings/api-key`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+        body: JSON.stringify({ apiKey: "x" }),
+      })
+    ).status,
+    404,
+  );
+});
+
+test("ungranted users cannot discover sources or jobs, and readers cannot trigger refreshes", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  const reader = await createUser(adminUrl, publicUrl, "reader", "reader");
+  const member = await createUser(adminUrl, publicUrl, "member", "member");
+  await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
+    method: "POST",
+    body: JSON.stringify({ name: "private-kb", kind: "shared" }),
+  });
+  await fetchJson(`${adminUrl}/api/gateway/sources`, {
+    method: "POST",
+    body: JSON.stringify({
+      id: "private",
+      kind: "dir",
+      ref: "/srv/private-team",
+      workspace: "private-kb",
+    }),
+  });
+  const auth = (token) => ({ Authorization: `Bearer ${token}` });
+  assert.equal(
+    (await fetchJson(`${publicUrl}/api/gateway/sources`, { headers: auth(member.userToken) })).body
+      .sources.length,
+    0,
+  );
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/gateway/sources/private/refresh`, {
+        method: "POST",
+        headers: auth(member.userToken),
+      })
+    ).status,
+    404,
+  );
+  await fetchJson(`${adminUrl}/api/gateway/workspaces/private-kb/grants`, {
+    method: "POST",
+    body: JSON.stringify({ user: "reader" }),
+  });
+  const visible = await fetchJson(`${publicUrl}/api/gateway/sources`, {
+    headers: auth(reader.userToken),
+  });
+  assert.equal(visible.body.sources[0].ref, undefined);
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/gateway/sources/private/refresh`, {
+        method: "POST",
+        headers: auth(reader.userToken),
+      })
+    ).status,
+    403,
+  );
+  const job = await fetchJson(`${adminUrl}/api/gateway/sources/private/refresh`, {
+    method: "POST",
+    body: JSON.stringify({ force: true }),
+  });
+  assert.equal(job.status, 202);
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/gateway/jobs/${job.body.id}`, {
+        headers: auth(member.userToken),
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await fetchJson(`${publicUrl}/api/gateway/jobs/${job.body.id}`, {
+        headers: auth(reader.userToken),
+      })
+    ).body.logs,
+    undefined,
+  );
+  assert.equal(
+    (await fetchJson(`${publicUrl}/api/gateway/logs`, { headers: auth(reader.userToken) })).status,
+    404,
+  );
+});
+
+test("key rotation replaces bootstrap credentials on both HTTP planes immediately", async () => {
+  const { adminUrl, publicUrl, upstream } = await startGateway();
+  const { userToken } = await createUser(adminUrl, publicUrl, "rotated-user");
+  await fetchJson(`${adminUrl}/api/gateway/settings/api-key`, {
+    method: "POST",
+    body: JSON.stringify({ apiKey: "minted-developer-key" }),
+  });
+  upstream.calls.length = 0;
+  await fetchJson(`${adminUrl}/api/gateway/settings`);
+  await fetchJson(`${publicUrl}/api/v1/workspaces`, {
     headers: { Authorization: `Bearer ${userToken}` },
-  })).status, 404);
-  assert.equal((await fetchJson(`${publicUrl}/api/gateway/settings/api-key`, {
-    method: "POST", headers: { Authorization: `Bearer ${userToken}` }, body: JSON.stringify({ apiKey: "x" }),
-  })).status, 404);
+  });
+  assert.ok(upstream.calls.length >= 2);
+  assert.ok(upstream.calls.every((call) => call.headers === "Bearer minted-developer-key"));
+});
+
+test("loopback administration rejects cross-origin mutations and DNS rebinding hosts", async () => {
+  const { adminUrl } = await startGateway();
+  const attack = await fetchJson(`${adminUrl}/api/gateway/users`, {
+    method: "POST",
+    headers: { Origin: "https://attacker.test" },
+    body: JSON.stringify({ name: "evil" }),
+  });
+  assert.equal(attack.status, 403);
+  const rebinding = await new Promise((resolve, reject) => {
+    const request = httpRequest(
+      `${adminUrl}/api/gateway/users`,
+      { headers: { Host: "attacker.test" } },
+      (response) => {
+        response.resume();
+        resolve(response.statusCode);
+      },
+    );
+    request.on("error", reject);
+    request.end();
+  });
+  assert.equal(rebinding, 403);
+  assert.equal((await fetchJson(`${adminUrl}/ready`)).body.ok, true);
 });
 
 async function waitFor(predicate, attempts = 100) {
@@ -455,12 +738,16 @@ test("me: a token can ask who it is — identity, role, readable workspaces", as
   const { adminUrl, publicUrl } = await startGateway();
   await createUser(adminUrl, publicUrl, "brian");
   await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
-    method: "POST", body: JSON.stringify({ name: "company-kb", kind: "shared" }),
+    method: "POST",
+    body: JSON.stringify({ name: "company-kb", kind: "shared" }),
   });
   await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
-    method: "POST", body: JSON.stringify({ user: "brian" }),
+    method: "POST",
+    body: JSON.stringify({ user: "brian" }),
   });
-  const reset = await fetchJson(`${adminUrl}/api/gateway/users/brian/reset-token`, { method: "POST" });
+  const reset = await fetchJson(`${adminUrl}/api/gateway/users/brian/reset-token`, {
+    method: "POST",
+  });
 
   const anonymous = await fetchJson(`${publicUrl}/api/gateway/me`);
   assert.equal(anonymous.status, 401);
@@ -497,29 +784,36 @@ async function createUser(adminUrl, publicUrl, name, role = "member") {
 
 async function getToken(publicUrl, adminUrl, name) {
   // tokens are once-shown; mint a fresh one for direct lookups in tests
-  const reset = await fetchJson(`${adminUrl}/api/gateway/users/${encodeURIComponent(name)}/reset-token`, { method: "POST" });
+  const reset = await fetchJson(
+    `${adminUrl}/api/gateway/users/${encodeURIComponent(name)}/reset-token`,
+    { method: "POST" },
+  );
   assert.equal(reset.status, 200);
   return reset.body.token;
 }
 
 async function fetchJson(url, init = {}) {
-  const response = await fetch(url, init);
+  const response = await fetch(url, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+  });
   const body = await response.json();
   return { status: response.status, body };
 }
 
 async function startGateway({ envKey = true, dataDir: dataDirOverride } = {}) {
-  const dataDir = dataDirOverride ?? await mkdtemp(path.join(tmpdir(), "any-obs-gateway-test-"));
+  const dataDir = dataDirOverride ?? (await mkdtemp(path.join(tmpdir(), "any-obs-gateway-test-")));
   const upstream = fakeAnythingllm();
   upstream.embeds = [];
   const gatewayConfig = (await import("./gateway-config.mjs")).createGatewayConfig({ dataDir });
   const shared = {
+    env: { ANYTHING_OBSIDIAN_HOME: path.dirname(dataDir) },
     userStore: createUserStore({ dataDir }),
     gatewayConfig,
     sourceManager: createSourceManager({
       dataDir,
       baseUrl: "http://anythingllm.test",
-      apiKey: envKey ? "admin-key" : async () => (await gatewayConfig.load()).apiKey,
+      apiKey: async () => (await gatewayConfig.load()).apiKey || (envKey ? "admin-key" : ""),
       embedVault: async ({ config }) => {
         upstream.embeds.push({ config });
         return { scanned: 0, uploaded: 0, removed: 0, workspaceSlug: config.workspaceSlug };
@@ -536,7 +830,10 @@ async function startGateway({ envKey = true, dataDir: dataDirOverride } = {}) {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     servers.push(server);
   }
-  test.after(() => servers.forEach((server) => server.close()));
+  test.after(async () => {
+    await shared.sourceManager.close();
+    servers.forEach((server) => server.close());
+  });
   return {
     publicUrl: `http://127.0.0.1:${servers[0].address().port}`,
     adminUrl: `http://127.0.0.1:${servers[1].address().port}`,
@@ -547,9 +844,7 @@ async function startGateway({ envKey = true, dataDir: dataDirOverride } = {}) {
 
 function fakeAnythingllm() {
   const state = {
-    workspaces: [
-      { id: 9, name: "other-secret", slug: "other-secret" },
-    ],
+    workspaces: [{ id: 9, name: "other-secret", slug: "other-secret" }],
     chunks: {
       "other-secret": [{ text: "secret hit", score: 0.95 }],
       "company-kb": [{ text: "kb hit", score: 0.9 }],
@@ -559,16 +854,26 @@ function fakeAnythingllm() {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
     const parsed = new URL(String(url));
-    const call = { path: parsed.pathname, method: init.method ?? "GET", body: init.body, headers: init.headers?.Authorization };
+    const call = {
+      path: parsed.pathname,
+      method: init.method ?? "GET",
+      body: init.body,
+      headers: init.headers?.Authorization,
+    };
     const slugMatch = parsed.pathname.match(/^\/api\/v1\/workspace\/([^/]+)\//);
     if (slugMatch) call.slug = decodeURIComponent(slugMatch[1]);
     calls.push(call);
 
     const bearer = String(init.headers?.Authorization ?? "");
-    if (parsed.pathname.startsWith("/api/v1/") && bearer !== "Bearer admin-key" && bearer !== "Bearer minted-developer-key") {
+    if (
+      parsed.pathname.startsWith("/api/v1/") &&
+      bearer !== "Bearer admin-key" &&
+      bearer !== "Bearer minted-developer-key"
+    ) {
       return jsonResponse(401, { error: "invalid api key" });
     }
-    if (parsed.pathname === "/api/v1/workspaces") return jsonResponse(200, { workspaces: state.workspaces });
+    if (parsed.pathname === "/api/v1/workspaces")
+      return jsonResponse(200, { workspaces: state.workspaces });
     const detailMatch = parsed.pathname.match(/^\/api\/v1\/workspace\/([^/]+)$/);
     if (detailMatch && init.method === "GET") {
       const slug = decodeURIComponent(detailMatch[1]);
@@ -598,6 +903,7 @@ function jsonResponse(status, data) {
     status,
     headers: new Headers({ "content-type": "application/json" }),
     text: async () => body,
+    json: async () => data,
     arrayBuffer: async () => Buffer.from(body),
   };
 }
@@ -609,3 +915,55 @@ function safeJson(value) {
     return null;
   }
 }
+
+test("a delayed pre-rotation credential read cannot overwrite a later request's key", async (t) => {
+  let releaseOld, releaseSettings, enteredOld, enteredSettings;
+  const oldReady = new Promise((resolve) => (enteredOld = resolve)),
+    settingsReady = new Promise((resolve) => (enteredSettings = resolve));
+  const oldGate = new Promise((resolve) => (releaseOld = resolve)),
+    settingsGate = new Promise((resolve) => (releaseSettings = resolve));
+  let reads = 0,
+    usedKey;
+  const server = createGatewayServer({
+    plane: "admin",
+    anythingllmBaseUrl: "http://upstream.test",
+    userStore: { list: async () => [] },
+    sourceManager: {},
+    gatewayConfig: {
+      load: async () => {
+        const call = ++reads;
+        if (call === 1) {
+          enteredOld();
+          await oldGate;
+          return { apiKey: "old-key" };
+        }
+        if (call === 3) {
+          enteredSettings();
+          await settingsGate;
+        }
+        return { apiKey: "new-key" };
+      },
+    },
+    fetchImpl: async (_url, init) => {
+      usedKey = init.headers.Authorization;
+      return jsonResponse(200, { workspaces: [] });
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    releaseOld();
+    releaseSettings();
+    server.closeAllConnections();
+    server.close();
+  });
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const earlier = fetchJson(url + "/health");
+  await oldReady;
+  const later = fetchJson(url + "/api/gateway/settings");
+  await settingsReady;
+  releaseOld();
+  await earlier;
+  releaseSettings();
+  await later;
+  assert.equal(usedKey, "Bearer new-key");
+});

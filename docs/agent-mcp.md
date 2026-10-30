@@ -48,8 +48,8 @@ Management tools (local profile only): `any_obs_vault_add`,
 
 Search and answer apply relevance differently. `any_obs_rag_search` is a raw
 vector search: with an explicit low `scoreThreshold` it returns the nearest
-chunks regardless of quality. `any_obs_rag_answer` is AnythingLLM RAG chat in
-query mode, which refuses when nothing scores above the workspace's relevance
+chunks regardless of quality. `any_obs_rag_answer` is strict RAG in AnythingLLM
+query mode and refuses when nothing scores above the workspace's relevance
 cutoff — generic queries can legitimately answer nothing while search still
 returns chunks. Reach for search first; reserve answer for questions that
 should be synthesised.
@@ -112,8 +112,8 @@ anything-obsidian lan on          # or: anything-obsidian lan token <value>
 Connect to `http://<host>:21504/mcp` and configure the MCP client to send
 `Authorization: Bearer <lan-token>` for administrator access, or a scoped
 agent token as described under Agent tokens. If remote clients resolve this
-machine by a LAN hostname or IP, register it in `MCP_ALLOWED_HOSTS` in the
-service environment first.
+machine by a LAN hostname or IP, save it with `anything-obsidian lan on --allowed-hosts host.local,192.168.1.10`.
+The host list is persisted and reused after restart.
 
 The LAN profile deliberately exposes only:
 
@@ -127,7 +127,8 @@ content.
 
 ## Maintenance boundary
 
-MCP does not run Git sync or RAG indexing. Configure optional Git sync in the
-dashboard, and use the dashboard or worker commands for explicit reindexing
-and recovery. The vault Git repository remains the source of truth; AnythingLLM
+Local MCP management tools run the same configured sync/index jobs as the
+dashboard. They never accept arbitrary Git commands or write note content.
+Use the dashboard for policy changes and verified rebuilds; use `status` and
+`logs` for service recovery. The vault Git repository remains the source of truth; AnythingLLM
 remains a derived index.

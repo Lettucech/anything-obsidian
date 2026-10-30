@@ -6,7 +6,23 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import test from "node:test";
 
-import { createDashboardServer } from "./server.mjs";
+import { createDashboardServer as realCreateDashboardServer } from "./server.mjs";
+import { fakeServices } from "./test-services.mjs";
+import { readSchedulerStatus } from "./test-services.mjs";
+
+function createDashboardServer(options) {
+  const current = options.native?.killImpl
+    ? readSchedulerStatus({
+        pidPath: options.native.schedulerPidPath,
+        killImpl: options.native.killImpl,
+      })
+    : { running: false };
+  return realCreateDashboardServer({
+    ...options,
+    services: options.services || fakeServices(current),
+  });
+}
+
 import { createAgentTokenStore } from "../lib/agent-tokens.mjs";
 import { createSyncStatusStore } from "../lib/sync-status.mjs";
 
@@ -14,7 +30,9 @@ test("vault routes clone a repository and initialise the unified workspace", asy
   const registry = fakeRegistry();
   const workspaceNames = [];
   const anythingllm = {
-    async listWorkspaces() { return []; },
+    async listWorkspaces() {
+      return [];
+    },
     async createWorkspace({ name }) {
       workspaceNames.push(name);
       return { id: 1, name, slug: "unified" };
@@ -22,7 +40,15 @@ test("vault routes clone a repository and initialise the unified workspace", asy
   };
   const secrets = fakeSecrets();
   const vaultStorage = fakeVaultStorage();
-  const app = createDashboardServer({ jobs: fakeJobs(), registry, anythingllm, vaultStorage, secrets, env: nativeEnv(), native: nativePaths() });
+  const app = createDashboardServer({
+    jobs: fakeJobs(),
+    registry,
+    anythingllm,
+    vaultStorage,
+    secrets,
+    env: nativeEnv(),
+    native: nativePaths(),
+  });
 
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body, { vaults: [] });
   const created = await request(app, "POST", "/api/vaults", validVaultPayload());
@@ -35,10 +61,18 @@ test("vault routes clone a repository and initialise the unified workspace", asy
   assert.equal(workspaceNames.length, 1);
   assert.match(workspaceNames[0], /^any-obs-/);
   assert.equal((await registry.getWorkspace()).slug, "unified");
-  assert.deepEqual((await request(app, "GET", "/api/workspace")).body, { workspace: { slug: "unified", name: workspaceNames[0] } });
+  assert.deepEqual((await request(app, "GET", "/api/workspace")).body, {
+    workspace: { slug: "unified", name: workspaceNames[0] },
+  });
   assert.equal(vaultStorage.cloned[0].repositoryUrl, "https://github.com/acme/work.git");
-  assert.deepEqual(vaultStorage.cloned[0].gitAuth, { mode: "https-token", username: "oauth2", token: "work-secret" });
-  assert.deepEqual(secrets.saved, [{ id: "work", auth: { mode: "https-token", username: "oauth2", token: "work-secret" } }]);
+  assert.deepEqual(vaultStorage.cloned[0].gitAuth, {
+    mode: "https-token",
+    username: "oauth2",
+    token: "work-secret",
+  });
+  assert.deepEqual(secrets.saved, [
+    { id: "work", auth: { mode: "https-token", username: "oauth2", token: "work-secret" } },
+  ]);
   assert.equal(created.body.gitAuth, undefined);
   assert.equal((await request(app, "GET", "/api/vaults")).body.vaults.length, 1);
 });
@@ -46,13 +80,21 @@ test("vault routes clone a repository and initialise the unified workspace", asy
 test("vault routes import a local repository into an attached workspace and purge its index on removal", async () => {
   const registry = fakeRegistry();
   const anythingllm = {
-    async listWorkspaces() { return [{ id: 2, name: "Personal", slug: "personal" }]; },
+    async listWorkspaces() {
+      return [{ id: 2, name: "Personal", slug: "personal" }];
+    },
   };
   const secrets = fakeSecrets();
   const purge = fakeFetch();
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry, anythingllm, vaultStorage: fakeVaultStorage(), secrets,
-    fetchImpl: purge.fetchImpl, env: nativeEnv(), native: nativePaths(),
+    jobs: fakeJobs(),
+    registry,
+    anythingllm,
+    vaultStorage: fakeVaultStorage(),
+    secrets,
+    fetchImpl: purge.fetchImpl,
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   const attached = await request(app, "POST", "/api/workspace/attach", { slug: "personal" });
@@ -60,9 +102,13 @@ test("vault routes import a local repository into an attached workspace and purg
   assert.equal(attached.body.workspace.slug, "personal");
 
   const created = await request(app, "POST", "/api/vaults", {
-    sourceMode: "import", id: "personal", name: "Personal", directory: "personal",
+    sourceMode: "import",
+    id: "personal",
+    name: "Personal",
+    directory: "personal",
     repositoryVisibility: "public",
-    gitUserName: "Personal Bot", gitUserEmail: "personal@example.test",
+    gitUserName: "Personal Bot",
+    gitUserEmail: "personal@example.test",
   });
   assert.equal(created.status, 201);
   assert.equal((await request(app, "DELETE", "/api/vaults/personal")).status, 204);
@@ -70,16 +116,27 @@ test("vault routes import a local repository into an attached workspace and purg
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body.vaults, []);
   // Removal leaves the workspace alone but clears the vault's derived data.
   assert.equal((await registry.getWorkspace()).slug, "personal");
-  assert.deepEqual(purge.calls.map(({ url, init }) => ({ url, method: init.method })), [
-    { url: "http://localhost:11301/api/v1/document/remove-folder", method: "DELETE" },
-  ]);
+  assert.deepEqual(
+    purge.calls
+      .filter(({ init }) => init.method === "DELETE")
+      .map(({ url, init }) => ({ url, method: init.method })),
+    [{ url: "http://localhost:11301/api/v1/document/remove-folder", method: "DELETE" }],
+  );
 });
 
 test("workspace attach rejects unknown slugs", async () => {
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry: fakeRegistry(),
-    anythingllm: { async listWorkspaces() { return [{ slug: "known" }] } },
-    vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
+    jobs: fakeJobs(),
+    registry: fakeRegistry(),
+    anythingllm: {
+      async listWorkspaces() {
+        return [{ slug: "known" }];
+      },
+    },
+    vaultStorage: fakeVaultStorage(),
+    secrets: fakeSecrets(),
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   assert.equal((await request(app, "POST", "/api/workspace/attach", { slug: "" })).status, 400);
@@ -91,18 +148,31 @@ test("workspace attach rejects unknown slugs", async () => {
 test("vault creation falls back to a namespaced unified workspace name", async () => {
   const createdWorkspaces = [];
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry: fakeRegistry(),
+    jobs: fakeJobs(),
+    registry: fakeRegistry(),
     anythingllm: {
-      async listWorkspaces() { return []; },
-      async createWorkspace({ name }) { createdWorkspaces.push(name); return { id: 3, name, slug: "any-obs-test-01" }; },
+      async listWorkspaces() {
+        return [];
+      },
+      async createWorkspace({ name }) {
+        createdWorkspaces.push(name);
+        return { id: 3, name, slug: "any-obs-test-01" };
+      },
     },
-    vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
+    vaultStorage: fakeVaultStorage(),
+    secrets: fakeSecrets(),
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   const response = await request(app, "POST", "/api/vaults", {
-    sourceMode: "import", id: "diary", directory: "diary", name: "",
+    sourceMode: "import",
+    id: "diary",
+    directory: "diary",
+    name: "",
     repositoryVisibility: "public",
-    gitUserName: "Diary Bot", gitUserEmail: "diary@example.test",
+    gitUserName: "Diary Bot",
+    gitUserEmail: "diary@example.test",
   });
 
   assert.equal(response.status, 201);
@@ -115,11 +185,18 @@ test("agent token routes create, list, and revoke MCP agent identities", async (
   const registry = fakeRegistry();
   await registry.create({ id: "secret-vault", allowlist: ["scout"] });
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry,
-    anythingllm: { async listWorkspaces() { return []; } },
-    vaultStorage: fakeVaultStorage(), secrets: fakeSecrets(),
+    jobs: fakeJobs(),
+    registry,
+    anythingllm: {
+      async listWorkspaces() {
+        return [];
+      },
+    },
+    vaultStorage: fakeVaultStorage(),
+    secrets: fakeSecrets(),
     agentTokens: createAgentTokenStore({ rootPath: root }),
-    env: nativeEnv(), native: nativePaths(),
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   assert.deepEqual((await request(app, "GET", "/api/agents")).body, { agents: [] });
@@ -146,21 +223,39 @@ test("vault creation requires an explicit automatic-commit identity and private 
   const vaultStorage = fakeVaultStorage();
   const secrets = fakeSecrets();
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry: fakeRegistry(),
-    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets, env: nativeEnv(), native: nativePaths(),
+    jobs: fakeJobs(),
+    registry: fakeRegistry(),
+    anythingllm: {
+      async listWorkspaces() {
+        return [];
+      },
+      async createWorkspace() {
+        return { slug: "work" };
+      },
+    },
+    vaultStorage,
+    secrets,
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   const missingIdentity = await request(app, "POST", "/api/vaults", {
-    ...validVaultPayload(), gitUserName: "", gitUserEmail: "",
+    ...validVaultPayload(),
+    gitUserName: "",
+    gitUserEmail: "",
   });
   assert.equal(missingIdentity.status, 400);
   assert.match(missingIdentity.body.error, /Git commit author name is required/);
 
   const missingPrivateCredential = await request(app, "POST", "/api/vaults", {
-    ...validVaultPayload(), gitAuth: { mode: "https-token", username: "", token: "" },
+    ...validVaultPayload(),
+    gitAuth: { mode: "https-token", username: "", token: "" },
   });
   assert.equal(missingPrivateCredential.status, 400);
-  assert.match(missingPrivateCredential.body.error, /Private repositories require an HTTPS username and token/);
+  assert.match(
+    missingPrivateCredential.body.error,
+    /Private repositories require an HTTPS username and token/,
+  );
   assert.equal(vaultStorage.cloned.length, 0);
   assert.deepEqual(secrets.saved, []);
 });
@@ -169,18 +264,31 @@ test("vault creation imports a directory from any absolute path without clone cr
   const registry = fakeRegistry();
   const vaultStorage = fakeVaultStorage();
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry, vaultStorage, secrets: fakeSecrets(),
-    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "mine" }; } },
-    env: nativeEnv(), native: nativePaths(),
+    jobs: fakeJobs(),
+    registry,
+    vaultStorage,
+    secrets: fakeSecrets(),
+    anythingllm: {
+      async listWorkspaces() {
+        return [];
+      },
+      async createWorkspace() {
+        return { slug: "mine" };
+      },
+    },
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   const created = await request(app, "POST", "/api/vaults", {
     sourceMode: "import",
     importPath: "/Users/x/Workspace/my-vault",
     name: "My Vault",
-    id: "mine", directory: "mine",
+    id: "mine",
+    directory: "mine",
     repositoryVisibility: "private",
-    gitUserName: "X Bot", gitUserEmail: "x@example.test",
+    gitUserName: "X Bot",
+    gitUserEmail: "x@example.test",
   });
 
   assert.equal(created.status, 201);
@@ -191,12 +299,26 @@ test("vault creation imports a directory from any absolute path without clone cr
 test("private local imports also require an HTTPS credential for later sync", async () => {
   const vaultStorage = fakeVaultStorage();
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry: fakeRegistry(),
-    anythingllm: { async listWorkspaces() { return []; }, async createWorkspace() { return { slug: "work" }; } }, vaultStorage, secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
+    jobs: fakeJobs(),
+    registry: fakeRegistry(),
+    anythingllm: {
+      async listWorkspaces() {
+        return [];
+      },
+      async createWorkspace() {
+        return { slug: "work" };
+      },
+    },
+    vaultStorage,
+    secrets: fakeSecrets(),
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   const response = await request(app, "POST", "/api/vaults", {
-    ...validVaultPayload(), sourceMode: "import", gitAuth: { mode: "https-token", username: "", token: "" },
+    ...validVaultPayload(),
+    sourceMode: "import",
+    gitAuth: { mode: "https-token", username: "", token: "" },
   });
 
   assert.equal(response.status, 400);
@@ -206,10 +328,19 @@ test("private local imports also require an HTTPS credential for later sync", as
 test("vault creation checks AnythingLLM before cloning", async () => {
   const vaultStorage = fakeVaultStorage();
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry: fakeRegistry(), vaultStorage, secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
+    jobs: fakeJobs(),
+    registry: fakeRegistry(),
+    vaultStorage,
+    secrets: fakeSecrets(),
+    env: nativeEnv(),
+    native: nativePaths(),
     anythingllm: {
-      async listWorkspaces() { throw new Error("AnythingLLM API 403"); },
-      async createWorkspace() { throw new Error("should not create a workspace"); },
+      async listWorkspaces() {
+        throw new Error("AnythingLLM API 403");
+      },
+      async createWorkspace() {
+        throw new Error("should not create a workspace");
+      },
     },
   });
 
@@ -223,9 +354,19 @@ test("vault creation checks AnythingLLM before cloning", async () => {
 test("test connection validates Git and AnythingLLM without cloning or saving a vault", async () => {
   const vaultStorage = fakeVaultStorage();
   const registry = fakeRegistry();
-  const anythingllm = { async listWorkspaces() { return []; } };
+  const anythingllm = {
+    async listWorkspaces() {
+      return [];
+    },
+  };
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry, anythingllm, vaultStorage, secrets: fakeSecrets(), env: nativeEnv(), native: nativePaths(),
+    jobs: fakeJobs(),
+    registry,
+    anythingllm,
+    vaultStorage,
+    secrets: fakeSecrets(),
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   const response = await request(app, "POST", "/api/vaults/test-connection", validVaultPayload());
@@ -243,23 +384,39 @@ test("status returns classified system state and public config", async () => {
   const app = createDashboardServer({
     jobs: fakeJobs(),
     env: { ...nativeEnv(), DASHBOARD_PORT: "21502" },
-    native: { ...paths, killImpl: aliveKill(new Set([9999])), execFileImpl: async () => ({ stdout: "git version 2.39.0\n" }) },
+    native: {
+      ...paths,
+      killImpl: aliveKill(new Set([9999])),
+      execFileImpl: async () => ({ stdout: "git version 2.39.0\n" }),
+    },
   });
 
   const response = await request(app, "GET", "/api/status");
 
   assert.equal(response.status, 200);
   assert.equal(response.body.systemState, "partial");
-  assert.deepEqual(response.body.services.map((service) => service.id), ["anythingllm", "scheduler", "mcp", "mcp-lan", "git"]);
-  assert.equal(response.body.services.find((service) => service.id === "scheduler").health.ok, true);
+  assert.deepEqual(
+    response.body.services.map((service) => service.id),
+    ["anythingllm", "scheduler", "mcp", "mcp-lan", "git"],
+  );
+  assert.equal(
+    response.body.services.find((service) => service.id === "scheduler").health.ok,
+    true,
+  );
   assert.equal(response.body.services.find((service) => service.id === "mcp").running, false);
   assert.equal(response.body.config.dashboardUrl, "http://localhost:21502");
 });
 
 test("dashboard root serves the management UI only after the AnythingLLM key is verified", async () => {
   const app = createDashboardServer({
-    jobs: fakeJobs(), env: nativeEnv(), native: nativePaths(),
-    anythingllm: { async listWorkspaces() { return []; } },
+    jobs: fakeJobs(),
+    env: nativeEnv(),
+    native: nativePaths(),
+    anythingllm: {
+      async listWorkspaces() {
+        return [];
+      },
+    },
   });
 
   const response = await requestText(app, "/");
@@ -270,8 +427,14 @@ test("dashboard root serves the management UI only after the AnythingLLM key is 
 
 test("dashboard root serves a setup guide when the AnythingLLM key is invalid", async () => {
   const app = createDashboardServer({
-    jobs: fakeJobs(), env: { ...nativeEnv(), ANYTHINGLLM_BASE_URL: "http://localhost:11401" }, native: nativePaths(),
-    anythingllm: { async listWorkspaces() { throw new Error("AnythingLLM API 403"); } },
+    jobs: fakeJobs(),
+    env: { ...nativeEnv(), ANYTHINGLLM_BASE_URL: "http://localhost:11401" },
+    native: nativePaths(),
+    anythingllm: {
+      async listWorkspaces() {
+        throw new Error("AnythingLLM API 403");
+      },
+    },
   });
 
   const response = await requestText(app, "/");
@@ -282,38 +445,20 @@ test("dashboard root serves a setup guide when the AnythingLLM key is invalid", 
   assert.doesNotMatch(response.body, /id="vault-dialog"/);
 });
 
-test("system off stops the scheduler and clears its pid file", async () => {
-  const paths = nativePaths();
-  writeFileSync(paths.schedulerPidPath, "1234\n");
+test("system power uses the same service controller as CLI and preserves startup preference", async () => {
+  const services = fakeServices({ running: true, autostart: true });
   const app = createDashboardServer({
-    jobs: fakeJobs(), env: nativeEnv(),
-    native: { ...paths, killImpl: aliveKill(new Set([1234])) },
+    jobs: fakeJobs(),
+    env: nativeEnv(),
+    native: nativePaths(),
+    services,
   });
-
-  const response = await request(app, "POST", "/api/system/off");
-
-  assert.equal(response.status, 200);
-  assert.equal(existsSync(paths.schedulerPidPath), false);
-});
-
-test("system on starts the scheduler process and reports it running", async () => {
-  const paths = nativePaths();
-  const app = createDashboardServer({
-    jobs: fakeJobs(), env: nativeEnv(),
-    native: {
-      ...paths,
-      spawnImpl: () => {
-        writeFileSync(paths.schedulerPidPath, "2345\n");
-        return { pid: 2345, unref() {} };
-      },
-      killImpl: aliveKill(new Set([2345])),
-    },
-  });
-
-  const response = await request(app, "POST", "/api/system/on");
-
-  assert.equal(response.status, 200);
-  assert.equal(response.body.services.find((service) => service.id === "scheduler").running, true);
+  assert.equal((await request(app, "POST", "/api/system/off")).status, 200);
+  assert.equal((await services.status()).services.scheduler.running, false);
+  assert.equal((await services.status()).autostart.enabled, true);
+  assert.equal((await request(app, "POST", "/api/system/on")).status, 200);
+  assert.equal((await services.status()).services.scheduler.running, true);
+  assert.deepEqual(services.calls, ["stop:scheduler", "start:scheduler"]);
 });
 
 test("logs reject unknown service ids", async () => {
@@ -332,7 +477,8 @@ test("vault actions reject unknown action ids and start an allowed scoped job", 
   const app = createDashboardServer({
     jobs,
     registry,
-    env: nativeEnv(), native: nativePaths(),
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   assert.equal((await request(app, "POST", "/api/vaults/work/actions/rm-all")).status, 404);
@@ -353,7 +499,8 @@ test("actions return conflict when job preconditions fail", async () => {
       },
     },
     registry,
-    env: nativeEnv(), native: nativePaths(),
+    env: nativeEnv(),
+    native: nativePaths(),
   });
 
   const response = await request(app, "POST", "/api/vaults/work/actions/embed");
@@ -394,6 +541,7 @@ function nativeEnv() {
     // real plist files under $HOME/Library/LaunchAgents and falling back to
     // the actual home directory leaks test artifacts onto the machine.
     HOME: root,
+    ANYTHING_OBSIDIAN_HOME: root,
     VAULTS_ROOT: "/vaults",
     VAULT_REGISTRY_PATH: `${root}/registry/vaults.json`,
     VAULT_SECRETS_PATH: `${root}/secrets`,
@@ -409,7 +557,9 @@ function nativeEnv() {
 }
 
 function nativePaths() {
-  const root = mkdtempSync(path.join(tmpdir(), `anything-obsidian-server-${Math.random().toString(36).slice(2)}`));
+  const root = mkdtempSync(
+    path.join(tmpdir(), `anything-obsidian-server-${Math.random().toString(36).slice(2)}`),
+  );
   return {
     schedulerPidPath: path.join(root, "scheduler.pid"),
     schedulerLogPath: path.join(root, "scheduler.log"),
@@ -449,9 +599,16 @@ function fakeRegistry() {
   const vaults = [];
   let workspace = null;
   return {
-    async list() { return vaults; },
-    async get(id) { return vaults.find((vault) => vault.id === id) || null; },
-    async create(vault) { vaults.push(vault); return vault; },
+    async list() {
+      return vaults;
+    },
+    async get(id) {
+      return vaults.find((vault) => vault.id === id) || null;
+    },
+    async create(vault) {
+      vaults.push(vault);
+      return vault;
+    },
     async remove(id) {
       const index = vaults.findIndex((vault) => vault.id === id);
       return index === -1 ? null : vaults.splice(index, 1)[0];
@@ -460,8 +617,13 @@ function fakeRegistry() {
       const vault = vaults.find((candidate) => candidate.id === id);
       return vault ? Object.assign(vault, changes) : null;
     },
-    async getWorkspace() { return workspace; },
-    async setWorkspace(input) { workspace = { slug: input.slug, name: input.name ?? input.slug }; return workspace; },
+    async getWorkspace() {
+      return workspace;
+    },
+    async setWorkspace(input) {
+      workspace = { slug: input.slug, name: input.name ?? input.slug };
+      return workspace;
+    },
   };
 }
 
@@ -471,7 +633,9 @@ function fakeFetch() {
     calls,
     async fetchImpl(url, init = {}) {
       calls.push({ url, init });
-      return { ok: true, status: 200, text: async () => "{}" };
+      return new Response(JSON.stringify(url.includes("/workspace/") ? { documents: [] } : {}), {
+        status: 200,
+      });
     },
   };
 }
@@ -487,13 +651,21 @@ function fakeVaultStorage() {
     async clone(input) {
       this.cloned.push(input);
       return {
-        name: "Work", id: "work", directory: "work", repositoryUrl: input.repositoryUrl,
-        gitRemote: "origin", gitBranch: "main",
+        name: "Work",
+        id: "work",
+        directory: "work",
+        repositoryUrl: input.repositoryUrl,
+        gitRemote: "origin",
+        gitBranch: "main",
       };
     },
     async import(input) {
       this.imported.push(input);
-      return { repositoryUrl: "https://github.com/acme/personal.git", gitRemote: "origin", gitBranch: "main" };
+      return {
+        repositoryUrl: "https://github.com/acme/personal.git",
+        gitRemote: "origin",
+        gitBranch: "main",
+      };
     },
   };
 }
@@ -502,8 +674,12 @@ function fakeSecrets() {
   return {
     saved: [],
     removed: [],
-    async save(id, auth) { this.saved.push({ id, auth }); },
-    async remove(id) { this.removed.push(id); },
+    async save(id, auth) {
+      this.saved.push({ id, auth });
+    },
+    async remove(id) {
+      this.removed.push(id);
+    },
   };
 }
 
@@ -531,6 +707,7 @@ async function request(server, method, path, body) {
         this.push(null);
       },
     });
+    req.headers = { "content-type": "application/json", host: "localhost" };
     req.method = method;
     req.url = path;
 
@@ -561,7 +738,11 @@ async function request(server, method, path, body) {
 async function requestText(server, path) {
   return await new Promise((resolve) => {
     const chunks = [];
-    const req = new Readable({ read() { this.push(null); } });
+    const req = new Readable({
+      read() {
+        this.push(null);
+      },
+    });
     req.method = "GET";
     req.url = path;
     const res = new Writable({
@@ -588,11 +769,17 @@ test("vault listings carry the last sync status when available", async () => {
   const paths = nativePaths();
   const registry = fakeRegistry();
   await registry.create({ id: "work" });
-  const store = createSyncStatusStore({ filePath: path.join(paths.schedulerPidPath, "..", "last-sync.json") });
+  const store = createSyncStatusStore({
+    filePath: path.join(paths.schedulerPidPath, "..", "last-sync.json"),
+  });
   await store.record("work", { status: "succeeded", pushed: true, embedded: true });
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry, secrets: fakeSecrets(), vaultStorage: fakeVaultStorage(),
-    env: nativeEnv(), native: { ...paths, lastSyncPath: store.filePath },
+    jobs: fakeJobs(),
+    registry,
+    secrets: fakeSecrets(),
+    vaultStorage: fakeVaultStorage(),
+    env: nativeEnv(),
+    native: { ...paths, lastSyncPath: store.filePath },
   });
 
   const response = await request(app, "GET", "/api/vaults");
@@ -603,55 +790,51 @@ test("vault listings carry the last sync status when available", async () => {
   assert.equal(response.body.vaults[0].lastSync.pushed, true);
 
   const withoutStore = createDashboardServer({
-    jobs: fakeJobs(), registry, secrets: fakeSecrets(), vaultStorage: fakeVaultStorage(),
-    env: nativeEnv(), native: paths,
+    jobs: fakeJobs(),
+    registry,
+    secrets: fakeSecrets(),
+    vaultStorage: fakeVaultStorage(),
+    env: nativeEnv(),
+    native: paths,
   });
   assert.equal((await request(withoutStore, "GET", "/api/vaults")).body.vaults[0].lastSync, null);
 });
 
-test("autostart and lan endpoints manage services through the platform manager", async () => {
-  const tracker = [];
-  const launchctl = async (args) => {
-    tracker.push(args.join(" "));
-    if (args[0] === "print") throw new Error("not loaded");
-    return { stdout: "", stderr: "" };
-  };
-  const paths = nativePaths();
-  const makeApp = () => createDashboardServer({
-    jobs: fakeJobs(), registry: fakeRegistry(), secrets: fakeSecrets(), vaultStorage: fakeVaultStorage(),
-    env: { ...nativeEnv(), ANYTHING_OBSIDIAN_HOME: configRoot(tmpHome()) },
-    native: { ...paths, lastSyncPath: path.join(paths.schedulerPidPath, "..", "last-sync.json") },
-    platform: "darwin", launchctl,
+test("autostart and lan endpoints use the shared controller without changing runtime state", async () => {
+  const services = fakeServices({ running: true });
+  const app = createDashboardServer({
+    jobs: fakeJobs(),
+    env: nativeEnv(),
+    native: nativePaths(),
+    services,
   });
-
-  const before = await request(makeApp(), "GET", "/api/autostart");
-  assert.equal(before.status, 200);
-  assert.equal(before.body.enabled, false);
-
-  const on = await request(makeApp(), "POST", "/api/autostart", { action: "on" });
+  assert.equal((await request(app, "GET", "/api/autostart")).body.enabled, false);
+  const on = await request(app, "POST", "/api/autostart", { action: "on" });
   assert.equal(on.status, 200);
   assert.equal(on.body.enabled, true);
-  assert.ok(tracker.some((entry) => entry.startsWith("bootstrap")));
-
-  const bad = await request(makeApp(), "POST", "/api/autostart", { action: "toggle" });
-  assert.equal(bad.status, 400);
-
-  const lanOff = await request(makeApp(), "POST", "/api/lan", { action: "off" });
-  assert.equal(lanOff.status, 200);
-  assert.equal(lanOff.body.enabled, false);
+  assert.equal((await services.status()).services.scheduler.running, true);
+  assert.equal((await request(app, "POST", "/api/autostart", { action: "toggle" })).status, 400);
+  assert.equal((await request(app, "POST", "/api/lan", { action: "off" })).body.enabled, false);
+  assert.deepEqual(services.calls, ["autostart:true", "lan:false"]);
 });
 
 test("lan on generates and stores a token when none is configured", async () => {
   const home = tmpHome();
   const { createAppConfigStore } = await import("../lib/app-config.mjs");
   await createAppConfigStore({ rootDir: configRoot(home) }).save({
-    vaultsRoot: path.join(home, "v"), anythingllmBaseUrl: "http://l", apiKey: "k",
+    vaultsRoot: path.join(home, "v"),
+    anythingllmBaseUrl: "http://l",
+    apiKey: "k",
   });
   const paths = nativePaths();
   const app = createDashboardServer({
-    jobs: fakeJobs(), registry: fakeRegistry(), secrets: fakeSecrets(), vaultStorage: fakeVaultStorage(),
+    jobs: fakeJobs(),
+    registry: fakeRegistry(),
+    secrets: fakeSecrets(),
+    vaultStorage: fakeVaultStorage(),
     env: { ...nativeEnv(), ANYTHING_OBSIDIAN_HOME: configRoot(home) },
-    native: paths, platform: "darwin",
+    native: paths,
+    platform: "darwin",
     launchctl: async (args) => {
       if (args[0] === "print") throw new Error("not loaded");
       return { stdout: "", stderr: "" };
@@ -670,7 +853,10 @@ test("lan on generates and stores a token when none is configured", async () => 
 let homeCounter = 0;
 function tmpHome() {
   homeCounter += 1;
-  return path.join(tmpdir(), `anything-obsidian-server-home-${process.pid}-${homeCounter}-${Math.random().toString(36).slice(2)}`);
+  return path.join(
+    tmpdir(),
+    `anything-obsidian-server-home-${process.pid}-${homeCounter}-${Math.random().toString(36).slice(2)}`,
+  );
 }
 
 function configRoot(home) {

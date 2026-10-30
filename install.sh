@@ -21,7 +21,7 @@ APP_ROOT="${ANYTHING_OBSIDIAN_APP_HOME:-$HOME/.anything-obsidian}"
 APP_DIR="$APP_ROOT/app"
 RUNTIME_DIR="$APP_ROOT/runtime"
 BIN_DIR="$HOME/.local/bin"
-NODE_VERSION="${ANYTHING_OBSIDIAN_NODE_VERSION:-22.14.0}"
+NODE_VERSION="${ANYTHING_OBSIDIAN_NODE_VERSION:-}"
 SELF_URL="https://raw.githubusercontent.com/$REPO/$BRANCH/install.sh"
 
 say() { printf '%s\n' "$*"; }
@@ -41,15 +41,12 @@ Non-interactive (agent) mode — provide all three, nothing is prompted:
 Options:
   --no-browser    do not open the browser when done
   --server         server install: configure for the IAM gateway and register
-                   the gateway service (client dashboard stays available but
-                   is not auto-started)
-  --no-autostart  do not register login auto-start / crash auto-restart
-                  (macOS: LaunchAgents; Linux: systemd user units)
+                   the gateway service; client role is configured separately
 
 Environment overrides:
   ANYTHING_OBSIDIAN_APP_HOME     where the app lives (default ~/.anything-obsidian)
   ANYTHING_OBSIDIAN_HOME         where data/config lives (default OS app-support dir)
-  ANYTHING_OBSIDIAN_NODE_VERSION portable node version (default 22.14.0)
+  ANYTHING_OBSIDIAN_NODE_VERSION portable node version (default: latest Node 22 patch)
   ANYTHING_OBSIDIAN_REPO         GitHub repo slug (default Lettucech/anything-obsidian)
   ANYTHING_OBSIDIAN_BRANCH       branch/tag to install (default main)
 USAGE_EOF
@@ -72,7 +69,7 @@ if [ ! -t 0 ] && [ -z "${AO_INSTALLER_EXECED:-}" ]; then
 fi
 
 # ---------- flags ----------
-VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; NO_AUTOSTART=0; SERVER=0; WANT_HELP=0
+VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; SERVER=0; WANT_HELP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --vaults-root) VAULTS_ROOT="${2:?}"; shift 2 ;;
@@ -80,7 +77,6 @@ while [ $# -gt 0 ]; do
     --api-key) API_KEY="${2:?}"; shift 2 ;;
     --port) PORT="${2:?}"; shift 2 ;;
     --no-browser) NO_BROWSER=1; shift ;;
-    --no-autostart) NO_AUTOSTART=1; shift ;;
     --server) SERVER=1; NO_BROWSER=1; shift ;;
     --help|-h) WANT_HELP=1; shift ;;
     *) die "Unknown option: $1" ;;
@@ -120,12 +116,29 @@ find_node() {
 
 NODE_BIN="$(find_node || true)"
 if [ -z "$NODE_BIN" ]; then
-  TARBALL="node-v$NODE_VERSION-$NODE_TARGET.tar.gz"
-  NODE_URL="https://nodejs.org/dist/v$NODE_VERSION/$TARBALL"
-  say "  system node is missing or older than 22 (unsupported/EOL); downloading portable Node.js v$NODE_VERSION ($NODE_TARGET)…"
+  if [ -n "$NODE_VERSION" ]; then
+    case "$NODE_VERSION" in *[!0-9.]*|.*) die "Invalid portable Node version" ;; esac
+    NODE_DIST="https://nodejs.org/dist/v$NODE_VERSION"
+  else
+    NODE_DIST="https://nodejs.org/dist/latest-v22.x"
+  fi
+  MANIFEST="$(curl -fsSL "$NODE_DIST/SHASUMS256.txt")" || die "Could not fetch Node checksums"
+  TARBALL="$(printf '%s\n' "$MANIFEST" | awk -v suffix="-$NODE_TARGET.tar.gz" '$2 ~ suffix "$" {print $2; exit}')"
+  [ -n "$TARBALL" ] || die "No Node runtime for $NODE_TARGET"
+  say "  downloading a portable supported Node.js ($NODE_TARGET)…"
   mkdir -p "$RUNTIME_DIR"
-  curl -fsSL "$NODE_URL" | tar -xz -C "$RUNTIME_DIR" || die "Could not download Node.js from $NODE_URL"
-  NODE_BIN="$RUNTIME_DIR/node-v$NODE_VERSION-$NODE_TARGET/bin/node"
+  RUNTIME_STAGE="$(mktemp -d "$RUNTIME_DIR/download.XXXXXX")"
+  curl -fsSL "$NODE_DIST/$TARBALL" -o "$RUNTIME_STAGE/$TARBALL" || die "Node download failed"
+  EXPECTED="$(printf '%s\n' "$MANIFEST" | awk -v archive="$TARBALL" '$2 == archive {print $1; exit}')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL="$(sha256sum "$RUNTIME_STAGE/$TARBALL" | awk '{print $1}')"
+  else
+    ACTUAL="$(shasum -a 256 "$RUNTIME_STAGE/$TARBALL" | awk '{print $1}')"
+  fi
+  [ "$ACTUAL" = "$EXPECTED" ] || die "Node archive checksum mismatch"
+  tar -xzf "$RUNTIME_STAGE/$TARBALL" -C "$RUNTIME_DIR" || die "Could not extract Node runtime"
+  rm -rf "$RUNTIME_STAGE"
+  NODE_BIN="$RUNTIME_DIR/${TARBALL%.tar.gz}/bin/node"
   [ -x "$NODE_BIN" ] || die "Downloaded Node.js is not runnable at $NODE_BIN"
   say "  ✓ portable node ready"
 else
@@ -150,49 +163,65 @@ curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -x
   || die "Could not download the repository. Check github.com/$REPO is reachable."
 SOURCE_DIR="$(find "$STAGING" -maxdepth 1 -mindepth 1 -type d | head -1)"
 if [ -z "$SOURCE_DIR" ]; then die "Downloaded archive was empty."; fi
-rm -rf "$APP_DIR"
-mv "$SOURCE_DIR" "$APP_DIR"
-rm -rf "$STAGING"
-say "  ✓ app installed: $APP_DIR"
-
-# ---------- dependencies (MCP server runtime) ----------
-if (cd "$APP_DIR" && "$NODE_BIN" "$APP_DIR/node_modules/../package.json" >/dev/null 2>&1); then :; fi
 NPM_CLI=""
 for candidate in "$(dirname "$NODE_BIN")/npm" "$(dirname "$NODE_BIN")/../lib/node_modules/npm/bin/npm-cli.js"; do
   if [ -f "$candidate" ]; then NPM_CLI="$candidate"; break; fi
 done
-if [ -n "$NPM_CLI" ] && [ ! -d "$APP_DIR/node_modules" ]; then
-  say "  installing dependencies (MCP server)…"
-  if (cd "$APP_DIR" && "$NODE_BIN" "$NPM_CLI" ci --omit=dev --no-audit --no-fund >/dev/null 2>&1); then
-    say "  ✓ dependencies installed"
-  else
-    warn "Dependency install failed — the dashboard and sync still work, but MCP endpoints will not."
-    warn "Retry any time: cd $APP_DIR && npm ci --omit=dev"
-  fi
+[ -n "$NPM_CLI" ] || die "npm was not found beside Node. Install a complete Node distribution."
+say "  installing dependencies in staging…"
+(cd "$SOURCE_DIR" && "$NODE_BIN" "$NPM_CLI" ci --omit=dev --no-audit --no-fund) \
+  || die "Dependencies failed. Existing installation was kept."
+"$NODE_BIN" "$SOURCE_DIR/bin/anything-obsidian.mjs" --help >/dev/null \
+  || die "Staged app validation failed. Existing installation was kept."
+if [ -d "$APP_DIR" ]; then
+  die "An app already exists at $APP_DIR. Use anything-obsidian update; it supports rollback."
 fi
+mv "$SOURCE_DIR" "$APP_DIR"
+rm -rf "$STAGING"
+say "  ✓ app installed: $APP_DIR"
+
+# Pin the same resolved data directory in the launcher and service definitions.
+case "$OS" in
+  Darwin) DATA_ROOT="${ANYTHING_OBSIDIAN_HOME:-$HOME/Library/Application Support/anything-obsidian}" ;;
+  *) DATA_ROOT="${ANYTHING_OBSIDIAN_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/anything-obsidian}" ;;
+esac
+export ANYTHING_OBSIDIAN_HOME="$DATA_ROOT"
 
 # ---------- CLI launcher ----------
 LAUNCHER="$BIN_DIR/anything-obsidian"
 mkdir -p "$BIN_DIR"
+shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+APP_LITERAL="$(shell_quote "$APP_DIR")"
+RUNTIME_LITERAL="$(shell_quote "$RUNTIME_DIR")"
+DATA_LITERAL="$(shell_quote "$DATA_ROOT")"
+ROOT_LITERAL="$(shell_quote "$APP_ROOT")"
 cat > "$LAUNCHER" << LAUNCHER_EOF
 #!/bin/sh
 # Anything Obsidian CLI launcher (managed by install.sh / uninstall.sh)
-AO_APP="$APP_DIR"
-AO_RUNTIME="$RUNTIME_DIR"
+AO_APP=$APP_LITERAL
+AO_RUNTIME=$RUNTIME_LITERAL
+# Recover the brief directory-switch window if an update was interrupted.
+if [ ! -d "\$AO_APP" ] && [ -d "\$AO_APP.previous" ]; then mv "\$AO_APP.previous" "\$AO_APP"; fi
+if [ -z "\${ANYTHING_OBSIDIAN_HOME:-}" ]; then ANYTHING_OBSIDIAN_HOME=$DATA_LITERAL; fi
+export ANYTHING_OBSIDIAN_HOME
+export ANYTHING_OBSIDIAN_APP_HOME=$ROOT_LITERAL
 if command -v node >/dev/null 2>&1; then
-  exec "\$(command -v node)" "\$AO_APP/bin/anything-obsidian.mjs" "\$@"
+  AO_NODE="\$(command -v node)"
+  AO_MAJOR="\$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  if [ "\$AO_MAJOR" -ge 22 ]; then exec "\$AO_NODE" "\$AO_APP/bin/anything-obsidian.mjs" "\$@"; fi
 fi
 for candidate in "\$AO_RUNTIME"/node-v*/bin/node; do
   if [ -x "\$candidate" ]; then exec "\$candidate" "\$AO_APP/bin/anything-obsidian.mjs" "\$@"; fi
 done
-echo "anything-obsidian: no node found; re-run the installer." >&2
+echo "anything-obsidian: no supported Node found; re-run the installer." >&2
 exit 1
 LAUNCHER_EOF
+
 chmod +x "$LAUNCHER"
 
 # Short form — same launcher body, one command to type.
 ALIAS_BIN="$BIN_DIR/any-obs"
-sed "s/anything-obsidian: no node found/any-obs: no node found/" "$LAUNCHER" > "$ALIAS_BIN"
+sed "s/anything-obsidian: no supported Node found/any-obs: no supported Node found/" "$LAUNCHER" > "$ALIAS_BIN"
 chmod +x "$ALIAS_BIN"
 
 case ":$PATH:" in
@@ -214,130 +243,29 @@ case ":$PATH:" in
 esac
 say "  ✓ CLI ready: $LAUNCHER (short form: any-obs)"
 
-# ---------- init ----------
-if [ "$NON_INTERACTIVE" -eq 1 ]; then
-  INIT_ARGS="--vaults-root $VAULTS_ROOT --url $URL --api-key $API_KEY"
-  if [ -n "$PORT" ]; then INIT_ARGS="$INIT_ARGS --port $PORT"; fi
-  if [ "$SERVER" -eq 1 ]; then INIT_ARGS="$INIT_ARGS --server"; fi
-  say ""
-  say "Configuring (non-interactive)…"
-  "$LAUNCHER" init $INIT_ARGS || die "Setup failed. Fix the problem above and re-run: $LAUNCHER init"
-else
-  say ""
-  say "Now a few questions to finish setup (AnythingLLM URL and API key; see the README):"
-  if [ "$SERVER" -eq 1 ]; then
-    "$LAUNCHER" init --server || die "Setup failed. Re-run it any time with: $LAUNCHER init --server"
-  else
-    "$LAUNCHER" init || die "Setup failed. Re-run it any time with: $LAUNCHER init"
-  fi
-fi
+# ---------- setup and verify ----------
+# Build argv without word splitting: paths and credentials may contain spaces.
+set -- setup
+if [ "$SERVER" -eq 1 ]; then set -- "$@" --server; fi
+if [ -n "$VAULTS_ROOT" ]; then set -- "$@" --vaults-root "$VAULTS_ROOT"; fi
+if [ -n "$URL" ]; then set -- "$@" --url "$URL"; fi
+if [ -n "$API_KEY" ]; then set -- "$@" --api-key "$API_KEY"; fi
+if [ -n "$PORT" ]; then set -- "$@" --port "$PORT"; fi
+"$LAUNCHER" "$@" || die "Setup did not complete. Follow the error above, then run: anything-obsidian start"
+"$LAUNCHER" status --json || die "Services are not ready. Run: anything-obsidian logs"
 
-# ---------- start ----------
-say ""
-DASH_PORT="$PORT"
-if [ -z "$DASH_PORT" ]; then DASH_PORT=21502; fi
-open_dashboard_in_browser() {
-  if [ "$NO_BROWSER" -eq 1 ]; then return 0; fi
+DASH_PORT="${PORT:-21502}"
+if [ "$SERVER" -eq 1 ]; then DASH_PORT=21505; fi
+if [ "$NO_BROWSER" -ne 1 ]; then
   if command -v open >/dev/null 2>&1; then open "http://localhost:$DASH_PORT" >/dev/null 2>&1 || true
   elif command -v xdg-open >/dev/null 2>&1; then xdg-open "http://localhost:$DASH_PORT" >/dev/null 2>&1 || true
   fi
-}
-
-AUTOSTART=1
-if [ "$NO_AUTOSTART" -eq 1 ]; then AUTOSTART=0; fi
-if [ "$AUTOSTART" -eq 1 ] && [ "$NON_INTERACTIVE" -ne 1 ] && [ "$SERVER" -ne 1 ]; then
-  printf 'Keep the dashboard and sync running at login (auto-restart on crash)? [Y/n] '
-  answer=""
-  read answer < /dev/tty 2>/dev/null || answer=""
-  case "$answer" in n|N|no|No|NO) AUTOSTART=0 ;; esac
 fi
-
-if [ "$SERVER" -eq 1 ]; then
-  if [ "$AUTOSTART" -eq 1 ]; then
-    "$LAUNCHER" autostart gateway on || warn "Gateway autostart failed; start it with: $LAUNCHER gateway --bg"
-  fi
-  "$LAUNCHER" gateway --bg || warn "Gateway did not start. Re-run: anything-obsidian gateway --bg"
-
-  if ! curl -m 2 -s -o /dev/null http://127.0.0.1:21501/ 2>/dev/null; then
-    say ""
-    say "AnythingLLM isn't reachable at localhost:21501."
-    if command -v docker >/dev/null 2>&1; then
-      START_ANY=0
-      if [ "$NON_INTERACTIVE" -ne 1 ]; then
-        printf 'Start the bundled AnythingLLM now (docker compose)? [Y/n] '
-        answer=""
-        read answer < /dev/tty 2>/dev/null || answer=""
-        case "$answer" in n|N|no|No|NO) START_ANY=0 ;; *) START_ANY=1 ;; esac
-      fi
-      if [ "$START_ANY" -eq 1 ]; then
-        docker compose -p any-obs -f "$APP_DIR/server/anythingllm.compose.yml" up -d \
-          && say "  ✓ AnythingLLM is starting on http://localhost:21501 (loopback only)."
-        say "  Finish its first-boot wizard there, then mint the developer API key and"
-        say "  paste it in the gateway admin dashboard's Settings tab (localhost:21505)."
-      fi
-    else
-      say "Docker isn't installed. Either install Docker and run"
-      say "  docker compose -p any-obs -f $APP_DIR/server/anythingllm.compose.yml up -d"
-      say "or point this gateway at an existing AnythingLLM:"
-      say "  anything-obsidian init --url <that-url> --api-key <developer-key>"
-    fi
-  fi
-
-  say ""
-  say "Server install complete. The gateway is running:"
-  say "  public plane   http://<this-host>:21500  (MCP + user API; user token required)"
-  say "  admin dashboard http://localhost:21505   (loopback only - ssh -L 21505:127.0.0.1:21505 <this-host>)"
-  say "Finish setup (AnythingLLM key) in that dashboard's wizard."
-  say "Useful commands:"
-  say "  anything-obsidian status               health check (shows whose token if client-style)"
-  say "  anything-obsidian stop                 stop everything incl. the gateway"
-  say "  anything-obsidian autostart gateway off  stop the gateway permanently"
-  say "The client dashboard stays available for system checks: anything-obsidian start"
-  say ""
-  say "Optional — teach your AI agent to drive any-obs:"
-  say "  npx skills add $REPO --skill anything-obsidian-setup"
-  say "  npx skills add $REPO --skill anything-obsidian-vault-workflow"
-  exit 0
-fi
-
-if [ "$AUTOSTART" -eq 1 ]; then
-  if "$LAUNCHER" autostart on; then
-    open_dashboard_in_browser
-    say ""
-    say "Installed. The dashboard is at http://localhost:$DASH_PORT and stays running:"
-    say "it starts at every login and restarts automatically if it crashes."
-    say "Useful commands:"
-    say "  anything-obsidian status        health + setup check"
-    say "  anything-obsidian stop          stop now (comes back at next login)"
-    say "  anything-obsidian autostart off stop permanently"
-    say "Uninstall any time:"
-    say "  curl -fsSL https://raw.githubusercontent.com/$REPO/$BRANCH/uninstall.sh | sh"
-    say ""
-    say "Optional — teach your AI agent to drive any-obs (installs via npx, per agent):"
-    say "  npx skills add $REPO --skill anything-obsidian-setup      # setup + health playbook"
-    say "  npx skills add $REPO --skill anything-obsidian-vault-workflow  # vault retrieval/edit workflow"
-  else
-    warn "Autostart failed; falling back to a plain background start."
-    "$LAUNCHER" start --bg || { warn "The dashboard did not start. Re-run: anything-obsidian start"; exit 1; }
-    open_dashboard_in_browser
-    say "Installed. The dashboard is at http://localhost:$DASH_PORT"
-  fi
-else
-  if "$LAUNCHER" start --bg; then
-    open_dashboard_in_browser
-    say ""
-    say "Installed. The dashboard is at http://localhost:$DASH_PORT"
-    say "Keep vault sync running in the background with: anything-obsidian start-bg"
-    say "Turn on auto-restart any time with: anything-obsidian autostart on"
-    say ""
-    say "Optional — teach your AI agent to drive any-obs:"
-    say "  npx skills add $REPO --skill anything-obsidian-setup"
-    say "  npx skills add $REPO --skill anything-obsidian-vault-workflow"
-  else
-    CONFIG_HINT="${ANYTHING_OBSIDIAN_HOME:-$HOME/Library/Application Support/anything-obsidian}"
-    if [ "$OS" != "Darwin" ]; then CONFIG_HINT="${ANYTHING_OBSIDIAN_HOME:-$HOME/.config/anything-obsidian}"; fi
-    warn "The dashboard did not start. Check: $CONFIG_HINT/logs/dashboard.log"
-    warn "Re-run: anything-obsidian start"
-    exit 1
-  fi
-fi
+say ""
+say "Installed and verified. Services run in the background."
+say "  anything-obsidian start      ensure all services are running"
+say "  anything-obsidian stop       stop now; keep autostart preference"
+say "  anything-obsidian restart    restart and verify"
+say "  anything-obsidian status     readiness and startup guarantee"
+say "  anything-obsidian logs -f    follow logs"
+say "To stop now and after future logins: autostart off, then stop."

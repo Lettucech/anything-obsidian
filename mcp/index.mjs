@@ -114,12 +114,11 @@ function registerLocalVaultTools(server, vaultFiles) {
 function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identity) {
   server.tool(
     "any_obs_rag_answer",
-    "Ask AnythingLLM to answer from this instance's unified index of all managed vaults. Answer mode is RAG chat: queries whose retrieval scores fall below the workspace's relevance cutoff are refused, so generic queries may answer nothing — use any_obs_rag_search for raw attributed chunks regardless of score.",
+    "Ask AnythingLLM to answer strictly from RAG over this instance's unified index of all managed vaults: queries whose retrieval scores fall below the workspace's relevance cutoff are refused, so generic queries may answer nothing — use any_obs_rag_search for raw attributed chunks regardless of score.",
     {
       question: z.string().min(1),
-      mode: z.enum(["query", "chat"]).default("query"),
     },
-    async ({ question, mode }) => {
+    async ({ question }) => {
       const visible = await visibleRagWorkspaces(vaultRegistryPath, { baseUrl, apiKey });
       // Cross-vault synthesis targets this instance's own unified workspace;
       // gateway-granted shared workspaces stay search-only surfaces. Clients
@@ -128,7 +127,7 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
       const slug = own && visible.includes(own.slug) ? own.slug : visible[0];
       const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(slug)), {
         method: "POST",
-        body: JSON.stringify({ message: question, mode }),
+        body: JSON.stringify({ message: question, mode: "query" }),
       }, { baseUrl, apiKey });
       return asJsonContent(data);
     },
@@ -247,10 +246,10 @@ async function visibleRagWorkspaces(vaultRegistryPath, { baseUrl, apiKey }) {
 
 async function requestJson(pathOrUrl, init, { baseUrl, apiKey }) {
   if (!apiKey) {
-    throw new Error("Missing ANYTHINGLLM_API_KEY. Finish AnythingLLM setup and re-run: anything-obsidian init");
+    throw new Error("Missing ANYTHINGLLM_API_KEY. Finish AnythingLLM setup and re-run: anything-obsidian setup");
   }
   if (!baseUrl) {
-    throw new Error("Missing ANYTHINGLLM_BASE_URL. Re-run: anything-obsidian init");
+    throw new Error("Missing ANYTHINGLLM_BASE_URL. Re-run: anything-obsidian setup");
   }
   const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
   const response = await fetch(url, {
@@ -291,7 +290,7 @@ function startHttpServer(profile) {
   const app = createMcpExpressApp(mcpHttpOptions(process.env.MCP_ALLOWED_HOSTS, { host: bindHost }));
 
   app.get("/health", (_req, res) => {
-    res.status(200).json({ ok: true, name: "anything-obsidian-mcp", profile, apiKeyConfigured: Boolean(process.env.ANYTHINGLLM_API_KEY) });
+    res.status(200).json({ ok: true, name: "anything-obsidian-mcp", profile, configRoot: process.env.ANYTHING_OBSIDIAN_HOME, apiKeyConfigured: Boolean(process.env.ANYTHINGLLM_API_KEY) });
   });
 
   app.post("/mcp", async (req, res) => {

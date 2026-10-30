@@ -17,8 +17,8 @@ loopback 21503, optional LAN 21504 (`lan on`, Bearer token required).
 
 The client stays native forever — no Docker, no Electron/desktop-shell plan,
 no npm publish. The same is true for shared deployments: the IAM **gateway**
-under `server/` runs from the same install (`anything-obsidian gateway`,
-`autostart gateway on`), is the sole holder of the AnythingLLM admin key,
+under `server/` runs from the same install (`anything-obsidian setup --server`, then the same
+`start`/`stop`/`restart` commands as clients), is the sole holder of the AnythingLLM admin key,
 scopes every client with per-user tokens, and its shared-source pipeline is
 the only writer to shared workspaces. AnythingLLM itself is never bundled
 or hosted — it is always an external dependency the user provides (an
@@ -28,7 +28,7 @@ never manages its lifecycle). See
 `docs/superpowers/specs/2026-10-28-iam-middleware.md`.
 
 The root `package.json` now
-carries real dependencies (MCP SDK, zod); `install.sh` runs `npm ci --omit=dev`
+carries real dependencies (MCP SDK, zod, proper-lockfile); `install.sh` runs `npm ci --omit=dev`
 and `anything-obsidian update` refreshes both app and dependencies.
 
 ## Helping a user install and set up
@@ -41,24 +41,30 @@ curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/in
 anything-obsidian status --json   # exit 0 + "ok": true == done
 ```
 
-Collect the AnythingLLM URL and API key from the user (Settings → Developer
-API). Never invent a key. Verify with `status --json` after every change.
+For a client, collect its gateway URL and issued user token; a solo client may
+use AnythingLLM directly. For a gateway, collect the external AnythingLLM URL
+and developer API key (Settings → Developer API). Never invent a credential. Verify with `status --json` after every change.
 
-The installer registers per-user auto-start services by default (macOS
-LaunchAgents, Linux systemd user units): `anything-obsidian autostart
-on|off|status` controls them. While autostart is on, `stop` unloads the
-services until the next login/reboot — tell the user that, and use
-`autostart off` for a permanent stop. Headless Linux servers need
-`sudo loginctl enable-linger <user>` once for services to run without a
-login session.
+The installer calls `setup`, which configures a role, starts its services and
+verifies readiness. `start` is idempotent and backgrounded through the platform
+supervisor. `stop` preserves autostart; `autostart off` changes startup preference
+without stopping running services. Use both to stop permanently. `restart`,
+`status --json`, and `logs <service> --follow` work for all installed roles.
+
+macOS starts after login. Linux gateways need `loginctl enable-linger <user>`
+for boot without login; status must not claim that guarantee unless verified.
+Service definitions pin the absolute data root. Client config is `config.json`;
+gateway upstream credentials and ports are exclusively `gateway/gateway.json`.
+`installation.json` records roles and autostart preference. No legacy command
+aliases or environment overrides of gateway credentials are supported.
 
 ## Repo conventions
 
 - Pure Node ESM (`type: module`) with a minimal dependency set (the MCP SDK
-  and zod, installed by `install.sh`); reach for `node:` builtins and the
+  zod, and proper-lockfile, installed by `install.sh`); reach for `node:` builtins and the
   global `fetch` first, and think twice before adding anything else.
 - Tests: `npm test` runs `node --test` over `mcp/ dashboard/ lib/ scripts/
-  bin/` (the MCP server is plain JS now).
+  bin/ server/` (the MCP server is plain JS now).
 - Network boundaries: dashboard and local MCP bind `127.0.0.1` only (21502 /
   21503); the LAN MCP (21504) is opt-in, RAG-only, and token-gated. Secrets
   never appear in API responses or logs (`redactSecretsText` /

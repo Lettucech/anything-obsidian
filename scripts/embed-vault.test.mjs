@@ -1,311 +1,164 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-
 import { embedVault, embeddableVaultFiles } from "./embed-vault.mjs";
 
-test("validates workspace slug before uploading vault files", async () => {
-  const vaultPath = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vault-"));
-  const stateDir = await mkdtemp(path.join(tmpdir(), "anything-obsidian-state-"));
-  const requests = [];
-  const originalFetch = globalThis.fetch;
-
-  globalThis.fetch = async (url) => {
-    requests.push(String(url));
-    if (String(url).endsWith("/api/v1/workspaces")) {
-      return response(200, {
-        workspaces: [{ slug: "my-workspace" }, { slug: "project-notes" }],
-      });
-    }
-    throw new Error(`unexpected request before workspace validation: ${url}`);
-  };
-
-  try {
-    await writeFile(path.join(vaultPath, "RAG Smoke Test.md"), "hello");
-
-    await assert.rejects(
-      embedVault({
-        config: {
-          anythingllmBaseUrl: "http://anythingllm:3001",
-          apiKey: "key",
-          workspaceSlug: "obsidian",
-          vaultPath,
-          stateDir,
-        },
-        all: true,
-      }),
-      /AnythingLLM workspace 'obsidian' was not found. Available workspaces: my-workspace, project-notes/,
-    );
-
-    assert.deepEqual(requests, ["http://anythingllm:3001/api/v1/workspaces"]);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await rm(vaultPath, { force: true, recursive: true });
-    await rm(stateDir, { force: true, recursive: true });
-  }
-});
-
-test("uploads carry vault-attributed chunk sources into the unified workspace", async () => {
-  const vaultPath = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vault-"));
-  const stateDir = await mkdtemp(path.join(tmpdir(), "anything-obsidian-state-"));
-  const requests = [];
-  const originalFetch = globalThis.fetch;
-
-  globalThis.fetch = async (url, init = {}) => {
-    requests.push({ url: String(url), init });
-    if (String(url).endsWith("/api/v1/workspaces")) {
-      return response(200, { workspaces: [{ slug: "any-obs-test-01" }] });
-    }
-    if (String(url).endsWith("/api/v1/document/upload/anything-obsidian-vault-work")) {
-      return response(200, { documents: [{ location: "custom-documents/work/note.md" }] });
-    }
-    if (String(url).endsWith("/api/v1/workspace/any-obs-test-01/update-embeddings")) {
-      return response(200, {});
-    }
-    throw new Error(`unexpected request: ${url}`);
-  };
-
-  try {
-    await mkdir(path.join(vaultPath, "notes"), { recursive: true });
-    await writeFile(path.join(vaultPath, "notes", "deep.md"), "hello");
-
-    const result = await embedVault({
-      config: {
-        anythingllmBaseUrl: "http://anythingllm:3001",
-        apiKey: "key",
-        workspaceSlug: "any-obs-test-01",
-        vaultId: "work",
-        documentFolder: "anything-obsidian-vault-work",
-        vaultPath,
-        stateDir,
-      },
-      all: true,
-    });
-
-    assert.deepEqual(result.workspaceSlug, "any-obs-test-01");
-    const upload = requests.find(({ url }) => url.includes("/document/upload/"));
-    const blob = upload.init.body.get("metadata");
-    const parsed = JSON.parse(await new Response(blob).text());
-    // The vaultId prefix is what unified search results map back to.
-    assert.equal(parsed.title, "work/notes/deep.md");
-    assert.equal(parsed.chunkSource, "work/notes/deep.md");
-    const embeddings = requests.find(({ url }) => url.endsWith("/update-embeddings"));
-    assert.deepEqual(JSON.parse(embeddings.init.body), {
-      adds: ["custom-documents/work/note.md"],
-      deletes: [],
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-    await rm(vaultPath, { force: true, recursive: true });
-    await rm(stateDir, { force: true, recursive: true });
-  }
-});
-
-test("reconciliation deletes untracked folder documents after a manifest loss", async () => {
-  const vaultPath = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vault-"));
-  const stateDir = await mkdtemp(path.join(tmpdir(), "anything-obsidian-state-"));
-  const originalFetch = globalThis.fetch;
-  let embeddingsBody = null;
-
-  globalThis.fetch = async (url, init = {}) => {
-    const path = new URL(String(url)).pathname;
-    if (path === "/api/v1/workspaces") {
-      return response(200, { workspaces: [{ slug: "ws" }] });
-    }
-    if (path === "/api/v1/document/upload/anything-obsidian-vault-vault-1") {
-      return response(200, {
-        documents: [{ location: "anything-obsidian-vault-vault-1/note.md-new.json" }],
-      });
-    }
-    // Direct instance: the synthesized documents route does not exist and the
-    // SPA answers unknown GETs with HTML, so listing falls back to the
-    // workspace detail response.
-    if (path === "/api/v1/workspace/ws/documents") {
-      return response(200, "<!DOCTYPE html>");
-    }
-    if (path === "/api/v1/workspace/ws") {
-      return response(200, {
-        workspace: [
-          {
-            documents: [
-              { docpath: "anything-obsidian-vault/vault-1/note.md-old1.json" },
-              { docpath: "anything-obsidian-vault/vault-1/note.md-old2.json" },
-              { docpath: "anything-obsidian-vault/other-vault/secret.json" },
-            ],
-          },
-        ],
-      });
-    }
-    if (path === "/api/v1/workspace/ws/update-embeddings") {
-      embeddingsBody = JSON.parse(init.body);
-      return response(200, {});
-    }
-    throw new Error(`unexpected request: ${url}`);
-  };
-
-  try {
-    await writeFile(path.join(vaultPath, "note.md"), "hello");
-
-    // Empty stateDir stands in for the wiped manifest: the re-upload must
-    // carry the stale legacy copies out with it instead of duplicating them.
-    const result = await embedVault({
-      config: {
-        anythingllmBaseUrl: "http://anythingllm:3001",
-        apiKey: "key",
-        workspaceSlug: "ws",
-        vaultId: "vault-1",
-        documentFolder: "anything-obsidian-vault-vault-1",
-        vaultPath,
-        stateDir,
-      },
-      all: false,
-    });
-
-    // The sibling vault's documents are never ours to delete.
-    assert.deepEqual([...embeddingsBody.adds], ["anything-obsidian-vault-vault-1/note.md-new.json"]);
-    assert.deepEqual(
-      [...embeddingsBody.deletes].sort(),
-      [
-        "anything-obsidian-vault/vault-1/note.md-old1.json",
-        "anything-obsidian-vault/vault-1/note.md-old2.json",
-      ],
-    );
-    assert.equal(result.reconciled, 2);
-    assert.equal(result.removed, 2);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await rm(vaultPath, { force: true, recursive: true });
-    await rm(stateDir, { force: true, recursive: true });
-  }
-});
-
-test("a healthy manifest re-embeds nothing and reconciles nothing", async () => {
-  const vaultPath = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vault-"));
-  const stateDir = await mkdtemp(path.join(tmpdir(), "anything-obsidian-state-"));
-  const originalFetch = globalThis.fetch;
+async function fixture(t) {
+  const root = await mkdtemp(path.join(tmpdir(), "any-obs-embed-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(root + "/vault");
+  await writeFile(root + "/vault/note.md", "hello");
   const config = {
-    anythingllmBaseUrl: "http://anythingllm:3001",
-    apiKey: "key",
-    workspaceSlug: "ws",
-    vaultId: "vault-1",
-    documentFolder: "anything-obsidian-vault-vault-1",
-    vaultPath,
-    stateDir,
+    anythingllmBaseUrl: "http://upstream.test",
+    apiKey: "secret",
+    workspaceSlug: "shared",
+    vaultId: "work",
+    vaultPath: root + "/vault",
+    stateDir: root + "/state",
+    documentFolder: "anything-obsidian-vault-work",
   };
-
-  globalThis.fetch = async (url) => {
-    const path = new URL(String(url)).pathname;
-    if (path === "/api/v1/workspaces") {
-      return response(200, { workspaces: [{ slug: "ws" }] });
-    }
-    if (path === "/api/v1/document/upload/anything-obsidian-vault-vault-1") {
-      return response(200, {
-        documents: [{ location: "anything-obsidian-vault-vault-1/note.md-new.json" }],
-      });
-    }
-    if (path === "/api/v1/workspace/ws/documents") {
-      return response(200, {
-        documents: [
-          { docpath: "anything-obsidian-vault-vault-1/note.md-new.json" },
-          { docpath: "anything-obsidian-vault/other-vault/secret.json" },
-        ],
-      });
-    }
-    if (path === "/api/v1/workspace/ws/update-embeddings") {
-      return response(200, {});
-    }
-    throw new Error(`unexpected request: ${url}`);
+  const remote = new Set();
+  const calls = [];
+  let counter = 0;
+  const state = {
+    failEmbedding: false,
+    badUpload: false,
+    unavailable: false,
+    workspaces: ["shared", "other"],
   };
-
-  try {
-    await writeFile(path.join(vaultPath, "note.md"), "hello");
-
-    await embedVault({ config, all: false });
-    const secondRunRequests = [];
-    globalThis.fetch = async (url) => {
-      secondRunRequests.push(new URL(String(url)).pathname);
-      const path = secondRunRequests.at(-1);
-      if (path === "/api/v1/workspaces") {
-        return response(200, { workspaces: [{ slug: "ws" }] });
+  const fetchImpl = async (url, init = {}) => {
+    assert.ok(init.signal, "every request has a deadline");
+    calls.push({ path: new URL(url).pathname, init });
+    const pathname = new URL(url).pathname;
+    let body;
+    if (pathname.endsWith("/workspaces"))
+      body = { workspaces: state.workspaces.map((slug) => ({ slug })) };
+    else if (pathname.includes("/upload/"))
+      body = state.badUpload
+        ? { success: false, error: "collector failed" }
+        : { documents: [{ location: `${config.documentFolder}/note-${++counter}.json` }] };
+    else if (pathname.endsWith("/update-embeddings")) {
+      const { adds, deletes } = JSON.parse(init.body);
+      if (!state.failEmbedding) {
+        adds.forEach((location) => remote.add(location));
+        deletes.forEach((location) => remote.delete(location));
       }
-      if (path === "/api/v1/workspace/ws/documents") {
-        return response(200, {
-          documents: [{ docpath: "anything-obsidian-vault-vault-1/note.md-new.json" }],
-        });
-      }
-      throw new Error(`unexpected second-run request: ${url}`);
-    };
+      body = { workspace: { slug: "shared" } }; // Upstream can return 200 even when a vectorizer failed.
+    } else if (pathname.endsWith("/documents")) {
+      if (state.unavailable) return new Response("unavailable", { status: 503 });
+      body = { documents: [...remote].map((docpath) => ({ docpath })) };
+    } else return new Response("missing", { status: 404 });
+    return new Response(JSON.stringify(body), { status: 200 });
+  };
+  const run = (options) => embedVault({ config, fetchImpl, ...options });
+  const manifest = () => readFile(root + "/state/embed-manifest.json", "utf8").then(JSON.parse);
+  return { root, config, remote, calls, state, run, manifest };
+}
 
-    const result = await embedVault({ config, all: false });
-
-    assert.deepEqual(secondRunRequests, ["/api/v1/workspaces", "/api/v1/workspace/ws/documents"]);
-    assert.equal(result.uploaded, 0);
-    assert.equal(result.reconciled, 0);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await rm(vaultPath, { force: true, recursive: true });
-    await rm(stateDir, { force: true, recursive: true });
-  }
+test("validates the workspace before uploading", async (t) => {
+  const f = await fixture(t);
+  f.state.workspaces = [];
+  await assert.rejects(f.run(), /not found/);
+  assert.equal(f.calls.filter((call) => call.path.includes("upload")).length, 0);
 });
 
-test("legacy shared-folder layouts only claim this vault's subpath", async () => {
-  const vaultPath = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vault-"));
-  const stateDir = await mkdtemp(path.join(tmpdir(), "anything-obsidian-state-"));
-  const originalFetch = globalThis.fetch;
-  let embeddingsBody = null;
-
-  globalThis.fetch = async (url, init = {}) => {
-    const path = new URL(String(url)).pathname;
-    if (path === "/api/v1/workspaces") {
-      return response(200, { workspaces: [{ slug: "ws" }] });
-    }
-    if (path === "/api/v1/document/upload/anything-obsidian-vault") {
-      return response(200, {
-        documents: [{ location: "anything-obsidian-vault/vault-a/note.md-new.json" }],
-      });
-    }
-    if (path === "/api/v1/workspace/ws/documents") {
-      return response(200, {
-        documents: [
-          { docpath: "anything-obsidian-vault/vault-a/note.md-stale.json" },
-          { docpath: "anything-obsidian-vault/vault-b/secret.md-stale.json" },
-        ],
-      });
-    }
-    if (path === "/api/v1/workspace/ws/update-embeddings") {
-      embeddingsBody = JSON.parse(init.body);
-      return response(200, {});
-    }
-    throw new Error(`unexpected request: ${url}`);
-  };
-
-  try {
-    await writeFile(path.join(vaultPath, "note.md"), "hello");
-
-    const result = await embedVault({
-      config: {
-        anythingllmBaseUrl: "http://anythingllm:3001",
-        apiKey: "key",
-        workspaceSlug: "ws",
-        vaultId: "vault-a",
-        documentFolder: "anything-obsidian-vault",
-        vaultPath,
-        stateDir,
-      },
-      all: false,
-    });
-
-    assert.deepEqual([...embeddingsBody.deletes], ["anything-obsidian-vault/vault-a/note.md-stale.json"]);
-    assert.equal(result.reconciled, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await rm(vaultPath, { force: true, recursive: true });
-    await rm(stateDir, { force: true, recursive: true });
-  }
+test("incremental indexing is verified, vault-attributed and idempotent", async (t) => {
+  const f = await fixture(t);
+  const progress = [];
+  const first = await f.run({ onProgress: async (event) => progress.push(event.phase) });
+  assert.equal(first.uploaded, 1);
+  assert.equal(first.verified, true);
+  const upload = f.calls.find((call) => call.path.includes("/upload/"));
+  assert.equal(JSON.parse(upload.init.body.get("metadata")).chunkSource, "work/note.md");
+  assert.ok(progress.includes("embedding"));
+  assert.equal(progress.at(-1), "completed");
+  const second = await f.run();
+  assert.equal(second.uploaded, 0);
+  assert.equal(second.removed, 0);
+  assert.equal((await f.manifest()).target.workspaceSlug, "shared");
 });
 
+test("missing remote documents are repaired even when source files have not changed", async (t) => {
+  const f = await fixture(t);
+  await f.run();
+  f.remote.clear();
+  const repaired = await f.run();
+  assert.equal(repaired.uploaded, 1);
+  assert.equal(repaired.repaired, 1);
+  assert.equal(f.remote.size, 1);
+});
+
+test("forced rebuild uploads every file and removes old copies only after replacement verification", async (t) => {
+  const f = await fixture(t);
+  await f.run();
+  const old = [...f.remote][0];
+  f.calls.length = 0;
+  const result = await f.run({ all: true });
+  assert.equal(result.uploaded, 1);
+  assert.equal(result.removed, 1);
+  assert.equal(f.remote.size, 1);
+  assert.ok(!f.remote.has(old));
+  const updates = f.calls
+    .filter((call) => call.path.endsWith("/update-embeddings"))
+    .map((call) => JSON.parse(call.init.body));
+  assert.equal(updates.length, 2);
+  assert.deepEqual(updates[0].deletes, []);
+  assert.deepEqual(updates[1].adds, []);
+});
+
+test("HTTP success without embedded documents fails, retaining the last good manifest and index", async (t) => {
+  const f = await fixture(t);
+  await f.run();
+  const before = await f.manifest();
+  const old = [...f.remote];
+  await writeFile(f.root + "/vault/note.md", "new content");
+  f.state.failEmbedding = true;
+  await assert.rejects(f.run(), /verification failed/);
+  assert.deepEqual(await f.manifest(), before);
+  assert.deepEqual([...f.remote], old);
+});
+
+test("upload failures and unverifiable remote state never report successful indexing", async (t) => {
+  const f = await fixture(t);
+  f.state.badUpload = true;
+  await assert.rejects(f.run(), /collector failed/);
+  await assert.rejects(f.manifest(), { code: "ENOENT" });
+  f.state.badUpload = false;
+  f.state.unavailable = true;
+  await assert.rejects(f.run(), /Cannot verify/);
+});
+
+test("deleted and untracked owned documents are removed without touching sibling vaults", async (t) => {
+  const f = await fixture(t);
+  await f.run();
+  f.remote.add("anything-obsidian-vault-other/sibling.json");
+  f.remote.add(`${f.config.documentFolder}/stale.json`);
+  await rm(f.root + "/vault/note.md");
+  const result = await f.run();
+  assert.equal(result.removed, 2);
+  assert.deepEqual([...f.remote], ["anything-obsidian-vault-other/sibling.json"]);
+  assert.deepEqual((await f.manifest()).files, {});
+});
+
+test("a different target workspace cannot reuse an old manifest", async (t) => {
+  const f = await fixture(t);
+  await f.run();
+  f.remote.clear();
+  f.config.workspaceSlug = "other";
+  assert.equal((await f.run()).uploaded, 1);
+});
+
+test("concurrent indexing of the same vault serializes and leaves one verified copy", async (t) => {
+  const f = await fixture(t);
+  const results = await Promise.all([f.run(), f.run()]);
+  assert.equal(
+    results.reduce((sum, item) => sum + item.uploaded, 0),
+    1,
+  );
+  assert.equal(f.remote.size, 1);
+});
 test("embeddableVaultFiles lists markdown and skips excluded dirs and other extensions", async () => {
   const vaultPath = await mkdtemp(path.join(tmpdir(), "embed-vault-"));
   try {

@@ -2,14 +2,15 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
+import { writeJson } from "../lib/state.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { classifySystemState, publicConfig } from "./config.mjs";
-import { createLocalJobManager, readSchedulerStatus, startSchedulerProcess, stopSchedulerProcess, tailLogFile } from "./local-jobs.mjs";
+import { createLocalJobManager, tailLogFile } from "./local-jobs.mjs";
 import { redactSecretsObject, redactSecretsText } from "./redact.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
@@ -19,7 +20,8 @@ import { createVaultStorage } from "./vault-storage.mjs";
 import { importTree } from "./import-tree.mjs";
 import { createFileJobStore } from "./job-store.mjs";
 import { createSyncStatusStore } from "../lib/sync-status.mjs";
-import { createServiceManager } from "../lib/autostart.mjs";
+import { createServiceController } from "../lib/services.mjs";
+import { assertLoopbackRequest } from "../lib/loopback-http.mjs";
 import { rotateLogs } from "../lib/log-rotate.mjs";
 import { compareVersions, currentVersionValue, fetchLatestVersion } from "../lib/update-check.mjs";
 import { ensureUnifiedWorkspace, purgeVaultEmbeddings } from "../lib/unified-workspace.mjs";
@@ -38,6 +40,7 @@ export function createDashboardServer({
   platform = process.platform,
   launchctl,
   systemctl,
+  services,
   registry = createVaultRegistry({
     rootPath: env.VAULTS_ROOT || "",
     registryPath: env.VAULT_REGISTRY_PATH || "",
@@ -58,33 +61,78 @@ export function createDashboardServer({
   if (!native?.schedulerPidPath) {
     throw new Error("native paths are required (schedulerPidPath, schedulerLogPath)");
   }
-  const jobManager = jobs
-    || createLocalJobManager({ env, jobStore: native.jobStorePath ? createFileJobStore({ filePath: native.jobStorePath }) : null });
-  const context = { env, fetchImpl, native, anythingllm, registry, jobs: jobManager, platform, launchctl, systemctl };
-  return createServer(async (req, res) => {
+  const jobManager =
+    jobs ||
+    createLocalJobManager({
+      env,
+      jobStore: native.jobStorePath ? createFileJobStore({ filePath: native.jobStorePath }) : null,
+    });
+  const context = {
+    env,
+    fetchImpl,
+    native,
+    anythingllm,
+    registry,
+    jobs: jobManager,
+    platform,
+    launchctl,
+    systemctl,
+    services,
+  };
+  const server = createServer(async (req, res) => {
     try {
+      assertLoopbackRequest(req);
       const url = new URL(req.url || "/", "http://localhost");
+      if (req.method === "GET" && ["/health", "/ready"].includes(url.pathname)) {
+        const ok = url.pathname === "/health" || (await dashboardReady(anythingllm));
+        return sendJson(res, ok ? 200 : 503, {
+          ok,
+          name: "any-obs-dashboard",
+          configRoot: env.ANYTHING_OBSIDIAN_HOME,
+        });
+      }
       if (req.method === "GET" && url.pathname === "/") {
         if (await dashboardReady(anythingllm)) return await serveStatic(res, url.pathname);
         return sendHtml(res, 200, dashboardSetupPage(publicConfig(env).anythingllmUrl));
       }
       if (req.method === "GET" && url.pathname === "/api/vaults") {
         const vaults = await registry.list();
-        const syncStatus = native.lastSyncPath ? await createSyncStatusStore({ filePath: native.lastSyncPath }).all() : {};
-        return sendJson(res, 200, { vaults: vaults.map((vault) => ({ ...vault, lastSync: syncStatus[vault.id] ?? null })) });
+        const syncStatus = native.lastSyncPath
+          ? await createSyncStatusStore({ filePath: native.lastSyncPath }).all()
+          : {};
+        return sendJson(res, 200, {
+          vaults: vaults.map((vault) => ({ ...vault, lastSync: syncStatus[vault.id] ?? null })),
+        });
       }
       if (req.method === "POST" && url.pathname === "/api/vaults/test-connection") {
         const input = await readJsonBody(req);
         const { gitAuth, repositoryVisibility, repositoryUrl } = input;
         const validationError = validateRepositoryConnection({ repositoryVisibility, gitAuth });
         if (validationError) return sendJson(res, 400, { error: validationError });
-        await testVaultConnection({ vaultStorage, anythingllm, repositoryUrl, gitAuth: gitAuthForVisibility(repositoryVisibility, gitAuth) });
+        await testVaultConnection({
+          vaultStorage,
+          anythingllm,
+          repositoryUrl,
+          gitAuth: gitAuthForVisibility(repositoryVisibility, gitAuth),
+        });
         return sendJson(res, 200, { git: { ok: true }, anythingllm: { ok: true } });
       }
       if (req.method === "POST" && url.pathname === "/api/vaults") {
         const input = await readJsonBody(req);
-        const { gitAuth, repositoryVisibility, sourceMode = "clone", workspaceMode, workspaceSlug, ...request } = input;
-        const validationError = validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, request });
+        const {
+          gitAuth,
+          repositoryVisibility,
+          sourceMode = "clone",
+          workspaceMode,
+          workspaceSlug,
+          ...request
+        } = input;
+        const validationError = validateVaultCreation({
+          sourceMode,
+          repositoryVisibility,
+          gitAuth,
+          request,
+        });
         if (validationError) return sendJson(res, 400, { error: validationError });
         const effectiveGitAuth = gitAuthForVisibility(repositoryVisibility, gitAuth);
         await verifyAnythingllmConnection(anythingllm);
@@ -98,7 +146,10 @@ export function createDashboardServer({
         });
         let discovered;
         if (sourceMode === "clone") {
-          await vaultStorage.testConnection({ repositoryUrl: request.repositoryUrl, gitAuth: effectiveGitAuth });
+          await vaultStorage.testConnection({
+            repositoryUrl: request.repositoryUrl,
+            gitAuth: effectiveGitAuth,
+          });
           discovered = await vaultStorage.clone({ ...request, gitAuth: effectiveGitAuth });
         } else if (sourceMode === "import") {
           discovered = await vaultStorage.import(request);
@@ -112,6 +163,7 @@ export function createDashboardServer({
         };
         const vault = await registry.create(vaultInput);
         await secrets.save(vault.id, effectiveGitAuth);
+        await rm(path.join(stateRootFor(env), "removals", `${vault.id}.json`), { force: true });
         return sendJson(res, 201, vault);
       }
       if (req.method === "GET" && url.pathname === "/api/workspace") {
@@ -121,7 +173,9 @@ export function createDashboardServer({
         const input = await readJsonBody(req);
         const slug = String(input?.slug ?? "").trim();
         if (!slug) return sendJson(res, 400, { error: "slug is required" });
-        const workspace = (await anythingllm.listWorkspaces()).find((candidate) => candidate.slug === slug);
+        const workspace = (await anythingllm.listWorkspaces()).find(
+          (candidate) => candidate.slug === slug,
+        );
         if (!workspace) return sendJson(res, 400, { error: "Workspace was not found" });
         await registry.setWorkspace(workspace);
         // Switching the unified workspace invalidates every embed manifest.
@@ -138,15 +192,21 @@ export function createDashboardServer({
         const { gitAuth, ...changes } = input;
         const vault = await registry.update(id, changes);
         if (vault && gitAuth) await secrets.save(id, gitAuth);
-        return vault ? sendJson(res, 200, vault) : sendJson(res, 404, { error: "Vault was not found" });
+        return vault
+          ? sendJson(res, 200, vault)
+          : sendJson(res, 404, { error: "Vault was not found" });
       }
       if (req.method === "DELETE" && url.pathname.startsWith("/api/vaults/")) {
         const id = url.pathname.slice("/api/vaults/".length);
-        const vault = await registry.remove(id);
+        const vault = await registry.get(id);
         if (!vault) return sendJson(res, 404, { error: "Vault was not found" });
-        await secrets.remove(id);
-        // The repository and user files stay; the vault's derived chunks must
-        // leave the shared index or they would pollute every search.
+        // Keep a disabled record until derived data cleanup succeeds, so a
+        // retry never loses the identity or manifest needed for recovery.
+        await writeJson(path.join(stateRootFor(env), "removals", `${vault.id}.json`), {
+          vaultId: vault.id,
+          requestedAt: new Date().toISOString(),
+        });
+        await registry.update(id, { enabled: false });
         const workspace = await registry.getWorkspace();
         if (workspace) {
           const purge = await purgeVaultEmbeddings({
@@ -157,8 +217,14 @@ export function createDashboardServer({
             stateRoot: stateRootFor(env),
             fetchImpl,
           });
-          if (!purge.purged) console.error(`Embedding purge for vault '${vault.id}' incomplete:`, purge.errors);
+          if (!purge.purged)
+            return sendJson(res, 503, {
+              error: "Index cleanup incomplete. Vault is disabled; retry Remove.",
+              details: purge.errors,
+            });
         }
+        await registry.remove(id);
+        await secrets.remove(id);
         return sendJson(res, 204, {});
       }
       if (req.method === "GET" && url.pathname === "/api/agents") {
@@ -187,54 +253,38 @@ export function createDashboardServer({
         return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "POST" && url.pathname === "/api/system/on") {
-        startSchedulerProcess({
-          env: { ...env },
-          pidPath: native.schedulerPidPath,
-          logPath: native.schedulerLogPath,
-          spawnImpl: native.spawnImpl,
-          killImpl: native.killImpl,
-        });
+        await serviceManagerFor(context).startService("scheduler");
         return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "POST" && url.pathname === "/api/system/off") {
-        await stopSchedulerProcess({ pidPath: native.schedulerPidPath, killImpl: native.killImpl });
+        await serviceManagerFor(context).stopService("scheduler");
         return sendJson(res, 200, await statusPayload(context));
       }
       if (url.pathname === "/api/autostart") {
         const manager = serviceManagerFor(context);
-        if (req.method === "GET") {
-          const enabled = await manager.enabled();
-          const lanEnabled = await manager.lanEnabled();
-          const services = enabled || lanEnabled ? await manager.status() : null;
-          return sendJson(res, 200, { enabled, lanEnabled, ...(services ? { services } : {}) });
-        }
         if (req.method === "POST") {
           const input = await readJsonBody(req);
-          if (input.action !== "on" && input.action !== "off") {
+          if (!["on", "off"].includes(input.action))
             return sendJson(res, 400, { error: "action must be on or off" });
-          }
-          if (input.action === "on") {
-            await manager.enable({
-              dashboardLogPath: native.schedulerLogPath.replace(/scheduler\.log$/, "dashboard.log"),
-              schedulerLogPath: native.schedulerLogPath,
-              mcpLogPath: native.schedulerLogPath.replace(/scheduler\.log$/, "mcp.log"),
-            });
-          } else {
-            await manager.disable();
-          }
-          const enabled = await manager.enabled();
-          return sendJson(res, 200, { enabled, lanEnabled: await manager.lanEnabled() });
+          await manager.setAutostart(input.action === "on");
         }
+        const state = await manager.status();
+        return sendJson(res, 200, {
+          ...state,
+          enabled: state.autostart.enabled,
+          lanEnabled: (await manager.status()).lan,
+        });
       }
       if (url.pathname === "/api/lan") {
         const manager = serviceManagerFor(context);
         if (req.method === "GET") {
-          return sendJson(res, 200, { enabled: await manager.lanEnabled() });
+          return sendJson(res, 200, { enabled: (await manager.status()).lan });
         }
         if (req.method === "POST") {
           const input = await readJsonBody(req);
           if (input.action === "token") {
-            if (!String(input.token ?? "").trim()) return sendJson(res, 400, { error: "token is required" });
+            if (!String(input.token ?? "").trim())
+              return sendJson(res, 400, { error: "token is required" });
             await registryUpdateLanToken(env, String(input.token).trim());
             return sendJson(res, 200, { tokenConfigured: true });
           }
@@ -242,7 +292,7 @@ export function createDashboardServer({
             return sendJson(res, 400, { error: "action must be on, off, or token" });
           }
           if (input.action === "off") {
-            await manager.disableLan();
+            await manager.setLan(false);
             return sendJson(res, 200, { enabled: false });
           }
           let lanToken = await readLanToken(env);
@@ -252,13 +302,14 @@ export function createDashboardServer({
             await registryUpdateLanToken(env, generated);
             lanToken = generated;
           }
-          await manager.enableLan({ mcpLanLogPath: native.schedulerLogPath.replace(/scheduler\.log$/, "mcp-lan.log") });
+          await manager.setLan(true);
           return sendJson(res, 200, { enabled: true, ...(generated ? { token: generated } : {}) });
         }
       }
       if (req.method === "GET" && url.pathname === "/api/logs") {
         const id = url.searchParams.get("service") || "";
-        if (!NATIVE_LOG_IDS.has(id)) return sendJson(res, 400, { error: `Unknown log service: ${id}` });
+        if (!NATIVE_LOG_IDS.has(id))
+          return sendJson(res, 400, { error: `Unknown log service: ${id}` });
         const logs = redactSecretsText(tailLogFile(native.schedulerLogPath));
         return sendJson(res, 200, { service: id, logs });
       }
@@ -270,22 +321,29 @@ export function createDashboardServer({
           });
           return sendJson(res, 200, tree);
         } catch (error) {
-          return sendJson(res, error?.statusCode || 500, { error: error instanceof Error ? error.message : String(error) });
+          return sendJson(res, error?.statusCode || 500, {
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
-      const vaultActionMatch = url.pathname.match(/^\/api\/vaults\/([a-z0-9-]+)\/actions\/([a-z-]+)$/);
+      const vaultActionMatch = url.pathname.match(
+        /^\/api\/vaults\/([a-z0-9-]+)\/actions\/([a-z-]+)$/,
+      );
       if (req.method === "POST" && vaultActionMatch) {
         const [, vaultId, actionId] = vaultActionMatch;
         if (!["sync", "embed", "embed-all", "doctor"].includes(actionId)) {
           return sendJson(res, 404, { error: `Unknown action: ${actionId}` });
         }
-        if (!(await registry.get(vaultId))) return sendJson(res, 404, { error: "Vault was not found" });
+        if (!(await registry.get(vaultId)))
+          return sendJson(res, 404, { error: "Vault was not found" });
         const snapshot = await serviceSnapshot(context);
         try {
           const job = await jobManager.start(vaultId, actionId, snapshot);
           return sendJson(res, 202, job);
         } catch (error) {
-          return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          return sendJson(res, 409, {
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
       if (req.method === "GET" && url.pathname.startsWith("/api/jobs/")) {
@@ -298,9 +356,19 @@ export function createDashboardServer({
       }
       return sendJson(res, 404, { error: "Not found" });
     } catch (error) {
-      return sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+      return sendJson(res, error.statusCode || 500, {
+        error: redactSecretsText(error instanceof Error ? error.message : String(error), [
+          env.ANYTHINGLLM_API_KEY,
+        ]),
+      });
     }
   });
+  server.shutdown = async () => {
+    await jobManager.close?.();
+    server.closeAllConnections();
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  };
+  return server;
 }
 
 function validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, request }) {
@@ -313,10 +381,13 @@ function validateVaultCreation({ sourceMode, repositoryVisibility, gitAuth, requ
 }
 
 function validateRepositoryConnection({ repositoryVisibility, gitAuth }) {
-  if (!['public', 'private'].includes(repositoryVisibility)) {
+  if (!["public", "private"].includes(repositoryVisibility)) {
     return "repositoryVisibility must be public or private";
   }
-  if (repositoryVisibility === "private" && (!String(gitAuth?.username ?? "").trim() || !String(gitAuth?.token ?? "").trim())) {
+  if (
+    repositoryVisibility === "private" &&
+    (!String(gitAuth?.username ?? "").trim() || !String(gitAuth?.token ?? "").trim())
+  ) {
     return "Private repositories require an HTTPS username and token";
   }
   return "";
@@ -337,7 +408,9 @@ async function verifyAnythingllmConnection(anythingllm) {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (/AnythingLLM API (401|403)/.test(detail)) {
-      throw new Error("AnythingLLM rejected the configured API key. Re-run: anything-obsidian init --vaults-root <path> --url <url> --api-key <key>");
+      throw new Error(
+        "AnythingLLM rejected the configured API key. Re-run: anything-obsidian setup --vaults-root <path> --url <url> --api-key <key>",
+      );
     }
     throw error;
   }
@@ -352,14 +425,17 @@ async function dashboardReady(anythingllm) {
   }
 }
 
-function serviceManagerFor({ env, native, platform, launchctl, systemctl }) {
-  return createServiceManager({
-    platform,
-    ...(env.HOME ? { homedir: env.HOME } : {}),
-    ...(launchctl ? { launchctl } : {}),
-    ...(systemctl ? { systemctl } : {}),
-    logsRoot: path.dirname(native.schedulerLogPath || path.join(os.homedir(), "logs")),
-  });
+function serviceManagerFor({ env, platform, launchctl, systemctl, services }) {
+  return (
+    services ||
+    createServiceController({
+      root: defaultConfigRoot({ env }),
+      env,
+      platform,
+      ...(launchctl ? { launchctl } : {}),
+      ...(systemctl ? { systemctl } : {}),
+    })
+  );
 }
 
 function stateRootFor(env) {
@@ -380,23 +456,26 @@ async function readLanToken(env) {
 async function registryUpdateLanToken(env, token) {
   const store = await configStoreFor(env);
   const config = await store.load();
-  if (!config) throw new Error("This app is not initialized yet. Run: anything-obsidian init");
+  if (!config) throw new Error("This app is not initialized yet. Run: anything-obsidian setup");
   await store.save({ ...config, lanToken: token });
 }
 
 async function statusPayload(context) {
-  const { jobs, env, fetchImpl, native, anythingllm, registry, platform, launchctl, systemctl } = context;
-  const services = await serviceSnapshot({ anythingllm, native, fetchImpl, env });
+  const { jobs, env, fetchImpl, native, anythingllm, registry, platform, launchctl, systemctl } =
+    context;
+  const services = await serviceSnapshot(context);
   let lanEnabled = false;
   try {
-    lanEnabled = await serviceManagerFor(context).lanEnabled();
+    lanEnabled = (await serviceManagerFor(context).status()).lan;
   } catch {
     lanEnabled = false;
   }
   const current = await currentVersionValue();
   const latest = await fetchLatestVersion({ fetchImpl });
   return redactSecretsObject({
-    ok: true,
+    ok: services
+      .filter((service) => service.id !== "mcp-lan" || lanEnabled)
+      .every((service) => service.running),
     systemState: classifySystemState(services),
     services,
     workspace: await registry.getWorkspace(),
@@ -421,18 +500,22 @@ async function visibleWorkspaces(anythingllm) {
   }
 }
 
-async function serviceSnapshot({ anythingllm, native, fetchImpl, env = {} }) {
+async function serviceSnapshot(context) {
+  const { anythingllm, native, fetchImpl, env = {} } = context;
   // Ports come from the service environment so a test never probes whatever
   // happens to be listening on the real machine's MCP ports.
   const mcpPort = Number(env.MCP_PORT ?? 21503);
   const mcpLanPort = Number(env.MCP_LAN_PORT ?? 21504);
-  const [anythingllmHealth, schedulerStatus, gitHealth, mcpHealth, mcpLanHealth] = await Promise.all([
-    probeAnythingllm(anythingllm),
-    Promise.resolve(readSchedulerStatus({ pidPath: native.schedulerPidPath, killImpl: native.killImpl })),
-    probeGit(native.execFileImpl || promisify(nodeExecFile)),
-    probeHttp(fetchImpl, `http://127.0.0.1:${mcpPort}/health`),
-    probeHttp(fetchImpl, `http://127.0.0.1:${mcpLanPort}/health`),
-  ]);
+  const [anythingllmHealth, schedulerStatus, gitHealth, mcpHealth, mcpLanHealth] =
+    await Promise.all([
+      probeAnythingllm(anythingllm),
+      serviceManagerFor(context)
+        .status()
+        .then((state) => state.services.scheduler ?? { running: false, pid: null }),
+      probeGit(native.execFileImpl || promisify(nodeExecFile)),
+      probeHttp(fetchImpl, `http://127.0.0.1:${mcpPort}/health`),
+      probeHttp(fetchImpl, `http://127.0.0.1:${mcpLanPort}/health`),
+    ]);
   return [
     {
       id: "anythingllm",
@@ -448,7 +531,10 @@ async function serviceSnapshot({ anythingllm, native, fetchImpl, env = {} }) {
       found: true,
       running: schedulerStatus.running,
       state: schedulerStatus.running ? `running (pid ${schedulerStatus.pid})` : "stopped",
-      health: { ok: schedulerStatus.running, status: schedulerStatus.running ? "running" : "stopped" },
+      health: {
+        ok: schedulerStatus.running,
+        status: schedulerStatus.running ? "running" : "stopped",
+      },
     },
     {
       id: "mcp",
@@ -510,7 +596,8 @@ async function serveStatic(res, pathname) {
   const file = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
   const fullPath = path.resolve(publicRoot, file);
   const relative = path.relative(publicRoot, fullPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) return sendJson(res, 403, { error: "Forbidden" });
+  if (relative.startsWith("..") || path.isAbsolute(relative))
+    return sendJson(res, 403, { error: "Forbidden" });
   let body;
   try {
     body = await readFile(fullPath);
@@ -548,7 +635,7 @@ function dashboardSetupPage(anythingllmUrl) {
   const steps = `<ol>
         <li>Open AnythingLLM and finish its initial setup.</li>
         <li>Go to <strong>Settings → Developer API</strong> and create an API key.</li>
-        <li>Run <code>anything-obsidian init</code> and enter the URL and API key.</li>
+        <li>Run <code>anything-obsidian setup</code> and enter the URL and API key.</li>
         <li>Restart with <code>anything-obsidian start</code>, then refresh this page.</li>
       </ol>`;
   return `<!doctype html>
@@ -578,9 +665,17 @@ function dashboardSetupPage(anythingllmUrl) {
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>'"]/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
-  })[character]);
+  return String(value).replace(
+    /[&<>'"]/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "'": "&#39;",
+        '"': "&quot;",
+      })[character],
+  );
 }
 
 async function readJsonBody(req) {
@@ -597,9 +692,11 @@ async function readJsonBody(req) {
 }
 
 if (import.meta.url === entryUrl()) {
-  rotateLogs({ logsRoot: path.join(path.dirname(process.env.AO_LAST_SYNC_PATH || ""), "logs") }).catch(() => {});
+  rotateLogs({
+    logsRoot: path.join(path.dirname(process.env.AO_LAST_SYNC_PATH || ""), "logs"),
+  }).catch(() => {});
   const port = Number(process.env.DASHBOARD_PORT || 21502);
-  createDashboardServer({
+  const server = createDashboardServer({
     native: {
       schedulerPidPath: process.env.AO_SCHEDULER_PID_PATH,
       schedulerLogPath: process.env.AO_SCHEDULER_LOG_PATH,
@@ -609,9 +706,15 @@ if (import.meta.url === entryUrl()) {
   }).listen(port, "127.0.0.1", () => {
     console.error(`[anything-obsidian-dashboard] listening on 127.0.0.1:${port}`);
   });
+  const stop = async () => {
+    await server.shutdown();
+  };
+  process.once("SIGTERM", stop);
+  process.once("SIGINT", stop);
 }
 
 function entryUrl() {
+  if (!process.argv[1]) return "";
   try {
     return pathToFileURL(realpathSync(process.argv[1])).href;
   } catch {
