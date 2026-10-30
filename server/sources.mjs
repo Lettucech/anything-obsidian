@@ -1,3 +1,4 @@
+import { assertLocalImport, assertRemoteRepository } from "../lib/deployment.mjs";
 import { execFile as nodeExecFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
@@ -23,6 +24,7 @@ export function createSourceManager({
   fetchImpl = fetch,
   jobStore = createFileJobStore({ filePath: path.join(dataDir, "jobs.json") }),
   jobTimeoutMs = 30 * 60_000,
+  env = process.env,
 }) {
   const registryPath = path.join(dataDir, "sources.json");
   const jobs = new Map(jobStore.loadSync().map((job) => [job.id, job]));
@@ -58,6 +60,8 @@ export function createSourceManager({
       if (!SOURCE_ID_PATTERN.test(id))
         throw new Error("Source id must be lowercase dash-separated text");
       const kind = input?.kind ?? "git";
+      if (kind === "dir") assertLocalImport(env);
+      if (kind === "git") assertRemoteRepository(input?.ref, env);
       if (!["dir", "git"].includes(kind)) throw new Error("Source kind must be dir or git");
       const ref = String(input?.ref ?? "").trim();
       if (!ref) throw new Error("Source ref is required (git URL or absolute directory)");
@@ -325,7 +329,11 @@ export function createSourceManager({
   }
 
   async function refreshWorkingCopy(source, signal) {
-    if (source.kind === "dir") return source.ref;
+    if (source.kind === "dir") {
+      assertLocalImport(env);
+      return source.ref;
+    }
+    assertRemoteRepository(source.ref, env);
     const target = path.join(dataDir, "sources", source.id);
     try {
       await readFile(path.join(target, ".git", "HEAD"), "utf8");

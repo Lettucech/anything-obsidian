@@ -1,0 +1,43 @@
+name: anything-obsidian
+
+x-app: &app
+  image: anything-obsidian:local
+  build: .
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=128m,mode=1777
+  stop_grace_period: 30s
+  pids_limit: 256
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  extra_hosts: ["host.docker.internal:host-gateway"]
+
+services:
+  client:
+    <<: *app
+    profiles: [client]
+    command: [client]
+    environment:
+      AO_CONTAINER_ROLE: client
+    volumes: [client-data:/data]
+    ports:
+      - "127.0.0.1:${CLIENT_DASHBOARD_PORT:-21502}:21502"
+      - "127.0.0.1:${CLIENT_MCP_PORT:-21503}:21503"
+  gateway:
+    <<: *app
+    profiles: [gateway]
+    command: [gateway]
+    environment:
+      AO_CONTAINER_ROLE: gateway
+    volumes: [gateway-data:/data]
+    ports:
+      - "${GATEWAY_BIND:-127.0.0.1}:${GATEWAY_PORT:-21500}:21500"
+      - "127.0.0.1:${GATEWAY_ADMIN_PORT:-21505}:21505"
+
+volumes:
+  client-data:
+  gateway-data:

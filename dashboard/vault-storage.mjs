@@ -1,3 +1,4 @@
+import { assertLocalImport, assertRemoteRepository } from "../lib/deployment.mjs";
 import { execFile } from "node:child_process";
 import { access, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -7,11 +8,12 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const dashboardRoot = path.dirname(fileURLToPath(import.meta.url));
 
-export function createVaultStorage({ registry, runGit = runGitDefault } = {}) {
+export function createVaultStorage({ registry, runGit = runGitDefault, env = process.env } = {}) {
   if (!registry) throw new Error("registry is required");
 
   return {
     async testConnection(input) {
+      assertRemoteRepository(input.repositoryUrl, env);
       const repositoryUrl = requiredRepositoryUrl(input.repositoryUrl);
       try {
         await runGit(["ls-remote", "--heads", repositoryUrl], dashboardRoot, gitEnv(input.gitAuth));
@@ -20,15 +22,24 @@ export function createVaultStorage({ registry, runGit = runGitDefault } = {}) {
       }
     },
     async clone(input) {
+      assertRemoteRepository(input.repositoryUrl, env);
       const repositoryUrl = requiredRepositoryUrl(input.repositoryUrl);
       const identity = vaultIdentity(input, repositoryUrl);
       const vaultPath = registry.resolvePath(identity);
-      const env = gitEnv(input.gitAuth);
+      const gitEnvironment = gitEnv(input.gitAuth);
 
       try {
-        await runGit(["clone", "--", repositoryUrl, vaultPath], path.dirname(vaultPath), env);
-        const discoveredUrl = (await runGit(["remote", "get-url", "origin"], vaultPath, env)).trim();
-        const branch = (await runGit(["branch", "--show-current"], vaultPath, env)).trim();
+        await runGit(
+          ["clone", "--", repositoryUrl, vaultPath],
+          path.dirname(vaultPath),
+          gitEnvironment,
+        );
+        const discoveredUrl = (
+          await runGit(["remote", "get-url", "origin"], vaultPath, gitEnvironment)
+        ).trim();
+        const branch = (
+          await runGit(["branch", "--show-current"], vaultPath, gitEnvironment)
+        ).trim();
         if (!branch) throw new Error("The cloned repository has no checked-out branch");
         return {
           ...identity,
@@ -41,6 +52,7 @@ export function createVaultStorage({ registry, runGit = runGitDefault } = {}) {
       }
     },
     async import(input) {
+      assertLocalImport(env);
       const importPath = String(input.importPath ?? "").trim();
       if (importPath) {
         const identity = importedIdentity(input, importPath);
@@ -55,7 +67,9 @@ export function createVaultStorage({ registry, runGit = runGitDefault } = {}) {
       const repositoryUrl = (await runGit(["remote", "get-url", "origin"], vaultPath)).trim();
       const gitBranch = (await runGit(["branch", "--show-current"], vaultPath)).trim();
       if (!repositoryUrl || !gitBranch) {
-        throw new Error(`Vault '${input.directory}' must have an origin remote and checked-out branch`);
+        throw new Error(
+          `Vault '${input.directory}' must have an origin remote and checked-out branch`,
+        );
       }
       return { repositoryUrl, gitRemote: "origin", gitBranch };
     },
@@ -120,13 +134,20 @@ function requiredRepositoryUrl(value) {
 
 function repositoryName(repositoryUrl) {
   const pathName = new URL(repositoryUrl).pathname.replace(/\/+$/, "");
-  const name = pathName.split("/").at(-1)?.replace(/\.git$/i, "") || "";
+  const name =
+    pathName
+      .split("/")
+      .at(-1)
+      ?.replace(/\.git$/i, "") || "";
   if (!name) throw new Error("repositoryUrl must include a repository name");
   return name;
 }
 
 function slugify(value) {
-  const slug = String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const slug = String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
   if (!slug) throw new Error("repositoryUrl must produce a lowercase vault id");
   return slug;
 }
@@ -143,7 +164,9 @@ async function assertGitRepository(vaultPath, directory) {
     if (!info.isDirectory()) throw new Error("not a directory");
     await access(path.join(vaultPath, ".git"));
   } catch {
-    throw new Error(`Vault '${directory}' must be an existing Git repository beneath the configured vault root`);
+    throw new Error(
+      `Vault '${directory}' must be an existing Git repository beneath the configured vault root`,
+    );
   }
 }
 

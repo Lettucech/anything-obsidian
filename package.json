@@ -1,6 +1,6 @@
 {
   "name": "anything-obsidian",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "any-obs \u2014 local bridge connecting Obsidian vault directories with a provided AnythingLLM RAG instance",
   "type": "module",
   "bin": {

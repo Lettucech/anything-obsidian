@@ -15,8 +15,13 @@ It ships as a plain Node app, installed by `install.sh`, managed by the
 `anything-obsidian` CLI and a browser dashboard on port 21502. MCP endpoints:
 loopback 21503, optional LAN 21504 (`lan on`, Bearer token required).
 
-The client stays native forever — no Docker, no Electron/desktop-shell plan,
-no npm publish. The same is true for shared deployments: the IAM **gateway**
+Native Node remains the default; client and gateway also have an optional Docker
+flavor (`Dockerfile`, `compose.yaml`, `docs/docker.md`). No Electron/desktop-shell
+or npm-publish plan. Docker uses separate named volumes, Git sources only, and
+token-protected admin dashboards. Never mount the host filesystem, Docker socket,
+or native data directories into these containers. Docker owns service restart,
+startup policy and image updates; no launchd/systemd runs inside the image.
+The IAM **gateway**
 under `server/` runs from the same install (`anything-obsidian setup --server`, then the same
 `start`/`stop`/`restart` commands as clients), is the sole holder of the AnythingLLM admin key,
 scopes every client with per-user tokens, and its shared-source pipeline is
@@ -60,15 +65,18 @@ aliases or environment overrides of gateway credentials are supported.
 
 ## Repo conventions
 
-- Pure Node ESM (`type: module`) with a minimal dependency set (the MCP SDK
+- Pure Node ESM (`type: module`) with a minimal dependency set (the MCP SDK,
   zod, and proper-lockfile, installed by `install.sh`); reach for `node:` builtins and the
   global `fetch` first, and think twice before adding anything else.
 - Tests: `npm test` runs `node --test` over `mcp/ dashboard/ lib/ scripts/
   bin/ server/` (the MCP server is plain JS now).
-- Network boundaries: dashboard and local MCP bind `127.0.0.1` only (21502 /
+- Network boundaries: native dashboard and local MCP bind `127.0.0.1` only (21502 /
   21503); the LAN MCP (21504) is opt-in, RAG-only, and token-gated. Secrets
   never appear in API responses or logs (`redactSecretsText` /
   `redactSecretsObject`).
+  Docker binds these listeners inside its network namespace, publishes host
+  loopback ports by default, requires an admin token/session for dashboards and
+  a Bearer/agent token for client MCP. Keep native loopback trust unchanged.
 - Vault locations come in two flavours, and the registry records which:
   `managed` entries live beneath `VAULTS_ROOT` and must be direct children of
   it — any-obs owns that area; `imported` entries store an absolute

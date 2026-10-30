@@ -1,3 +1,5 @@
+import { adminHeaders } from "../lib/container-admin.mjs";
+import { isContainer } from "../lib/deployment.mjs";
 // Management tools: a thin proxy to the dashboard's loopback REST API so the
 // dashboard UI and MCP callers share one control plane (same jobs, same
 // audit trail). Local profile only — the LAN profile never registers these.
@@ -9,7 +11,8 @@ export function dashboardApi({ baseUrl = process.env.AO_DASHBOARD_URL ?? DEFAULT
     try {
       response = await fetchImpl(`${baseUrl}${pathname}`, {
         method,
-        ...(body !== undefined ? { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } } : {}),
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        headers: { ...(await adminHeaders()), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
       });
     } catch (error) {
       throw new Error(`The Anything Obsidian dashboard is not reachable at ${baseUrl}. Start it with: anything-obsidian start. (${error instanceof Error ? error.message : String(error)})`);
@@ -54,13 +57,13 @@ export function registerManagementTools(server, api, { z }) {
 
   server.tool(
     "any_obs_vault_add",
-    "Add a vault to management: clone a Git repository, import a directory beneath the vault root, or import any directory on this machine by passing its absolute importPath. The vault embeds into this instance's unified RAG workspace. Requires the same fields as the dashboard's Add vault dialog (repository URL or import directory, commit identity, visibility).",
+    isContainer() ? "Clone an HTTP(S) Git repository into this Docker client's data volume and unified RAG workspace. Local directory import is unavailable. Requires repository URL, commit identity and visibility." : "Add a vault to management: clone a Git repository, import a directory beneath the vault root, or import any directory on this machine by passing its absolute importPath. The vault embeds into this instance's unified RAG workspace. Requires the same fields as the dashboard's Add vault dialog (repository URL or import directory, commit identity, visibility).",
     {
-      sourceMode: z.enum(["clone", "import"]).default("clone"),
+      sourceMode: z.enum(isContainer() ? ["clone"] : ["clone", "import"]).default("clone"),
       repositoryUrl: z.string().optional(),
       id: z.string().optional(),
       directory: z.string().optional(),
-      importPath: z.string().optional(),
+      ...(!isContainer() ? { importPath: z.string().optional() } : {}),
       name: z.string().optional(),
       repositoryVisibility: z.enum(["public", "private"]).default("public"),
       gitUserName: z.string(),

@@ -24,6 +24,8 @@ import { tailLogFile } from "../dashboard/local-jobs.mjs";
 import { rotateLogs } from "../lib/log-rotate.mjs";
 import { withFileLock } from "../lib/state.mjs";
 import { updateApplication } from "../lib/updater.mjs";
+import { isContainer } from "../lib/deployment.mjs";
+import { adminHeaders, ensureContainerToken } from "../lib/container-admin.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const exec = promisify(execFile);
@@ -123,11 +125,32 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
       return 0;
     }
     const context = { root, env, store, installation, gateway, controller, fetchImpl, log, deps };
+    if (
+      isContainer(env) &&
+      ["start", "stop", "restart", "autostart", "lan", "update"].includes(command)
+    )
+      throw new Error(
+        "Docker manages lifecycle and startup. Use docker compose up -d, stop, restart, or logs; rebuild the image to update.",
+      );
     if (!["run", "logs", "autostart", "lan"].includes(command) && positionals.length)
       throw new Error(`Unexpected argument: ${positionals[0]}`);
     switch (command) {
       case "setup": {
+        if (isContainer(env)) {
+          const running = await controller()
+            .status()
+            .catch(() => null);
+          if (running)
+            throw new Error(
+              "Stop this service with docker compose stop before changing its configuration.",
+            );
+        }
         const configured = await setup(context, flags);
+        if (isContainer(env)) {
+          await ensureContainerToken(root);
+          log("Docker configuration saved. Start with docker compose up -d client (or gateway).");
+          return 0;
+        }
         if (configured.reconfigure) await controller().restartRole(configured.role);
         return await start(context, false);
       }
@@ -239,6 +262,17 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
 async function setup(ctx, flags) {
   const { store, gateway, installation, env, fetchImpl, log, deps } = ctx;
   const server = flags.server === true;
+  if (isContainer(env)) {
+    if ((env.AO_CONTAINER_ROLE === "gateway") !== server)
+      throw new Error("Setup role must match this Docker service");
+    if (flags.port || flags["admin-port"])
+      throw new Error(
+        "Docker uses fixed internal ports. Change host port mappings in Compose instead.",
+      );
+    if (flags["vaults-root"] && flags["vaults-root"] !== path.join(ctx.root, "vaults"))
+      throw new Error("Docker vaults live in the data volume; custom vault roots are unavailable.");
+    if (!server) flags["vaults-root"] = path.join(ctx.root, "vaults");
+  }
   if (server && flags["vaults-root"]) throw new Error("--vaults-root is only valid for a client");
   const previous = server ? await gateway.load() : await store.load();
   const prompt =
@@ -333,7 +367,11 @@ async function setup(ctx, flags) {
         ...(previous
           ? { mcpAllowedHosts: previous.mcpAllowedHosts, notifications: previous.notifications }
           : {}),
-        ...(previous?.lanToken ? { lanToken: previous.lanToken } : {}),
+        ...(previous?.lanToken
+          ? { lanToken: previous.lanToken }
+          : isContainer(env)
+            ? { lanToken: (await import("node:crypto")).randomBytes(32).toString("base64url") }
+            : {}),
       });
       await mkdir(config.vaultsRoot, { recursive: true });
     }
@@ -432,7 +470,12 @@ async function status(ctx) {
       let healthy = false,
         detail;
       try {
-        const response = await fetchWithTimeout(ctx.fetchImpl, url, {}, 3000);
+        const response = await fetchWithTimeout(
+          ctx.fetchImpl,
+          url,
+          { headers: await adminHeaders(ctx.env) },
+          3000,
+        );
         const body = await response.json();
         healthy =
           response.ok &&
@@ -462,7 +505,12 @@ async function status(ctx) {
     endpoints.every(([name]) => report.services[name]?.healthy);
   report.indexing = {};
   const read = async (url) => {
-    const response = await fetchWithTimeout(ctx.fetchImpl, url, {}, 3000);
+    const response = await fetchWithTimeout(
+      ctx.fetchImpl,
+      url,
+      { headers: await adminHeaders(ctx.env) },
+      3000,
+    );
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return response.json();
   };
@@ -539,7 +587,11 @@ function printStatus(log, report) {
     log(
       `  ${state.running && state.healthy !== false ? "✓" : "✗"} ${name}: ${state.running ? (state.healthy === false ? "unhealthy" : "running") : "stopped"}${state.pid ? ` (pid ${state.pid})` : ""}`,
     );
-  log(`Autostart: ${report.autostart.enabled ? "on" : "off"} (${report.autostart.guarantee})`);
+  log(
+    report.autostart.manager === "docker"
+      ? "Startup: managed by Docker; inspect the container restart policy and host Docker startup."
+      : `Autostart: ${report.autostart.enabled ? "on" : "off"} (${report.autostart.guarantee})`,
+  );
   if (report.dashboardUrl) log(`Dashboard: ${report.dashboardUrl}`);
   if (report.gatewayUrl) log(`Gateway dashboard: ${report.gatewayUrl}`);
   for (const items of [report.indexing?.client || [], report.indexing?.gateway || []])
@@ -558,7 +610,13 @@ async function requireClient(store) {
 
 export function gatewayEnvironment(root, env = process.env) {
   // Credentials, bind addresses and ports come exclusively from gateway.json.
-  return { HOME: env.HOME, PATH: env.PATH, ANYTHING_OBSIDIAN_HOME: root, AO_SUPERVISED: "1" };
+  return {
+    HOME: env.HOME,
+    PATH: env.PATH,
+    ANYTHING_OBSIDIAN_HOME: root,
+    AO_SUPERVISED: "1",
+    ...(isContainer(env) ? { AO_CONTAINER: "1", AO_CONTAINER_ROLE: "gateway" } : {}),
+  };
 }
 async function runForeground(ctx, role) {
   if (!SERVICE_NAMES.includes(role)) throw new Error(`Unknown service: ${role}`);
@@ -595,7 +653,7 @@ async function spawnForeground(ctx, role) {
       Object.assign(childEnv, {
         MCP_TRANSPORT: "http",
         MCP_PROFILE: role === "mcp-lan" ? "lan" : "local",
-        ...(role === "mcp-lan" ? { MCP_AUTH_TOKEN: config.lanToken } : {}),
+        ...(role === "mcp-lan" || isContainer(ctx.env) ? { MCP_AUTH_TOKEN: config.lanToken } : {}),
       });
     }
   }

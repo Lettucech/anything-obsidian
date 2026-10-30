@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createAdminGate } from "../lib/container-admin.mjs";
+import { deploymentCapabilities, isContainer } from "../lib/deployment.mjs";
 // The any-obs gateway: IAM front door for a shared AnythingLLM. It runs two
 // planes with the same trust model as the client (loopback dashboard, LAN
 // service):
@@ -34,7 +36,6 @@ import { defaultConfigRoot } from "../lib/app-config.mjs";
 import { fetchWithTimeout } from "../lib/http.mjs";
 import { redactSecretsText } from "../dashboard/redact.mjs";
 import { rotateLogs } from "../lib/log-rotate.mjs";
-import { assertLoopbackRequest } from "../lib/loopback-http.mjs";
 import { tailLogFile } from "../dashboard/local-jobs.mjs";
 
 export const DEFAULT_GATEWAY_PORT = 21500;
@@ -58,11 +59,12 @@ export function createGatewayServer({
   // Snapshot credentials per request. A slow read from an older request must
   // never overwrite the credential used by a request arriving after rotation.
   const credentials = new AsyncLocalStorage();
+  const adminGate = createAdminGate(env);
 
   return createServer((req, res) =>
     credentials.run({}, async () => {
       try {
-        if (plane === "admin") assertLoopbackRequest(req);
+        if (plane === "admin" && !(await adminGate(req, res))) return;
         credentials.getStore().storedKey = (await gatewayConfig.load()).apiKey;
         const url = new URL(req.url || "/", "http://gateway");
         const identity =
@@ -186,9 +188,12 @@ export function createGatewayServer({
       anythingllmBaseUrl: baseUrl,
       anythingllmUiUrl: baseUrl,
       serverHost: os.hostname(),
-      publicUrl: `http://${os.hostname()}:${config.port ?? DEFAULT_GATEWAY_PORT}`,
+      publicUrl: isContainer(env)
+        ? "http://GATEWAY_HOST:PUBLISHED_PORT"
+        : `http://${os.hostname()}:${config.port ?? DEFAULT_GATEWAY_PORT}`,
       adminPort: config.adminPort ?? DEFAULT_GATEWAY_ADMIN_PORT,
       hasApiKey: Boolean(apiKeyActive()),
+      deployment: deploymentCapabilities(env),
     };
   }
 
@@ -925,10 +930,10 @@ if (import.meta.url === entryUrl()) {
   const adminPort = gatewayState.adminPort ?? DEFAULT_GATEWAY_ADMIN_PORT;
   const adminServer = createGatewayServer({ ...shared, plane: "admin" }).listen(
     adminPort,
-    "127.0.0.1",
+    isContainer(env) ? "0.0.0.0" : "127.0.0.1",
     () => {
       console.error(
-        `[any-obs-gateway] admin plane on ${"127.0.0.1"}:${adminPort} (dashboard + setup; loopback reach is the credential)`,
+        `[any-obs-gateway] admin plane on ${isContainer(env) ? "0.0.0.0" : "127.0.0.1"}:${adminPort} (dashboard + setup; ${isContainer(env) ? "admin login required" : "loopback reach is the credential"})`,
       );
     },
   );

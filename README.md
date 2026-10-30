@@ -59,6 +59,11 @@ are stored in `gateway/gateway.json`, and the admin listener always binds loopba
 
 ## Getting started
 
+Choose **native** when you need to import local directories, or the optional
+**[Docker flavor](docs/docker.md)** for a client/gateway isolated from host files.
+Docker uses Git sources and separate persistent volumes; it does not import host
+directories. Both flavors use the same indexing pipeline and external AnythingLLM.
+
 Install once. The installer prepares the app and its dependencies, asks for
 connection details, then starts and verifies all required services:
 
@@ -241,7 +246,7 @@ token grants access to RAG results, which may contain source content.
 ## Shared deployments (the gateway)
 
 For one AnythingLLM shared by several people or agents, run the **gateway**
-on the server — the same native app, one command. It holds the single admin
+on the server, using native services or the [Docker flavor](docs/docker.md). It holds the single admin
 API key, issues per-user tokens, filters every proxied call to the
 workspaces each user may read, fans searches out across all of them in one
 query, and runs the source pipeline (git pull or directory re-read, then
@@ -343,13 +348,14 @@ your AnythingLLM's URL is then `http://localhost:21501`.
 - **Gateway state** (key, users, sources, manifests, git clones) lives
   under the data directory too, in `gateway/` next to the client's
   registry and secrets — same backup and `ANYTHING_OBSIDIAN_HOME` rules as
-  everything else. Migrating from an early Docker install? Copy the
-  container's `/data` contents into that `gateway/` directory.
+  everything else. Docker uses a separate named volume per role; do not attach
+  native data directories or old gateway-only `/data` layouts to the new image.
 
 ## Operations
 
-Use the dashboard for registration and indexing policy; CLI and dashboard use
-the same OS service controller. Client scheduler/manual workers share a
+Use the dashboard for registration and indexing policy. Native CLI and dashboard
+use the same OS service controller; Docker uses Compose for lifecycle and image
+updates, with the same configuration, job, and indexing logic. Client scheduler/manual workers share a
 cross-process vault lock. Gateway jobs are accepted only after being persisted,
 coalesce concurrent refreshes for the same source, carry deadlines, and retain
 interrupted jobs for retry after restart. Active jobs are retained while bounded

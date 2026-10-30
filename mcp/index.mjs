@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isContainer } from "../lib/deployment.mjs";
 import { realpathSync } from "node:fs";
 import process from "node:process";
 import path from "node:path";
@@ -285,8 +286,8 @@ function stripTrailingSlash(value) {
 
 function startHttpServer(profile) {
   const adminToken = process.env.MCP_AUTH_TOKEN ?? "";
-  if (profile === "lan" && !adminToken) throw new Error("MCP_AUTH_TOKEN is required for the LAN MCP profile");
-  const bindHost = profile === "lan" ? "0.0.0.0" : "127.0.0.1";
+  if ((profile === "lan" || isContainer()) && !adminToken) throw new Error("MCP_AUTH_TOKEN is required for network MCP");
+  const bindHost = profile === "lan" || isContainer() ? "0.0.0.0" : "127.0.0.1";
   const app = createMcpExpressApp(mcpHttpOptions(process.env.MCP_ALLOWED_HOSTS, { host: bindHost }));
 
   app.get("/health", (_req, res) => {
@@ -298,7 +299,7 @@ function startHttpServer(profile) {
       adminToken,
       agents: await loadAgentIdentities(process.env.MCP_AGENT_TOKENS_PATH ?? path.join(defaultPaths().agentTokensRoot, "agents.json")),
     });
-    if (profile === "lan" && identity.kind === "anonymous") {
+    if ((profile === "lan" || isContainer()) && identity.kind === "anonymous") {
       return res.status(401).json({ error: "Bearer token required" });
     }
     const server = createServer(profile, identity);

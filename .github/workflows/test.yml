@@ -1,4 +1,4 @@
-name: Native operations tests
+name: Operations tests
 
 on:
   push:
@@ -31,3 +31,16 @@ jobs:
           sh -n install.sh
           sh -n install-server.sh
           sh -n uninstall.sh
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: docker compose --profile client --profile gateway config -q
+      - run: docker build -t anything-obsidian:ci .
+      - run: node docker/smoke.mjs anything-obsidian:ci

@@ -1,6 +1,6 @@
 ---
 name: anything-obsidian-setup
-description: Install, configure, verify, update, stop, restart, or remove Anything Obsidian on a user's macOS or Linux machine using its native installer and unified service commands.
+description: Install, configure, verify, update, stop, restart, or remove Anything Obsidian using its native installer or optional Docker client/gateway flavor.
 ---
 
 # Anything Obsidian Setup
@@ -38,6 +38,18 @@ are imported later; do not move them into the managed root. Avoid Documents and
 Desktop defaults on macOS because of repeated permission prompts.
 
 ## Install and configure
+
+For Docker, follow [the Docker playbook](../../docs/docker.md): build the image,
+run `docker compose run --rm client setup` (or `gateway setup`), then
+`docker compose up -d client` (or `gateway`). Verify with
+`docker compose exec <service> anything-obsidian status --json`. Retrieve the
+separate dashboard admin token from that service's `/data/secrets/container-admin-token`;
+never log it or confuse it with a gateway user/upstream token. Docker supports
+Git clones only: never mount host notes, native data directories or the Docker
+socket, and never offer local-directory import. Lifecycle, daemon startup and
+image updates belong to Docker; do not invoke native autostart or updater commands
+inside a container. `managed-by-docker` is not proof that Docker starts at OS boot.
+The rest of this playbook describes native installation.
 
 For a client, supply the collected values to avoid prompts:
 

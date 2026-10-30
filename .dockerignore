@@ -1,0 +1,16 @@
+**
+!package.json
+!package-lock.json
+!bin/**
+!dashboard/**
+!lib/**
+!mcp/**
+!scripts/**
+!server/**
+!docker/**
+**/*.test.*
+dashboard/test-services.mjs
+mcp/anythingllm
+server/anythingllm.compose.yml
+docker/smoke.mjs
+docker/fixture.mjs

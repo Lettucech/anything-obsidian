@@ -169,7 +169,8 @@ if (typeof document !== "undefined") {
   applyTheme(theme);
 
   els.power.addEventListener("click", async () => {
-    await request(state.status.systemState === "on" ? "/api/system/off" : "/api/system/on", { method: "POST" });
+    const running = state.status.deployment?.flavor === "docker" ? state.status.services.find((service) => service.id === "scheduler")?.running : state.status.systemState === "on";
+    await request(running ? "/api/system/off" : "/api/system/on", { method: "POST" });
     await refresh();
   });
   els.addvault.addEventListener("click", () => showForm());
@@ -330,7 +331,11 @@ if (typeof document !== "undefined") {
     els.vaultsource.hidden = false;
     els.editsettings.hidden = !editing;
     els.addvaultnote.hidden = editing;
-    els.sourcemodefield.hidden = editing;
+    els.sourcemodefield.hidden = editing || state.status?.deployment?.localImport === false;
+    if (state.status?.deployment?.localImport === false) {
+      form.elements.sourceMode.value = "clone";
+      els.addvaultnote.textContent = "Clone a Git repository into this container's data volume. Local directory import is unavailable in Docker.";
+    }
     form.elements.sourceMode.disabled = editing;
     els.importhelp.hidden = !importMode;
     els.importidfield.hidden = !importMode;
@@ -488,7 +493,7 @@ if (typeof document !== "undefined") {
 
   function render() {
     const update = state.status.update;
-    els.updatebadge.hidden = !(update && update.available);
+    els.updatebadge.hidden = state.status.deployment?.flavor === "docker" || !(update && update.available);
     const failed = failedSyncs(state.vaults);
     const banner = syncBanner(failed);
     els.syncbanner.textContent = banner;
@@ -496,8 +501,14 @@ if (typeof document !== "undefined") {
     els.systemstate.textContent = state.status.systemState;
     els.systemstate.className = `system-status ${state.status.systemState}`;
     els.power.textContent = systemPowerLabel(state.status.systemState);
+    const deploymentNote = document.querySelector("#deployment-note");
+    if (deploymentNote && state.status.deployment?.flavor === "docker") {
+      deploymentNote.hidden = false;
+      deploymentNote.textContent = "Docker · Git repositories only. Startup and updates are managed with Docker Compose.";
+      els.power.textContent = state.status.services.find((service) => service.id === "scheduler")?.running ? "Pause sync" : "Resume sync";
+    }
     els.power.classList.toggle("is-on", state.status.systemState === "on");
-    els.services.replaceChildren(...state.status.services.map(renderService));
+    els.services.replaceChildren(...state.status.services.filter((service) => state.status.deployment?.flavor !== "docker" || service.id !== "mcp-lan").map(renderService));
     renderRagWorkspaces();
     els.vaults.replaceChildren(...(state.vaults.length ? state.vaults.map(renderVault) : [emptyState()]));
     els.agents.replaceChildren(...(state.agents.length ? state.agents.map(renderAgent) : [element("p", "note", "No agent tokens yet. Create one, then name it in a vault's access policy allowlist.")]));

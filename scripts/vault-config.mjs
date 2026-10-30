@@ -95,6 +95,7 @@ export function secretStoreFor(env) {
 
 export function registryFor(env) {
   return createVaultRegistry({
+    env,
     rootPath: env.VAULTS_ROOT || "",
     registryPath: env.VAULT_REGISTRY_PATH || defaultPaths().registryPath,
   });

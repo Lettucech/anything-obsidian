@@ -23,7 +23,8 @@ themeMedia.addEventListener("change", (event) => {
 
 function applyTheme(value) {
   document.documentElement.dataset.theme = value;
-  document.querySelector('meta[name="theme-color"]').content = value === "dark" ? "#171c19" : "#ffffff";
+  document.querySelector('meta[name="theme-color"]').content =
+    value === "dark" ? "#171c19" : "#ffffff";
   themeToggle.textContent = value === "dark" ? "Dark" : "Light";
   themeToggle.setAttribute("aria-label", `Switch to ${value === "dark" ? "light" : "dark"} theme`);
 }
@@ -210,7 +211,12 @@ async function renderWorkspaces(state) {
     .map((user) => `<option value="${user.name}">${user.name}</option>`)
     .join("");
   const ownerField = field("Owner", owner);
-  form.append(field("Workspace name", name), field("Kind", kind), ownerField, element("button", "button button-primary", "Create workspace"));
+  form.append(
+    field("Workspace name", name),
+    field("Kind", kind),
+    ownerField,
+    element("button", "button button-primary", "Create workspace"),
+  );
   const syncKind = () => {
     ownerField.hidden = kind.value !== "personal";
   };
@@ -406,6 +412,15 @@ async function renderOverview(state) {
     card.append(element("p", "error", error.message));
   }
   card.append(grid);
+  if (state.deployment?.flavor === "docker") {
+    card.append(
+      element(
+        "p",
+        "note",
+        "Docker: replace GATEWAY_HOST and PUBLISHED_PORT with the address clients can reach. Use docker compose port gateway 21500 to inspect the host mapping. The container hostname is not a client connection address.",
+      ),
+    );
+  }
   card.append(
     html(
       "p",
@@ -438,7 +453,11 @@ async function renderSettings(state) {
   info.replaceChildren(
     metric("AnythingLLM", settings.anythingllmBaseUrl || "not configured"),
     metric("API key", settings.keyPreview || "not set"),
-    metric("Connection", settings.connected ? "OK" : "failing", settings.connected ? "success" : "danger"),
+    metric(
+      "Connection",
+      settings.connected ? "OK" : "failing",
+      settings.connected ? "success" : "danger",
+    ),
   );
   status.textContent = settings.connected
     ? ""
@@ -500,7 +519,12 @@ async function renderUsers() {
     "reader (default): search only · member: shared + own workspaces · admin: also manages the gateway with this token",
   );
   roleHelp.classList.add("form-help");
-  form.append(field("User name", name), field("Role", role), element("button", "button button-primary", "Create user"), roleHelp);
+  form.append(
+    field("User name", name),
+    field("Role", role),
+    element("button", "button button-primary", "Create user"),
+    roleHelp,
+  );
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -629,7 +653,8 @@ function revealToken(token, title) {
   window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
 }
 
-async function renderSources() {
+async function renderSources(state) {
+  const localImport = state.deployment?.localImport !== false;
   const signal = viewController.signal;
   const card = element("section", "card");
   card.append(
@@ -637,7 +662,9 @@ async function renderSources() {
     element(
       "p",
       "note",
-      "Knowledge enters the shared workspaces only through these sources: a git repository (pulled on refresh) or a directory on this server (read as-is). Each source targets one workspace — create it in the Workspaces tab first.",
+      localImport
+        ? "Knowledge enters the shared workspaces only through these sources: a git repository (pulled on refresh) or a directory on this server (read as-is). Each source targets one workspace — create it in the Workspaces tab first."
+        : "Docker sources use Git repositories stored in the data volume. Local directory import is unavailable. Create a shared workspace in the Workspaces tab first.",
     ),
   );
   const form = element("form", "row form-layout source-form");
@@ -646,9 +673,12 @@ async function renderSources() {
   id.required = true;
   const kind = element("select", "", "");
   kind.innerHTML =
-    '<option value="git">git repository</option><option value="dir">server directory</option>';
+    '<option value="git">git repository</option>' +
+    (localImport ? '<option value="dir">server directory</option>' : "");
   const ref = element("input", "", "");
-  ref.placeholder = "https://git.example/kb.git or /srv/kb";
+  ref.placeholder = localImport
+    ? "https://git.example/kb.git or /srv/kb"
+    : "https://git.example/kb.git";
   ref.required = true;
   const target = element("select", "", "");
   target.required = true;
@@ -672,7 +702,7 @@ async function renderSources() {
   form.append(
     field("Source ID", id),
     field("Kind", kind),
-    field("Repository URL or server directory", ref),
+    field(localImport ? "Repository URL or server directory" : "Repository URL", ref),
     field("Target workspace", target),
     field("Git branch", branch),
     field("Refresh interval (seconds)", interval),
@@ -701,7 +731,7 @@ async function renderSources() {
   for (const [input, label] of [
     [id, "Source ID"],
     [kind, "Source kind"],
-    [ref, "Repository URL or server directory"],
+    [ref, localImport ? "Repository URL or server directory" : "Repository URL"],
     [target, "Target shared workspace"],
   ])
     input.setAttribute("aria-label", label);

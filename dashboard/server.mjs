@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createAdminGate } from "../lib/container-admin.mjs";
+import { assertLocalImport, deploymentCapabilities, isContainer } from "../lib/deployment.mjs";
 import { execFile as nodeExecFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { createServer } from "node:http";
@@ -21,7 +23,6 @@ import { importTree } from "./import-tree.mjs";
 import { createFileJobStore } from "./job-store.mjs";
 import { createSyncStatusStore } from "../lib/sync-status.mjs";
 import { createServiceController } from "../lib/services.mjs";
-import { assertLoopbackRequest } from "../lib/loopback-http.mjs";
 import { rotateLogs } from "../lib/log-rotate.mjs";
 import { compareVersions, currentVersionValue, fetchLatestVersion } from "../lib/update-check.mjs";
 import { ensureUnifiedWorkspace, purgeVaultEmbeddings } from "../lib/unified-workspace.mjs";
@@ -42,6 +43,7 @@ export function createDashboardServer({
   systemctl,
   services,
   registry = createVaultRegistry({
+    env,
     rootPath: env.VAULTS_ROOT || "",
     registryPath: env.VAULT_REGISTRY_PATH || "",
   }),
@@ -50,7 +52,7 @@ export function createDashboardServer({
     apiKey: env.ANYTHINGLLM_API_KEY || "",
     fetchImpl,
   }),
-  vaultStorage = createVaultStorage({ registry }),
+  vaultStorage = createVaultStorage({ registry, env }),
   secrets = createVaultSecretStore({
     rootPath: env.VAULT_SECRETS_PATH || "",
   }),
@@ -79,9 +81,10 @@ export function createDashboardServer({
     systemctl,
     services,
   };
+  const adminGate = createAdminGate(env);
   const server = createServer(async (req, res) => {
     try {
-      assertLoopbackRequest(req);
+      if (!(await adminGate(req, res))) return;
       const url = new URL(req.url || "/", "http://localhost");
       if (req.method === "GET" && ["/health", "/ready"].includes(url.pathname)) {
         const ok = url.pathname === "/health" || (await dashboardReady(anythingllm));
@@ -127,6 +130,8 @@ export function createDashboardServer({
           workspaceSlug,
           ...request
         } = input;
+        if (sourceMode === "import" || request.importPath || request.location === "imported")
+          assertLocalImport(env);
         const validationError = validateVaultCreation({
           sourceMode,
           repositoryVisibility,
@@ -314,6 +319,7 @@ export function createDashboardServer({
         return sendJson(res, 200, { service: id, logs });
       }
       if (req.method === "GET" && url.pathname === "/api/import-tree") {
+        assertLocalImport(env);
         try {
           const tree = await importTree({
             vaultsRoot: env.VAULTS_ROOT || "",
@@ -463,7 +469,9 @@ async function registryUpdateLanToken(env, token) {
 async function statusPayload(context) {
   const { jobs, env, fetchImpl, native, anythingllm, registry, platform, launchctl, systemctl } =
     context;
-  const services = await serviceSnapshot(context);
+  const services = (await serviceSnapshot(context)).filter(
+    (service) => !isContainer(env) || service.id !== "mcp-lan",
+  );
   let lanEnabled = false;
   try {
     lanEnabled = (await serviceManagerFor(context).status()).lan;
@@ -486,6 +494,7 @@ async function statusPayload(context) {
     latestJob: jobs.latest(),
     jobs: jobs.list?.() ?? [],
     config: publicConfig(env),
+    deployment: deploymentCapabilities(env),
     update: { current, latest, available: Boolean(latest) && compareVersions(current, latest) < 0 },
     lan: { enabled: lanEnabled },
   });
@@ -542,7 +551,11 @@ async function serviceSnapshot(context) {
       found: true,
       powerManaged: false,
       running: mcpHealth.ok,
-      state: mcpHealth.ok ? "running (loopback 21503)" : "stopped",
+      state: mcpHealth.ok
+        ? isContainer(env)
+          ? "running (21503, authentication required)"
+          : "running (loopback 21503)"
+        : "stopped",
       health: mcpHealth.ok ? mcpHealth : { ok: false, status: "stopped" },
     },
     {
@@ -703,8 +716,10 @@ if (import.meta.url === entryUrl()) {
       jobStorePath: process.env.AO_JOB_STORE_PATH,
       lastSyncPath: process.env.AO_LAST_SYNC_PATH,
     },
-  }).listen(port, "127.0.0.1", () => {
-    console.error(`[anything-obsidian-dashboard] listening on 127.0.0.1:${port}`);
+  }).listen(port, isContainer() ? "0.0.0.0" : "127.0.0.1", () => {
+    console.error(
+      `[anything-obsidian-dashboard] listening on ${isContainer() ? "0.0.0.0" : "127.0.0.1"}:${port}`,
+    );
   });
   const stop = async () => {
     await server.shutdown();
