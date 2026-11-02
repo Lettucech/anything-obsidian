@@ -4,6 +4,11 @@ Client and gateway can each run in Docker. Choose this when you want their Git
 working copies and runtime isolated from host directories. Native installation
 remains available and supports importing existing local vaults.
 
+> **Note:** the Docker flavor keeps the older one-role-per-container model
+> (separate `client` and `gateway` services, admin plane on 21505). The native
+> install has moved to a single merged app process with the gateway as an
+> opt-in feature (default off); migrating Docker is tracked separately.
+
 Docker supports Git clone, optional sync, indexing/rebuilds, dashboards and MCP.
 It deliberately disables importing local directories and gateway `dir` sources
 in both UI and backend. Do not mount host notes, native data roots or the Docker

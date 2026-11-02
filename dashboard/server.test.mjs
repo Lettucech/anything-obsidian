@@ -397,10 +397,10 @@ test("status returns classified system state and public config", async () => {
   assert.equal(response.body.systemState, "partial");
   assert.deepEqual(
     response.body.services.map((service) => service.id),
-    ["anythingllm", "scheduler", "mcp", "mcp-lan", "git"],
+    ["anythingllm", "app", "mcp", "mcp-lan", "git"],
   );
   assert.equal(
-    response.body.services.find((service) => service.id === "scheduler").health.ok,
+    response.body.services.find((service) => service.id === "app").health.ok,
     true,
   );
   assert.equal(response.body.services.find((service) => service.id === "mcp").running, false);

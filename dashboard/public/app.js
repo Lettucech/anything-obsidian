@@ -154,6 +154,7 @@ if (typeof document !== "undefined") {
   const state = { status: null, vaults: [], agents: [], editingId: null, createdVaultId: null, createdAgentName: null, browse: { open: false, path: "", tree: null } };
   const els = Object.fromEntries([
     "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form", "sync-banner", "update-badge", "lan-dialog", "lan-token-value", "lan-done",
+    "gateway-dialog", "gateway-form", "gateway-message", "gateway-submit", "cancel-gateway", "gateway-dialog-note",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
     "source-mode-field", "import-help", "import-id-field", "import-directory-field", "import-path-field",
     "clone-url-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
@@ -169,7 +170,7 @@ if (typeof document !== "undefined") {
   applyTheme(theme);
 
   els.power.addEventListener("click", async () => {
-    const running = state.status.deployment?.flavor === "docker" ? state.status.services.find((service) => service.id === "scheduler")?.running : state.status.systemState === "on";
+    const running = state.status.deployment?.flavor === "docker" ? state.status.services.find((service) => service.id === "app")?.running : state.status.systemState === "on";
     await request(running ? "/api/system/off" : "/api/system/on", { method: "POST" });
     await refresh();
   });
@@ -209,6 +210,9 @@ if (typeof document !== "undefined") {
     message(`Version ${state.status.update?.latest} is available. Update in a terminal with: anything-obsidian update`);
   });
   els.services.addEventListener("click", handleLanToggle);
+  els.services.addEventListener("click", handleGatewayToggle);
+  els.gatewayform.addEventListener("submit", submitGatewayKey);
+  els.cancelgateway.addEventListener("click", () => els.gatewaydialog.close());
   els.landone.addEventListener("click", () => els.landialog.close());
 
   async function handleVaultAction(event) {
@@ -505,10 +509,10 @@ if (typeof document !== "undefined") {
     if (deploymentNote && state.status.deployment?.flavor === "docker") {
       deploymentNote.hidden = false;
       deploymentNote.textContent = "Docker · Git repositories only. Startup and updates are managed with Docker Compose.";
-      els.power.textContent = state.status.services.find((service) => service.id === "scheduler")?.running ? "Pause sync" : "Resume sync";
+      els.power.textContent = state.status.services.find((service) => service.id === "app")?.running ? "Pause sync" : "Resume sync";
     }
     els.power.classList.toggle("is-on", state.status.systemState === "on");
-    els.services.replaceChildren(...state.status.services.filter((service) => state.status.deployment?.flavor !== "docker" || service.id !== "mcp-lan").map(renderService));
+    els.services.replaceChildren(...serviceCards());
     renderRagWorkspaces();
     els.vaults.replaceChildren(...(state.vaults.length ? state.vaults.map(renderVault) : [emptyState()]));
     els.agents.replaceChildren(...(state.agents.length ? state.agents.map(renderAgent) : [element("p", "note", "No agent tokens yet. Create one, then name it in a vault's access policy allowlist.")]));
@@ -551,6 +555,95 @@ if (typeof document !== "undefined") {
     item.append(element("dt", "", metric.label), element("dd", "", metric.value));
     return item;
   }
+
+  function serviceCards() {
+    const cards = state.status.services
+      .filter((service) => state.status.deployment?.flavor !== "docker" || service.id !== "mcp-lan")
+      .map(renderService);
+    const gatewayCard = renderGatewayCard();
+    if (gatewayCard) cards.push(gatewayCard);
+    return cards;
+  }
+
+  // The opt-in gateway feature of this same process: one card to turn it on,
+  // a link to its console once it is serving.
+  function renderGatewayCard() {
+    const gateway = state.status.gateway;
+    if (!gateway?.available) return null;
+    const article = element("article", `service ${gateway.running ? "ok" : "off"}`);
+    const topline = element("div", "service-topline");
+    topline.append(
+      element("h3", "", "Gateway"),
+      element("span", "service-status", gateway.enabled ? (gateway.running ? `Serving :${gateway.port}` : "Starting…") : "Off"),
+    );
+    article.append(topline, element("p", "", gateway.enabled ? "Serving shared workspaces and MCP to other users and agents." : "Share this instance's knowledge base with other users and agents. Off by default."));
+    const actions = element("div", "vault-actions");
+    const toggle = element("button", "button button-quiet", gateway.enabled ? "Turn gateway off" : "Turn gateway on");
+    toggle.dataset.gatewayToggle = gateway.enabled ? "off" : "on";
+    actions.append(toggle);
+    if (gateway.running) {
+      const open = element("a", "button button-secondary", "Open gateway console");
+      open.href = "/gateway/";
+      actions.append(open);
+    }
+    article.append(actions);
+    return article;
+  }
+
+  async function handleGatewayToggle(event) {
+    const button = event.target.closest("button[data-gateway-toggle]");
+    if (!button) return;
+    const action = button.dataset.gatewayToggle;
+    if (action === "on") {
+      // Try the saved credentials first; only ask when they are missing or
+      // rejected.
+      try {
+        await request("/api/features/gateway", { method: "POST", body: JSON.stringify({ action: "on" }) });
+        message("Gateway enabled. Manage users and shared workspaces in its console.");
+        await refresh();
+      } catch (error) {
+        showGatewayDialog(error.message);
+      }
+      return;
+    }
+    if (!window.confirm("Turn the gateway off? Remote users and agents lose access; their accounts, workspaces and sources are kept.")) return;
+    button.disabled = true;
+    try {
+      await request("/api/features/gateway", { method: "POST", body: JSON.stringify({ action: "off" }) });
+      message("Gateway turned off.");
+    } catch (error) {
+      message(error.message, true);
+    }
+    await refresh();
+  }
+
+  function showGatewayDialog(prefillReason) {
+    setGatewayDialogMessage(prefillReason || "", Boolean(prefillReason));
+    els.gatewayform.reset();
+    els.gatewaydialog.showModal();
+  }
+
+  async function submitGatewayKey(event) {
+    event.preventDefault();
+    const form = new FormData(els.gatewayform);
+    setGatewayDialogMessage("Verifying the key against AnythingLLM…");
+    els.gatewaysubmit.disabled = true;
+    try {
+      await request("/api/features/gateway", {
+        method: "POST",
+        body: JSON.stringify({ action: "on", apiKey: form.get("apiKey"), ...(form.get("baseUrl") ? { baseUrl: form.get("baseUrl") } : {}) }),
+      });
+      els.gatewaydialog.close();
+      message("Gateway enabled. Manage users and shared workspaces in its console.");
+    } catch (error) {
+      setGatewayDialogMessage(error.message, true);
+    } finally {
+      els.gatewaysubmit.disabled = false;
+    }
+    await refresh();
+  }
+
+  function setGatewayDialogMessage(text, error = false) { els.gatewaymessage.textContent = text; els.gatewaymessage.className = error ? "message dialog-message error" : "message dialog-message"; }
 
   function renderService(service) {
     const article = element("article", `service ${serviceTone(service)}`);

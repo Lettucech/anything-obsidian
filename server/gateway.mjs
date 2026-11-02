@@ -43,7 +43,14 @@ export const DEFAULT_GATEWAY_ADMIN_PORT = 21505;
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const dashboardRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "dashboard");
 
-export function createGatewayServer({
+export function createGatewayServer(options = {}) {
+  return createServer(createGatewayRequestHandler(options));
+}
+
+// The request handler behind createGatewayServer, exported so the merged app
+// entry (one process, one dashboard) can mount a plane's routes on another
+// HTTP server instead of dedicating a listener to it.
+export function createGatewayRequestHandler({
   plane = "public",
   env = process.env,
   userStore,
@@ -61,7 +68,7 @@ export function createGatewayServer({
   const credentials = new AsyncLocalStorage();
   const adminGate = createAdminGate(env);
 
-  return createServer((req, res) =>
+  return (req, res) =>
     credentials.run({}, async () => {
       try {
         if (plane === "admin" && !(await adminGate(req, res))) return;
@@ -137,8 +144,7 @@ export function createGatewayServer({
         if (!res.headersSent) return sendJson(res, status, { error: detail });
         res.end();
       }
-    }),
-  );
+    });
 
   function publicIdentity(header) {
     const match = /^Bearer\s+(.+)$/i.exec(String(header ?? ""));
@@ -227,6 +233,12 @@ export function createGatewayServer({
   }
 
   async function handleGatewayApi({ req, res, url, identity, body }) {
+    // Namespaced health so a console served from another origin path (the
+    // merged dashboard mounts this API) still finds its own health, not the
+    // host dashboard's.
+    if (url.pathname === "/api/gateway/health" && req.method === "GET") {
+      return sendHealth(res);
+    }
     const adminOnly = () => {
       // The admin plane is loopback (server access is the credential); over
       // the public plane only a user token carrying the admin role gets in.
@@ -799,6 +811,61 @@ export function createGatewayServer({
   }
 }
 
+// Shared gateway runtime: credential store, user store, source pipeline and
+// the 30s due-sources timer. Both deployment shapes build on it — the
+// standalone `run gateway` process (Docker) and the merged single-process
+// app entry, which starts/stops the public plane on demand.
+export async function createGatewayRuntime({ env = process.env, dataDir = defaultDataDir(env), logPath } = {}) {
+  const gatewayConfig = createGatewayConfig({ dataDir });
+  const state = await gatewayConfig.load();
+  const anythingllmBaseUrl = stripTrailingSlash(state.anythingllmBaseUrl || "");
+  const userStore = createUserStore({ dataDir });
+  const sourceManager = createSourceManager({
+    dataDir,
+    baseUrl: anythingllmBaseUrl,
+    // Resolve per job: the key lives in gateway.json, not the process env.
+    apiKey: async () => (await gatewayConfig.load()).apiKey,
+  });
+  const shared = {
+    userStore,
+    sourceManager,
+    gatewayConfig,
+    anythingllmBaseUrl,
+    logPath: logPath ?? path.join(path.dirname(dataDir), "logs", "gateway.log"),
+  };
+  let timer = null;
+  return {
+    gatewayConfig,
+    userStore,
+    sourceManager,
+    shared,
+    async ready() {
+      return sourceManager.ready;
+    },
+    startTimer() {
+      if (timer) return;
+      timer = setInterval(() => {
+        rotateLogs({ logsRoot: path.join(path.dirname(shared.logPath)) }).catch((error) =>
+          console.error(`Log rotation failed: ${error.message}`),
+        );
+        sourceManager.runDueSources().catch((error) => {
+          console.error(`[any-obs-gateway] scheduled refresh failed: ${error?.message ?? error}`);
+        });
+      }, 30_000);
+      timer.unref?.();
+    },
+    stopTimer() {
+      if (!timer) return;
+      clearInterval(timer);
+      timer = null;
+    },
+    async close() {
+      this.stopTimer();
+      await sourceManager.close();
+    },
+  };
+}
+
 function defaultDataDir(env) {
   // Native deployment: the gateway's state lives beside the rest of the
   // app's data, under the standard config root.
@@ -872,30 +939,12 @@ function asJson(data) {
 if (import.meta.url === entryUrl()) {
   const env = process.env;
 
-  const dataDir = defaultDataDir(env);
-  const gatewayConfig = createGatewayConfig({ dataDir });
-  const gatewayState = await gatewayConfig.load();
-  const baseUrlResolved = gatewayState.anythingllmBaseUrl;
-  if (!baseUrlResolved) {
+  const runtime = await createGatewayRuntime({ env });
+  if (!runtime.shared.anythingllmBaseUrl) {
     console.error("Gateway is not configured. Run: anything-obsidian setup --server");
     process.exit(1);
   }
-
-  const userStore = createUserStore({ dataDir });
-  const sourceManager = createSourceManager({
-    dataDir,
-    baseUrl: baseUrlResolved,
-    // Resolve per job: the wizard- or Settings-collected key lives in the
-    // data dir, not the process env.
-    apiKey: async () => (await gatewayConfig.load()).apiKey,
-  });
-  const shared = {
-    userStore,
-    sourceManager,
-    gatewayConfig,
-    anythingllmBaseUrl: baseUrlResolved,
-    logPath: path.join(path.dirname(dataDir), "logs", "gateway.log"),
-  };
+  const { shared, sourceManager, userStore, gatewayConfig } = runtime;
 
   const bootstrap = async () => {
     const state = await gatewayConfig.load();
@@ -913,9 +962,10 @@ if (import.meta.url === entryUrl()) {
       );
     }
   };
-  await sourceManager.ready;
+  await runtime.ready();
   await bootstrap();
 
+  const gatewayState = await gatewayConfig.load();
   const port = gatewayState.port ?? DEFAULT_GATEWAY_PORT;
   const publicServer = createGatewayServer({ ...shared, plane: "public" }).listen(
     port,
@@ -937,29 +987,21 @@ if (import.meta.url === entryUrl()) {
       );
     },
   );
+  runtime.startTimer();
 
   let stopping = false;
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
-    clearInterval(timer);
     const closed = [publicServer, adminServer].map((server) => {
       server.closeAllConnections();
       return new Promise((resolve) => server.close(resolve));
     });
-    await sourceManager.close();
+    await runtime.close();
     await Promise.all(closed);
   };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
-  const timer = setInterval(() => {
-    rotateLogs({ logsRoot: path.join(path.dirname(dataDir), "logs") }).catch((error) =>
-      console.error(`Log rotation failed: ${error.message}`),
-    );
-    sourceManager.runDueSources().catch((error) => {
-      console.error(`[any-obs-gateway] scheduled refresh failed: ${error?.message ?? error}`);
-    });
-  }, 30_000).unref();
 }
 
 function entryUrl() {

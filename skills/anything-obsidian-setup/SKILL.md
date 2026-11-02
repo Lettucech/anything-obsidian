@@ -24,13 +24,20 @@ that its operator provides; never start or manage AnythingLLM on their behalf
 as an implicit part of this setup. No Docker or desktop shell is required for
 the bridge. Source directories are the user's notes and must be preserved.
 
-Client and gateway are separate roles that may coexist on one machine:
+One install, one process, one dashboard. A single app service hosts the
+dashboard (21502), local MCP (21503) and sync scheduler; the gateway and the
+LAN MCP are opt-in in-process listeners. Decide with the user:
 
-- Client: collect its gateway URL and administrator-issued user token. Members
-  can index their own vaults; readers can search. For a solo deployment the user
-  may supply a direct AnythingLLM URL and developer API key instead.
-- Gateway: collect the external AnythingLLM URL and developer API key from
-  Settings → Developer API. Its key belongs only on the server.
+- Solo: a direct AnythingLLM URL and developer API key. The gateway feature
+  stays off (the default).
+- Serving others: the same install with the gateway feature enabled
+  (`anything-obsidian gateway on`, or `install.sh --server`). Collect the
+  external AnythingLLM URL and developer API key from Settings → Developer
+  API; it is stored in `gateway/gateway.json` and belongs only on that
+  machine.
+- Joining a gateway: collect the gateway URL
+  (`http://<server>:21500`) and the administrator-issued user token. Members
+  can index their own vaults; readers can search.
 
 Never invent credentials or send them anywhere except the configured upstream.
 Propose `~/.anything-obsidian/vaults` for managed vaults. Existing note directories
@@ -49,28 +56,31 @@ Git clones only: never mount host notes, native data directories or the Docker
 socket, and never offer local-directory import. Lifecycle, daemon startup and
 image updates belong to Docker; do not invoke native autostart or updater commands
 inside a container. `managed-by-docker` is not proof that Docker starts at OS boot.
-The rest of this playbook describes native installation.
+The Docker flavor keeps the one-role-per-container model and has not migrated to
+the merged native process. The rest of this playbook describes native installation.
 
-For a client, supply the collected values to avoid prompts:
+Supply the collected values to avoid prompts:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
-  --vaults-root <absolute-path> --url <gateway-url> --api-key <user-token> --no-browser
+  --vaults-root <absolute-path> --url <url> --api-key <key> --no-browser
+# add --server to also enable the gateway feature (alias: install-server.sh)
 ```
 
-For a gateway use `install.sh --server --url <anythingllm-url> --api-key <key>`
-(or the `install-server.sh` wrapper). Interactive users can omit the values.
-Git is required; the installer downloads a supported Node runtime if necessary.
-It stages dependencies and validates the app before installation.
+Interactive users can omit the values. Git is required; the installer downloads
+a supported Node runtime if necessary. It stages dependencies and validates the
+app before installation.
 
-For an existing app, configure with `anything-obsidian setup` or `setup --server`.
-`--url`, `--api-key`, `--vaults-root`, `--port` and server `--admin-port` avoid
-prompts. Setup validates the credential before saving it, records the role,
-starts its services and checks readiness. Client setup never overwrites gateway
-credentials. Reconfiguration keeps the existing autostart preference.
+For an existing app, configure with `anything-obsidian setup` and toggle the
+gateway with `anything-obsidian gateway on|off|status`.
+`--url`, `--api-key`, `--vaults-root` and `--port` avoid prompts. Setup
+validates the credential before saving it, records the role, starts the app
+service and checks readiness. Reconfiguration keeps the existing autostart
+preference. Toggling the gateway or LAN never restarts the service: listeners
+open and close in-process.
 
 A new installation enables autostart. macOS starts after the user logs in.
-Linux gateways require `loginctl enable-linger <user>` for boot without login;
+Linux requires `loginctl enable-linger <user>` for boot without login;
 the OS may require administrator authorization. Follow the reported remedy and
 recheck. Never describe after-login startup as pre-login boot availability.
 
@@ -84,10 +94,12 @@ anything-obsidian status --json
 
 Require exit code 0 and `ok:true`. Inspect:
 
-- `configRoot` and `roles`: the intended absolute data root and installed roles.
-- `services`: every required service running and each HTTP endpoint healthy.
-- `autostart`: preference, actual registration and startup guarantee; a Linux
-  gateway must report `at-boot` when autostart is enabled.
+- `configRoot` and `roles`: the intended absolute data root and roles
+  (gateway enabled ⇔ `roles` contains `"gateway"`).
+- `services`: the app service running and each HTTP endpoint healthy
+  (gateway public plane only when the feature is enabled).
+- `autostart`: preference, actual registration and startup guarantee; Linux
+  must report `at-boot` when autostart is enabled and linger is set.
 - `indexing`: failed jobs or pending cleanup require attention even when the
   service processes are running. A fresh source may be pending its first job.
 
@@ -95,29 +107,34 @@ Do not claim reboot or live embedding-provider verification unless performed.
 
 ## Operate and recover
 
-- `start`: all configured services, backgrounded through the OS supervisor;
-  repeated calls leave healthy services running.
+- `start`: the app service, backgrounded through the OS supervisor;
+  repeated calls leave a healthy service running.
 - `stop`: stop now, preserving startup preference.
-- `restart`: restart configured services and verify readiness.
-- `logs [service] --follow`: redacted logs; service names are dashboard,
-  scheduler, mcp, mcp-lan and gateway. `any-obs` is a short form of the same CLI.
+- `restart`: restart the app service and verify readiness.
+- `logs [app] --follow`: redacted logs; pre-merge names (dashboard, scheduler,
+  mcp, mcp-lan, gateway) still resolve to their old log files. `any-obs` is a
+  short form of the same CLI.
 - `autostart on|off|status`: startup preference only; it does not stop running
   services. To stop permanently, use `autostart off` followed by `stop`.
+- `gateway on|off|status`: the opt-in gateway feature; when the app is
+  running the toggle applies immediately, otherwise at the next start.
 - `lan on --allowed-hosts <hostnames-or-IPs>`: optional token-gated LAN RAG MCP;
   the token and allowed hosts persist across restarts. Save newly generated
   tokens when shown once. Local management tools are never exposed over LAN.
 
-The client dashboard defaults to localhost:21502; gateway administration to
-localhost:21505 on the server (use an SSH tunnel remotely). Gateway Operations
-shows persistent jobs, progress, logs, cancellation and retry. Refresh changed
-is incremental; Rebuild all bypasses the local file-hash cache and verifies
-remote documents. Interrupted jobs remain visible after restart. Failed removal
-keeps a disabled source pending cleanup; retry the cleanup, never delete notes.
+The dashboard defaults to localhost:21502 and includes the gateway console at
+`/gateway/` when the feature is enabled (use an SSH tunnel remotely). Gateway
+Operations shows persistent jobs, progress, logs, cancellation and retry.
+Refresh changed is incremental; Rebuild all bypasses the local file-hash cache
+and verifies remote documents. Interrupted jobs remain visible after restart.
+Failed removal keeps a disabled source pending cleanup; retry the cleanup,
+never delete notes.
 
 Use `anything-obsidian update` for staged validation, activation, readiness checks
-and rollback. This breaking release removes `init`, `start-bg`, `--bg`, and the
-separate gateway start/stop command. Existing installations need setup to record
-their roles; preserve their registry, data and source files.
+and rollback. The first `start` after this upgrade migrates automatically:
+legacy per-role service definitions are removed, and a gateway-only install
+gains a `config.json` synthesized from `gateway.json` (the gateway stays
+enabled). Preserve registries, data and source files.
 
 The installer pins the data root in the launcher and each service definition.
 Configuration defaults to the OS app-support/config directory; the override is

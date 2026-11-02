@@ -156,6 +156,23 @@
         <div class="form-actions"><button id="lan-done" class="button button-primary" type="button">Done</button></div>
       </dialog>
 
+      <dialog id="gateway-dialog" aria-labelledby="gateway-title">
+        <form id="gateway-form">
+          <div class="dialog-heading">
+            <div>
+              <h2 id="gateway-title">Enable the gateway</h2>
+            </div>
+          </div>
+          <p class="note" id="gateway-dialog-note">The gateway serves other users and agents through this machine. Enter the AnythingLLM developer API key it should use — it is stored in <code>gateway/gateway.json</code> on this machine and is never handed to clients.</p>
+          <div class="form-grid">
+            <label class="form-grid-wide">AnythingLLM URL <input name="baseUrl" type="url" placeholder="https://your-anythingllm.example.com" /></label>
+            <label class="form-grid-wide">Developer API key <input name="apiKey" type="password" autocomplete="off" required /></label>
+          </div>
+          <p id="gateway-dialog-message" class="message dialog-message" role="status"></p>
+          <div class="form-actions"><button id="gateway-submit" class="button button-primary" type="submit">Enable gateway</button><button id="cancel-gateway" class="button button-quiet" type="button">Cancel</button></div>
+        </form>
+      </dialog>
+
       <dialog id="agent-dialog" aria-labelledby="agent-form-title">
         <form id="agent-form">
           <div class="dialog-heading">

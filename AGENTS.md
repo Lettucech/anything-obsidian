@@ -15,22 +15,35 @@ It ships as a plain Node app, installed by `install.sh`, managed by the
 `anything-obsidian` CLI and a browser dashboard on port 21502. MCP endpoints:
 loopback 21503, optional LAN 21504 (`lan on`, Bearer token required).
 
-Native Node remains the default; client and gateway also have an optional Docker
-flavor (`Dockerfile`, `compose.yaml`, `docs/docker.md`). No Electron/desktop-shell
-or npm-publish plan. Docker uses separate named volumes, Git sources only, and
-token-protected admin dashboards. Never mount the host filesystem, Docker socket,
-or native data directories into these containers. Docker owns service restart,
-startup policy and image updates; no launchd/systemd runs inside the image.
-The IAM **gateway**
-under `server/` runs from the same install (`anything-obsidian setup --server`, then the same
-`start`/`stop`/`restart` commands as clients), is the sole holder of the AnythingLLM admin key,
-scopes every client with per-user tokens, and its shared-source pipeline is
-the only writer to shared workspaces. AnythingLLM itself is never bundled
+**One install, one process, one dashboard.** A single supervised service
+(`anything-obsidian run app`, launchd/systemd label
+`app.anything-obsidian.app`) hosts the dashboard, the local MCP listener and
+the sync scheduler in one process. The IAM **gateway** is an opt-in feature
+of that same process — off by default: enable it with
+`anything-obsidian gateway on` or the dashboard Gateway card, and it opens
+the public plane on 21500 (token-gated) while its admin surface mounts on
+the dashboard (`/api/gateway/*`) with its console at `/gateway/`. Toggling
+features never restarts the service; listeners open and close in-process
+(`lib/features.mjs`). `setup --server` survives only as an alias for
+"setup, then enable the gateway". The gateway is the sole holder of the
+AnythingLLM admin key (in `gateway/gateway.json`, never in env), scopes
+every client with per-user tokens, and its shared-source pipeline is the
+only writer to shared workspaces. Disabling the gateway keeps its users,
+workspaces and sources on disk. AnythingLLM itself is never bundled
 or hosted — it is always an external dependency the user provides (an
 optional reference compose for running it ships at
 `server/anythingllm.compose.yml`, but the operator starts it and any-obs
 never manages its lifecycle). See
 `docs/superpowers/specs/2026-10-28-iam-middleware.md`.
+
+Native Node remains the default; an optional Docker flavor keeps the older
+one-role-per-container model (`Dockerfile`, `compose.yaml`,
+`docs/docker.md`) and has **not** migrated to the merged process yet. No
+Electron/desktop-shell or npm-publish plan. Docker uses separate named
+volumes, Git sources only, and token-protected admin dashboards. Never mount
+the host filesystem, Docker socket, or native data directories into these
+containers. Docker owns service restart, startup policy and image updates; no
+launchd/systemd runs inside the image.
 
 The root `package.json` now
 carries real dependencies (MCP SDK, zod, proper-lockfile); `install.sh` runs `npm ci --omit=dev`
@@ -50,17 +63,23 @@ For a client, collect its gateway URL and issued user token; a solo client may
 use AnythingLLM directly. For a gateway, collect the external AnythingLLM URL
 and developer API key (Settings → Developer API). Never invent a credential. Verify with `status --json` after every change.
 
-The installer calls `setup`, which configures a role, starts its services and
-verifies readiness. `start` is idempotent and backgrounded through the platform
-supervisor. `stop` preserves autostart; `autostart off` changes startup preference
-without stopping running services. Use both to stop permanently. `restart`,
-`status --json`, and `logs <service> --follow` work for all installed roles.
+The installer calls `setup`, which configures the installation, starts the
+single app service and verifies readiness. `start` is idempotent and
+backgrounded through the platform supervisor. `stop` preserves autostart;
+`autostart off` changes startup preference without stopping running services.
+Use both to stop permanently. `restart`, `status --json`, and
+`logs [app] --follow` work on every install; pre-merge log names
+(`dashboard`, `scheduler`, `mcp`, `mcp-lan`, `gateway`) are still readable.
 
-macOS starts after login. Linux gateways need `loginctl enable-linger <user>`
+macOS starts after login. Linux installs need `loginctl enable-linger <user>`
 for boot without login; status must not claim that guarantee unless verified.
 Service definitions pin the absolute data root. Client config is `config.json`;
 gateway upstream credentials and ports are exclusively `gateway/gateway.json`.
-`installation.json` records roles and autostart preference. No legacy command
+`installation.json` records roles, the `lan` flag and autostart preference
+(gateway enabled ⇔ `roles` contains `"gateway"`). First `start`/`restart`
+after an upgrade migrates automatically: legacy per-role launchd/systemd
+definitions are removed, and a gateway-only install gains a `config.json`
+synthesized from `gateway.json`. No legacy command
 aliases or environment overrides of gateway credentials are supported.
 
 ## Repo conventions

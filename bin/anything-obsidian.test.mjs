@@ -41,10 +41,10 @@ async function fixture(t) {
       return {
         roles: p.roles,
         services: Object.fromEntries(
-          [
-            ...(p.roles.includes("client") ? ["dashboard", "scheduler", "mcp"] : []),
-            ...(p.roles.includes("gateway") ? ["gateway"] : []),
-          ].map((name) => [name, { running, pid: running ? 100 : null }]),
+          (p.roles.length ? ["app"] : []).map((name) => [
+            name,
+            { running, pid: running ? 100 : null },
+          ]),
         ),
         autostart: { enabled: p.autostart, guarantee: "after-login" },
       };
@@ -59,6 +59,12 @@ async function fixture(t) {
       : String(url).includes(":21503") || String(url).includes(":21504")
         ? "anything-obsidian-mcp"
         : "any-obs-gateway";
+    if (String(url).includes("/api/")) {
+      // Dashboard-mounted gateway admin API and feature endpoints.
+      return new Response(JSON.stringify({ jobs: [], sources: [], vaults: [], enabled: true }), {
+        status: online ? 200 : 503,
+      });
+    }
     return new Response(JSON.stringify({ ok: online, name, configRoot: root }), {
       status: online ? 200 : 503,
     });
@@ -103,7 +109,7 @@ test("setup configures a client, registers its role and starts all services only
   assert.equal((await stat(f.store.paths.configPath)).mode & 0o777, 0o600);
 });
 
-test("a client and gateway on the same machine retain separate credentials in either setup order", async (t) => {
+test("setup --server configures the client and enables the gateway; gateway.json stays its own store", async (t) => {
   for (const serverFirst of [true, false]) {
     const f = await fixture(t);
     const client = () => f.run(["setup", ...clientFlags(f.root)]);
@@ -114,8 +120,14 @@ test("a client and gateway on the same machine retain separate credentials in ei
     const gateway = await createGatewayConfig({ dataDir: f.root + "/gateway" }).load();
     assert.equal(gateway.apiKey, "developer-key");
     assert.equal(gateway.anythingllmBaseUrl, "http://upstream.test");
-    assert.equal((await f.store.load()).apiKey, "client-key");
-    assert.equal((await f.installation.load()).roles.length, 2);
+    // The last setup wins for config.json; gateway.json keeps its own copy
+    // and is the only credential store the gateway ever reads.
+    assert.equal(
+      (await f.store.load()).apiKey,
+      serverFirst ? "client-key" : "developer-key",
+    );
+    const roles = (await f.installation.load()).roles;
+    assert.ok(roles.includes("client") && roles.includes("gateway"));
   }
 });
 
@@ -183,7 +195,7 @@ test("strict argument parsing rejects removed commands and unknown flags", async
     ["setup", "--unknown"],
     ["start-bg"],
     ["init"],
-    ["gateway"],
+    ["gateway", "bogus"],
   ])
     assert.notEqual(await f.run(args), 0);
   assert.equal(await f.run(["--help"]), 0);
@@ -205,7 +217,7 @@ test("reconfiguration applies the changed role and preserves vault location, LAN
   assert.equal(current.mcpAllowedHosts, "notes.local");
   assert.equal(current.notifications, false);
   assert.equal(current.apiKey, "new-key");
-  assert.ok(f.calls.includes("restart:client"));
+  assert.ok(f.calls.includes("restart"));
 });
 
 test("LAN allowed hosts and generated token are persisted and JSON output is one object", async (t) => {

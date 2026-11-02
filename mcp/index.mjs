@@ -284,22 +284,39 @@ function stripTrailingSlash(value) {
   return value.replace(/\/+$/, "");
 }
 
-function startHttpServer(profile) {
-  const adminToken = process.env.MCP_AUTH_TOKEN ?? "";
-  if ((profile === "lan" || isContainer()) && !adminToken) throw new Error("MCP_AUTH_TOKEN is required for network MCP");
-  const bindHost = profile === "lan" || isContainer() ? "0.0.0.0" : "127.0.0.1";
-  const app = createMcpExpressApp(mcpHttpOptions(process.env.MCP_ALLOWED_HOSTS, { host: bindHost }));
+// One MCP HTTP listener. The standalone CLI entry uses it directly; the
+// merged single-process app entry creates the local (21503) listener at boot
+// and opens/closes the LAN (21504) listener on demand, so it must return the
+// server handle and report bind failures instead of exiting the process.
+export function createMcpHttpListener({
+  profile = "local",
+  port,
+  bind,
+  adminToken,
+  agentTokensPath,
+  allowedHosts,
+  env = process.env,
+} = {}) {
+  const effectiveAdminToken = adminToken ?? env.MCP_AUTH_TOKEN ?? "";
+  const container = isContainer(env);
+  if ((profile === "lan" || container) && !effectiveAdminToken)
+    throw new Error("MCP_AUTH_TOKEN is required for network MCP");
+  const bindHost = bind ?? (profile === "lan" || container ? "0.0.0.0" : "127.0.0.1");
+  const listenPort = port ?? mcpPort(profile, env);
+  const tokensPath =
+    agentTokensPath ?? env.MCP_AGENT_TOKENS_PATH ?? path.join(defaultPaths().agentTokensRoot, "agents.json");
+  const app = createMcpExpressApp(mcpHttpOptions(allowedHosts ?? env.MCP_ALLOWED_HOSTS, { host: bindHost }));
 
   app.get("/health", (_req, res) => {
-    res.status(200).json({ ok: true, name: "anything-obsidian-mcp", profile, configRoot: process.env.ANYTHING_OBSIDIAN_HOME, apiKeyConfigured: Boolean(process.env.ANYTHINGLLM_API_KEY) });
+    res.status(200).json({ ok: true, name: "anything-obsidian-mcp", profile, configRoot: env.ANYTHING_OBSIDIAN_HOME, apiKeyConfigured: Boolean(env.ANYTHINGLLM_API_KEY) });
   });
 
   app.post("/mcp", async (req, res) => {
     const identity = resolveIdentity(req.get("authorization"), {
-      adminToken,
-      agents: await loadAgentIdentities(process.env.MCP_AGENT_TOKENS_PATH ?? path.join(defaultPaths().agentTokensRoot, "agents.json")),
+      adminToken: effectiveAdminToken,
+      agents: await loadAgentIdentities(tokensPath),
     });
-    if ((profile === "lan" || isContainer()) && identity.kind === "anonymous") {
+    if ((profile === "lan" || container) && identity.kind === "anonymous") {
       return res.status(401).json({ error: "Bearer token required" });
     }
     const server = createServer(profile, identity);
@@ -321,25 +338,27 @@ function startHttpServer(profile) {
     res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null });
   });
 
-  const port = mcpPort(profile);
-  app.listen(port, bindHost, (error) => {
-    if (error) {
-      console.error("Failed to start MCP HTTP server:", error);
-      process.exit(1);
-    }
-    console.error(`anything-obsidian ${profile} MCP HTTP server listening on ${bindHost}:${port}`);
+  return new Promise((resolve, reject) => {
+    const server = app.listen(listenPort, bindHost, (error) => {
+      if (error) return reject(error);
+      console.error(`anything-obsidian ${profile} MCP HTTP server listening on ${bindHost}:${listenPort}`);
+      resolve(server);
+    });
   });
 }
 
-function mcpPort(profile) {
-  if (profile === "lan") return Number(process.env.MCP_LAN_PORT ?? 21504);
-  return Number(process.env.MCP_PORT ?? 21503);
+function mcpPort(profile, env = process.env) {
+  if (profile === "lan") return Number(env.MCP_LAN_PORT ?? 21504);
+  return Number(env.MCP_PORT ?? 21503);
 }
 
 if (process.argv[1] && import.meta.url === entryUrl()) {
   const profile = process.argv.includes("--lan") || process.env.MCP_PROFILE === "lan" ? "lan" : "local";
   if (process.argv.includes("--http") || process.env.MCP_TRANSPORT === "http") {
-    startHttpServer(profile);
+    createMcpHttpListener({ profile }).catch((error) => {
+      console.error("Failed to start MCP HTTP server:", error);
+      process.exit(1);
+    });
   } else {
     const server = createServer(profile, ADMIN_IDENTITY);
     await server.connect(new StdioServerTransport());

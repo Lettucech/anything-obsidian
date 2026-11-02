@@ -31,6 +31,7 @@ import { randomBytes } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, "public");
+const gatewayConsoleRoot = path.join(__dirname, "..", "server", "dashboard");
 const NATIVE_LOG_IDS = new Set(["syncer", "scheduler"]);
 
 export function createDashboardServer({
@@ -42,6 +43,7 @@ export function createDashboardServer({
   launchctl,
   systemctl,
   services,
+  features,
   registry = createVaultRegistry({
     env,
     rootPath: env.VAULTS_ROOT || "",
@@ -80,6 +82,7 @@ export function createDashboardServer({
     launchctl,
     systemctl,
     services,
+    features,
   };
   const adminGate = createAdminGate(env);
   const server = createServer(async (req, res) => {
@@ -97,6 +100,45 @@ export function createDashboardServer({
       if (req.method === "GET" && url.pathname === "/") {
         if (await dashboardReady(anythingllm)) return await serveStatic(res, url.pathname);
         return sendHtml(res, 200, dashboardSetupPage(publicConfig(env).anythingllmUrl));
+      }
+      // The gateway console lives at a subpath of the one dashboard: same
+      // origin, same process, same admin gate as every other route here.
+      if (url.pathname === "/gateway" || url.pathname.startsWith("/gateway/")) {
+        if (req.method !== "GET") return sendJson(res, 404, { error: "Not found" });
+        return await serveGatewayConsole(res, url.pathname);
+      }
+      if (
+        features &&
+        (url.pathname.startsWith("/api/gateway/") || url.pathname.startsWith("/api/setup/"))
+      ) {
+        // Mounted admin-plane handler of the in-process gateway. Admin
+        // identity comes from the gateway plane itself (loopback reach or the
+        // container admin session — the same proof this gate just checked).
+        const handler = features.gatewayAdminHandler();
+        if (!handler) return sendJson(res, 503, { error: "Gateway is not running" });
+        return await handler(req, res);
+      }
+      if (req.method === "POST" && url.pathname === "/api/features/gateway") {
+        if (!features) return sendJson(res, 501, { error: "Gateway control requires the merged app process" });
+        const input = await readJsonBody(req);
+        if (input.action === "on") {
+          const result = await features.enableGateway({
+            ...(input.apiKey ? { apiKey: String(input.apiKey) } : {}),
+            ...(input.baseUrl ? { baseUrl: String(input.baseUrl) } : {}),
+          });
+          return sendJson(res, result.ok ? 200 : 400, {
+            ...result,
+            ...(result.ok ? {} : { error: result.reason }),
+          });
+        }
+        if (input.action === "off") {
+          return sendJson(res, 200, await features.disableGateway());
+        }
+        return sendJson(res, 400, { error: "action must be on or off" });
+      }
+      if (url.pathname === "/api/features/gateway" && req.method === "GET") {
+        if (!features) return sendJson(res, 200, { available: false });
+        return sendJson(res, 200, await features.gatewayState());
       }
       if (req.method === "GET" && url.pathname === "/api/vaults") {
         const vaults = await registry.list();
@@ -258,11 +300,15 @@ export function createDashboardServer({
         return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "POST" && url.pathname === "/api/system/on") {
-        await serviceManagerFor(context).startService("scheduler");
+        // In the merged app the scheduler is an in-process loop; containers
+        // keep the supervised-service path.
+        if (features) features.startScheduler();
+        else await serviceManagerFor(context).startService("scheduler");
         return sendJson(res, 200, await statusPayload(context));
       }
       if (req.method === "POST" && url.pathname === "/api/system/off") {
-        await serviceManagerFor(context).stopService("scheduler");
+        if (features) await features.stopScheduler();
+        else await serviceManagerFor(context).stopService("scheduler");
         return sendJson(res, 200, await statusPayload(context));
       }
       if (url.pathname === "/api/autostart") {
@@ -298,6 +344,7 @@ export function createDashboardServer({
           }
           if (input.action === "off") {
             await manager.setLan(false);
+            if (features) await features.stopLan();
             return sendJson(res, 200, { enabled: false });
           }
           let lanToken = await readLanToken(env);
@@ -308,6 +355,9 @@ export function createDashboardServer({
             lanToken = generated;
           }
           await manager.setLan(true);
+          // The listener opens inside this process; the fresh token must be
+          // handed over because the boot-time env may not have had one.
+          if (features) await features.startLan(lanToken);
           return sendJson(res, 200, { enabled: true, ...(generated ? { token: generated } : {}) });
         }
       }
@@ -467,7 +517,7 @@ async function registryUpdateLanToken(env, token) {
 }
 
 async function statusPayload(context) {
-  const { jobs, env, fetchImpl, native, anythingllm, registry, platform, launchctl, systemctl } =
+  const { jobs, env, fetchImpl, native, anythingllm, registry, platform, launchctl, systemctl, features } =
     context;
   const services = (await serviceSnapshot(context)).filter(
     (service) => !isContainer(env) || service.id !== "mcp-lan",
@@ -478,6 +528,8 @@ async function statusPayload(context) {
   } catch {
     lanEnabled = false;
   }
+  let gateway = { available: false, enabled: false, running: false };
+  if (features) gateway = await features.gatewayState().catch(() => gateway);
   const current = await currentVersionValue();
   const latest = await fetchLatestVersion({ fetchImpl });
   return redactSecretsObject({
@@ -497,6 +549,7 @@ async function statusPayload(context) {
     deployment: deploymentCapabilities(env),
     update: { current, latest, available: Boolean(latest) && compareVersions(current, latest) < 0 },
     lan: { enabled: lanEnabled },
+    gateway,
   });
 }
 
@@ -515,12 +568,16 @@ async function serviceSnapshot(context) {
   // happens to be listening on the real machine's MCP ports.
   const mcpPort = Number(env.MCP_PORT ?? 21503);
   const mcpLanPort = Number(env.MCP_LAN_PORT ?? 21504);
-  const [anythingllmHealth, schedulerStatus, gitHealth, mcpHealth, mcpLanHealth] =
+  const [anythingllmHealth, appStatus, gitHealth, mcpHealth, mcpLanHealth] =
     await Promise.all([
       probeAnythingllm(anythingllm),
       serviceManagerFor(context)
         .status()
-        .then((state) => state.services.scheduler ?? { running: false, pid: null }),
+        .then(
+          // One supervised service ("app") natively; containers keep the
+          // per-role runtime and report through the scheduler entry.
+          (state) => state.services.app ?? state.services.scheduler ?? { running: false, pid: null },
+        ),
       probeGit(native.execFileImpl || promisify(nodeExecFile)),
       probeHttp(fetchImpl, `http://127.0.0.1:${mcpPort}/health`),
       probeHttp(fetchImpl, `http://127.0.0.1:${mcpLanPort}/health`),
@@ -535,14 +592,14 @@ async function serviceSnapshot(context) {
       health: anythingllmHealth,
     },
     {
-      id: "scheduler",
-      label: "Scheduler",
+      id: "app",
+      label: "App",
       found: true,
-      running: schedulerStatus.running,
-      state: schedulerStatus.running ? `running (pid ${schedulerStatus.pid})` : "stopped",
+      running: appStatus.running,
+      state: appStatus.running ? `running (pid ${appStatus.pid})` : "stopped",
       health: {
-        ok: schedulerStatus.running,
-        status: schedulerStatus.running ? "running" : "stopped",
+        ok: appStatus.running,
+        status: appStatus.running ? "running" : "stopped",
       },
     },
     {
@@ -605,8 +662,37 @@ async function probeGit(execFileImpl) {
   }
 }
 
-async function serveStatic(res, pathname) {
-  const file = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+// The gateway console (server/dashboard) served at a subpath of the unified
+// dashboard. Asset references in its index.html are relative, and unknown
+// extension-less paths fall back to the shell so deep links keep working.
+async function serveGatewayConsole(res, pathname) {
+  // Canonicalize so relative asset references resolve under /gateway/.
+  if (pathname === "/gateway") {
+    res.writeHead(308, { location: "/gateway/" });
+    return res.end();
+  }
+  const relative =
+    pathname === "/gateway/" ? "index.html" : pathname.replace(/^\/gateway\/?/, "");
+  const fullPath = path.resolve(gatewayConsoleRoot, relative);
+  const bounded = path.relative(gatewayConsoleRoot, fullPath);
+  if (!relative || bounded.startsWith("..") || path.isAbsolute(bounded))
+    return sendJson(res, 403, { error: "Forbidden" });
+  let body;
+  try {
+    body = await readFile(fullPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    if (relative.includes(".")) return sendJson(res, 404, { error: "Not found" });
+    body = await readFile(path.join(gatewayConsoleRoot, "index.html"));
+  }
+  res.writeHead(200, {
+    "content-type": contentType(relative),
+    "cache-control": "no-cache",
+  });
+  res.end(body);
+}
+
+async function serveStatic(res, pathname) {  const file = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
   const fullPath = path.resolve(publicRoot, file);
   const relative = path.relative(publicRoot, fullPath);
   if (relative.startsWith("..") || path.isAbsolute(relative))

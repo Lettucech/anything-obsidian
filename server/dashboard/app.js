@@ -402,7 +402,7 @@ async function renderOverview(state) {
   card.append(element("h2", "", "Overview"));
   const grid = element("div", "grid");
   try {
-    const health = await request("/health", { method: "GET" });
+    const health = await request("/api/gateway/health", { method: "GET" });
     grid.append(
       metric("Status", health.ok ? "Running" : "Down", health.ok ? "success" : "danger"),
       metric("Users", health.users),

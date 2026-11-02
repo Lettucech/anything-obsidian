@@ -21,9 +21,11 @@ function nativeApp({
   schedulerPidPath,
   schedulerLogPath,
   services,
+  features,
 } = {}) {
   return createDashboardServer({
     env,
+    ...(features ? { features } : {}),
     services:
       services ||
       fakeServices(
@@ -72,25 +74,37 @@ test("native paths are required", () => {
   assert.throws(() => createDashboardServer({ env }), /native paths are required/);
 });
 
-test("native status reports AnythingLLM, scheduler, and git services", async () => {
-  const app = nativeApp();
+test("native status reports AnythingLLM, the app service, and git", async () => {
+  const app = nativeApp({
+    features: {
+      gatewayState: async () => ({
+        available: true,
+        enabled: false,
+        running: false,
+        configured: false,
+        port: 21500,
+      }),
+    },
+  });
 
   const response = await request(app, "GET", "/api/status");
 
   assert.equal(response.status, 200);
   assert.deepEqual(
     response.body.services.map((service) => service.id),
-    ["anythingllm", "scheduler", "mcp", "mcp-lan", "git"],
+    ["anythingllm", "app", "mcp", "mcp-lan", "git"],
   );
   const byId = Object.fromEntries(response.body.services.map((service) => [service.id, service]));
   assert.equal(byId.anythingllm.running, true);
   assert.equal(byId.anythingllm.health.ok, true);
-  assert.equal(byId.scheduler.running, false);
+  assert.equal(byId.app.running, false);
   assert.equal(byId.mcp.running, false);
   assert.equal(byId["mcp-lan"].state, "off");
   assert.equal(byId.git.running, true);
   assert.match(byId.git.health.status, /git version/);
   assert.equal(response.body.systemState, "partial");
+  assert.equal(response.body.gateway.available, true);
+  assert.equal(response.body.gateway.enabled, false);
   assert.equal(response.body.config.dashboardUrl, "http://localhost:21502");
   assert.equal(response.body.config.anythingllmUrl, "http://localhost:11301");
   assert.equal(response.body.config.vaultsRoot, "/Users/x/Vaults");
@@ -120,8 +134,8 @@ test("native status reflects an unreachable AnythingLLM and a live scheduler", a
   const byId = Object.fromEntries(response.body.services.map((service) => [service.id, service]));
   assert.equal(byId.anythingllm.running, false);
   assert.match(byId.anythingllm.health.status, /401/);
-  assert.equal(byId.scheduler.running, true);
-  assert.match(byId.scheduler.state, /pid 4242/);
+  assert.equal(byId.app.running, true);
+  assert.match(byId.app.state, /pid 4242/);
   assert.equal(byId.git.running, true);
   assert.equal(response.body.systemState, "partial");
 });
@@ -131,13 +145,13 @@ test("native power actions delegate to the shared service controller", async () 
   const app = nativeApp({ services });
   assert.equal(
     (await request(app, "POST", "/api/system/on")).body.services.find(
-      (service) => service.id === "scheduler",
+      (service) => service.id === "app",
     ).running,
     true,
   );
   assert.equal(
     (await request(app, "POST", "/api/system/off")).body.services.find(
-      (service) => service.id === "scheduler",
+      (service) => service.id === "app",
     ).running,
     false,
   );
