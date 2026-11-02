@@ -26,6 +26,9 @@ async function fixture(t) {
     source + "/package.json",
     '{"name":"anything-obsidian","version":"0.4.0","type":"module"}',
   );
+  // Current releases ship the merged app entry; install.sh refuses archives
+  // without it (a CDN-cached pre-merge tarball).
+  await writeFile(source + "/app.mjs", "// merged entry marker\n");
   await writeFile(
     source + "/bin/anything-obsidian.mjs",
     `import {appendFile} from 'node:fs/promises';

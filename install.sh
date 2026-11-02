@@ -163,6 +163,11 @@ curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -x
   || die "Could not download the repository. Check github.com/$REPO is reachable."
 SOURCE_DIR="$(find "$STAGING" -maxdepth 1 -mindepth 1 -type d | head -1)"
 if [ -z "$SOURCE_DIR" ]; then die "Downloaded archive was empty."; fi
+# Guard against a CDN-cached pre-merge tarball: the merged app entry is part
+# of every current release, so its absence means the download is stale.
+if [ ! -f "$SOURCE_DIR/app.mjs" ]; then
+  die "Downloaded app is outdated (CDN cache). Wait a few minutes and re-run the installer."
+fi
 NPM_CLI=""
 for candidate in "$(dirname "$NODE_BIN")/npm" "$(dirname "$NODE_BIN")/../lib/node_modules/npm/bin/npm-cli.js"; do
   if [ -f "$candidate" ]; then NPM_CLI="$candidate"; break; fi
@@ -255,7 +260,6 @@ if [ -n "$PORT" ]; then set -- "$@" --port "$PORT"; fi
 "$LAUNCHER" status --json || die "Services are not ready. Run: anything-obsidian logs"
 
 DASH_PORT="${PORT:-21502}"
-if [ "$SERVER" -eq 1 ]; then DASH_PORT=21505; fi
 if [ "$NO_BROWSER" -ne 1 ]; then
   if command -v open >/dev/null 2>&1; then open "http://localhost:$DASH_PORT" >/dev/null 2>&1 || true
   elif command -v xdg-open >/dev/null 2>&1; then xdg-open "http://localhost:$DASH_PORT" >/dev/null 2>&1 || true
@@ -268,4 +272,5 @@ say "  anything-obsidian stop       stop now; keep autostart preference"
 say "  anything-obsidian restart    restart and verify"
 say "  anything-obsidian status     readiness and startup guarantee"
 say "  anything-obsidian logs -f    follow logs"
+if [ "$SERVER" -eq 1 ]; then say "Gateway console: http://localhost:$DASH_PORT/gateway/"; fi
 say "To stop now and after future logins: autostart off, then stop."
