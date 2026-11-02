@@ -1,7 +1,8 @@
 # Per-Vault Workspaces, RAG Façade, Search-First
 
 Date: 2026-11-02
-Status: proposed
+Status: implemented (v1) — commits 7ffb107 (façade), 31076b7 (per-vault +
+search-first), plus the retrieval hint
 Depends on: 2026-11-02-client-server-simplification.md (uses "server" naming)
 
 ## Goal
@@ -78,33 +79,49 @@ Design decisions settled in discussion (2026-11-02):
   carry a hint (e.g. `belowCutoff: true` / per-chunk flag) when scores
   sit under the workspace cutoff, so the agent can tell the user "nothing
   solid found" instead of the old refusal path inside `/chat`.
+  *Implemented as* `retrievalHint()` in `lib/fanout.mjs`: every search
+  payload carries `maxScore` and `weakRetrieval` (raised when the top
+  score sits under AnythingLLM's default 0.25 cutoff, or when nothing was
+  retrieved; a caller-supplied `scoreThreshold` is respected as their own
+  judgment). Both planes (client MCP and server `fanoutSearch`) emit it.
 - `docs/agent-mcp.md` and tool descriptions updated: synthesis guidance
   (read chunks, compare versions across vaults, ask the user to clarify
   contradictions, use `any_obs_file_read` for full sources).
 
 ## 4. `RagIndex` seam (internal)
 
-- `lib/rag-index/` defines the interface — `ensureWorkspace(vault)`,
-  `embedVault(vault, files)`, `purgeVault(vault)`, `vectorSearch(workspace,
-  query, opts)` — with `anythingllm` as adapter #1 (thin wrapper over the
-  existing HTTP calls in `lib/unified-workspace.mjs` + embed script).
+- *Implemented structurally, not as a formal interface module.* All
+  AnythingLLM HTTP knowledge is confined to four modules —
+  `dashboard/anythingllm.mjs` (workspace CRUD),
+  `lib/fanout.mjs` (vector search + merge),
+  `scripts/embed-vault.mjs` (upload/update-embeddings/documents/pins),
+  `lib/unified-workspace.mjs` (purge + per-vault ensure) — and no caller
+  outside them builds an upstream URL. That confinement **is** the seam:
+  an embedded-store adapter #2 replaces or wraps those four modules
+  without touching façade semantics, tool surfaces, or the migration.
+  A literal `lib/rag-index/` interface with exactly one implementation
+  would be a dead abstraction until adapter #2 work starts; it becomes a
+  30-minute mechanical job on that day. Decision recorded 2026-11-02 at
+  implementation time.
 - No behavior change; this exists so a future embedded store
   (LanceDB/sqlite-vec) is a bounded project, per the keep-AnythingLLM
   decision of 2026-11-02.
 
 ## 5. Verification items
 
-- **AnythingLLM without a chat LLM**: `/vector-search` and
-  `/update-embeddings` must work on an instance with no LLM provider
-  attached (expectation: these paths only need the embedding provider).
-  Verify against a real instance before ship; record the outcome in this
-  spec. If disproven, revisit search-first with the user.
-- Divergence test fixture: same note in two vaults, edited in one →
-  `any_obs_rag_search` returns both versions in one response.
-- Crowding test: one vault with many high-scoring chunks must not exclude
-  another vault's best chunk (guaranteed slots).
+- **AnythingLLM without a chat LLM** (needs a live instance — run at
+  deploy): `/vector-search` and `/update-embeddings` must work on an
+  instance with no LLM provider attached (expectation: these paths only
+  need the embedding provider). If disproven, revisit search-first with
+  the owner.
+- Divergence guarantee: covered in `lib/fanout.test.mjs` (guaranteed-slot
+  crowding test). A live two-vault check (same note, edited in one → one
+  `any_obs_rag_search` returns both versions) runs at deploy alongside
+  the no-LLM check above.
 - Migration rehearsal on a copy of a real data root; machine 2 (tester)
-  deploy after merge, watch embed jobs reconcile.
+  deploy after merge, watch embed jobs reconcile — both still to do at
+  deploy time. The migration itself is unit-covered in
+  `lib/unified-workspace.test.mjs`.
 
 ## Out of scope
 

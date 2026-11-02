@@ -12,7 +12,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { z } from "zod";
 
 import { mcpHttpOptions } from "./http-config.mjs";
-import { extractChunks, mergeChunksByScore, partialResultsNote, vectorSearchJson } from "../lib/fanout.mjs";
+import { extractChunks, mergeChunksByScore, partialResultsNote, retrievalHint, vectorSearchJson } from "../lib/fanout.mjs";
 import { ADMIN_IDENTITY, ANONYMOUS_IDENTITY, loadVaults, resolveVault, visibleVaults } from "./vault-registry.mjs";
 import { attributeRagResults } from "./rag-attribution.mjs";
 import { resolveIdentity } from "./agent-identity.mjs";
@@ -171,9 +171,11 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
         answered.push({ slug: response.slug, chunks: extractChunks(enriched) });
       }
       const note = partialResultsNote(failures);
+      const results = mergeChunksByScore({ answered, topN });
       const payload = {
         query,
-        results: mergeChunksByScore({ answered, topN }),
+        results,
+        ...retrievalHint(results, scoreThreshold),
         vaultAttribution: attribution,
         workspaces: { searched: workspaces, failed: failures },
         ...(note ? { note } : {}),

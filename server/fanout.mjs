@@ -7,6 +7,7 @@ import {
   fanoutVectorSearch,
   mergeChunksByScore,
   partialResultsNote,
+  retrievalHint,
 } from "../lib/fanout.mjs";
 import { stripTrailingSlash } from "./http-utils.mjs";
 
@@ -29,10 +30,12 @@ export async function fanoutSearch({
     fetchImpl,
   });
   const note = partialResultsNote(failures);
+  const results = mergeChunksByScore({ answered, topN });
 
   return {
     query,
-    results: mergeChunksByScore({ answered, topN }),
+    results,
+    ...retrievalHint(results, scoreThreshold),
     workspaces: {
       searched: workspaces,
       failed: failures,

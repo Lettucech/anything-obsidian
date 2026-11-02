@@ -1,7 +1,7 @@
 # Client–Server Simplification (two connection kinds, "gateway" → "server")
 
 Date: 2026-11-02
-Status: proposed
+Status: implemented (v1) — commit 1cf46b8
 
 ## Goal
 
