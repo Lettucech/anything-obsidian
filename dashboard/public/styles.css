@@ -270,3 +270,4 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
   .empty-state { align-items: flex-start; flex-direction: column; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
+.workspace-vault { font-size: 13px; opacity: 0.85; }

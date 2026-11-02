@@ -507,14 +507,24 @@ if (typeof document !== "undefined") {
       list.replaceChildren(element("p", "note", "No RAG workspaces are visible yet. Add a vault to create this instance's own workspace, or ask your server admin to grant a shared workspace to this client."));
       return;
     }
-    // Per-vault model: this instance's own slugs are its vaults' workspaces.
-    const own = new Set((state.status.vaultWorkspaces ?? []).map((entry) => entry.slug));
+    // Per-vault model: name each local workspace after the vault that owns
+    // it, so the vault↔workspace mapping is readable at a glance. Anything
+    // else visible upstream (an old workspace from before an upgrade, a
+    // shared grant, another machine's index) is marked as not managed here.
+    const vaultBySlug = new Map(
+      state.vaults
+        .filter((vault) => vault.workspaceSlug)
+        .map((vault) => [vault.workspaceSlug, vault.name || vault.id]),
+    );
     list.replaceChildren(...workspaces.map((slug) => {
-      const local = own.has(slug);
-      const item = element("div", `workspace-label ${local ? "workspace-local" : "workspace-available"}`);
-      // The API supplies slugs, not upstream workspace kinds. An index other
-      // than our own is available, but is not necessarily a shared workspace.
-      item.append(element("span", "workspace-kind", local ? "Local" : "Available"), element("code", "", slug));
+      const vaultName = vaultBySlug.get(slug);
+      const item = element("div", `workspace-label ${vaultName ? "workspace-local" : "workspace-available"}`);
+      item.append(
+        element("span", "workspace-kind", vaultName ? "Vault index" : "Not managed here"),
+        element("code", "", slug),
+      );
+      if (vaultName) item.append(element("span", "workspace-vault", vaultName));
+      else item.title = "Visible on the AnythingLLM instance, but no vault on this machine owns it";
       return item;
     }));
   }
@@ -635,8 +645,8 @@ if (typeof document !== "undefined") {
     if (vault.gitAuthMode === "https-token") pills.append(element("span", "vault-pill private", "Private"));
     header.append(identity, pills);
     const details = element("dl", "vault-details");
-    details.append(vaultDetail("Repository", `${vault.gitRemote}/${vault.gitBranch}`), vaultDetail("Sync", `Every ${vault.syncIntervalSeconds}s`), vaultDetail("Last sync", lastSyncLabel(vault.lastSync)));
-    if (vault.lastSync?.status === "succeeded") details.lastElementChild.classList.add("sync-ok");
+    details.append(vaultDetail("Repository", `${vault.gitRemote}/${vault.gitBranch}`), vaultDetail("Sync", `Every ${vault.syncIntervalSeconds}s`), vaultDetail("Last sync", lastSyncLabel(vault.lastSync)), vaultDetail("Workspace", vault.workspaceSlug || "—"));
+    if (vault.lastSync?.status === "succeeded") details.lastElementChild.previousElementSibling.classList.add("sync-ok");
     if (vault.lastSync?.status === "failed") card.classList.add("sync-failed");
     card.append(header, details);
     const actions = element("div", "vault-actions");
