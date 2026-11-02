@@ -4,7 +4,7 @@ import path from "node:path";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
 import { configPaths, defaultConfigRoot } from "../lib/app-config.mjs";
-import { ensureUnifiedWorkspace, vaultDocumentFolder } from "../lib/unified-workspace.mjs";
+import { ensureVaultWorkspace, vaultDocumentFolder } from "../lib/unified-workspace.mjs";
 import { createAnythingllmClient } from "../dashboard/anythingllm.mjs";
 
 function resolveBaseConfig(env) {
@@ -30,19 +30,17 @@ export async function loadVaultConfig(env, vaultId) {
   const stateRoot = base.vaultStateRoot || defaultPaths().stateRoot;
   const stateDir = path.join(stateRoot, "manifests", vault.id);
 
-  // Headless callers (scheduler, worker commands) must survive the legacy
-  // per-vault registry without a dashboard round-trip.
-  let workspace = await registry.getWorkspace();
-  if (!workspace) {
-    ({ workspace } = await ensureUnifiedWorkspace({
-      registry,
-      anythingllm: createAnythingllmClient({
-        baseUrl: base.anythingllmBaseUrl,
-        apiKey: base.apiKey,
-      }),
-      stateRoot,
-    }));
-  }
+  // Headless callers (scheduler, worker commands) resolve the vault's own
+  // workspace without a dashboard round-trip: the recorded slug if present,
+  // else a deterministic any-obs-<host>-<vaultId> workspace created upstream.
+  const { workspaceSlug } = await ensureVaultWorkspace({
+    vaultId: vault.id,
+    registry,
+    anythingllm: createAnythingllmClient({
+      baseUrl: base.anythingllmBaseUrl,
+      apiKey: base.apiKey,
+    }),
+  });
 
   return {
     ...base,
@@ -58,12 +56,12 @@ export async function loadVaultConfig(env, vaultId) {
       const current = await registry.get(vault.id);
       if (!current || registry.resolvePath(current) !== registry.resolvePath(vault))
         throw new Error(`Vault '${vault.id}' is no longer registered at this location`);
-      if ((await registry.getWorkspace())?.slug !== workspace.slug)
+      if ((current.workspaceSlug ?? "") !== workspaceSlug)
         throw new Error("Workspace changed while the job was queued; retry the operation");
     },
     vaultId: vault.id,
     vaultPath: registry.resolvePath(vault),
-    workspaceSlug: workspace.slug,
+    workspaceSlug,
     gitRemote: vault.gitRemote,
     gitBranch: vault.gitBranch,
     gitAutoPull: vault.gitAutoPull,

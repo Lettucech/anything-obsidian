@@ -691,7 +691,7 @@ export function createGatewayRequestHandler({
 
     server.tool(
       "any_obs_rag_search",
-      "Search every RAG workspace this caller may read (the shared workspace plus owned personal workspaces) in one query. Each returned chunk carries the workspace it came from; read the source through that workspace's owner.",
+      "Search every RAG workspace this caller may read (shared workspaces plus owned personal workspaces) in one query. Every workspace's best chunk is guaranteed a slot, chunks carry the workspace they came from, and scores are raw — read the chunks and synthesize; when versions from different workspaces disagree, point both out and ask which is current.",
       {
         query: z.string().min(1),
         topN: z.number().int().positive().max(20).default(4),
@@ -713,27 +713,10 @@ export function createGatewayRequestHandler({
       },
     );
 
-    server.tool(
-      "any_obs_rag_answer",
-      "Ask AnythingLLM to answer from one workspace this caller may read. Cross-workspace synthesis is not offered; use any_obs_rag_search to discover where knowledge lives first.",
-      {
-        question: z.string().min(1),
-        workspace: z.string().min(1),
-      },
-      async ({ question, workspace }) => {
-        const entitlements = await entitlementsFor(identity);
-        if (!entitlements.read.includes(workspace))
-          throw new Error(`Workspace is not readable by this caller: ${workspace}`);
-        const data = await anythingllmRequest(
-          `/api/v1/workspace/${encodeURIComponent(workspace)}/chat`,
-          {
-            method: "POST",
-            body: JSON.stringify({ message: question, mode: "query" }),
-          },
-        );
-        return asJson(data);
-      },
-    );
+    // Search-first (2026-11): the chat-based any_obs_rag_answer was retired
+    // with the unified workspace — a chat call answers from exactly one
+    // workspace and hides the scores. Remote callers synthesize from the
+    // attributed chunks above, same as local agents.
 
     server.tool(
       "any_obs_shared_refresh",

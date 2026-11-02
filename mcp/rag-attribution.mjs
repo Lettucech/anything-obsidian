@@ -1,4 +1,4 @@
-// Unified-workspace RAG results carry vault attribution in each chunk's
+// RAG results carry vault attribution in each chunk's
 // source string (`<vaultId>/<vault-relative path>`, set at upload time).
 // AnythingLLM has never committed to one response shape for vector-search,
 // so attribution walks whatever structure comes back: any object that looks

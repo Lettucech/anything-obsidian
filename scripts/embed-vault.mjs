@@ -183,7 +183,7 @@ async function uploadFile({
     baseUrl,
     uploadPathTemplate.replace("{folder}", encodeURIComponent(documentFolder)),
   );
-  // The vaultId prefix is what makes unified-workspace search results
+  // The vaultId prefix is what makes per-workspace search results
   // attributable: RAG hits map straight back to the owning vault's files.
   const source = vaultId ? `${vaultId}/${rel}` : rel;
   const body = new FormData();

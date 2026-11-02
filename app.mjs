@@ -13,6 +13,8 @@ import { createMcpHttpListener } from "./mcp/index.mjs";
 import { createFeatureManager } from "./lib/features.mjs";
 import { createInstallationStore } from "./lib/installation.mjs";
 import { migrateLanAgents } from "./lib/lan-migration.mjs";
+import { migrateToPerVaultWorkspaces } from "./lib/unified-workspace.mjs";
+import { createAnythingllmClient } from "./dashboard/anythingllm.mjs";
 import {
   createAppConfigStore,
   defaultConfigRoot,
@@ -29,8 +31,9 @@ export async function startApp({ env = process.env, root = defaultConfigRoot({ e
   const installation = createInstallationStore(root);
 
   // Upgrade steps run before any listener opens: persist the "gateway" →
-  // "server" role rename, then retire the LAN flag by moving hashed agent
-  // tokens into the server user directory.
+  // "server" role rename, retire the LAN flag by moving hashed agent tokens
+  // into the server user directory, and move a unified-workspace install
+  // onto per-vault workspaces (each vault then re-embeds on its next sync).
   const roleMigration = await installation.migrate();
   if (roleMigration.migrated)
     console.error("[any-obs-app] installation roles migrated: gateway → server");
@@ -41,6 +44,22 @@ export async function startApp({ env = process.env, root = defaultConfigRoot({ e
     log: console.error,
   }).catch((error) =>
     console.error(`[any-obs-app] LAN retirement failed: ${error?.message ?? error}`),
+  );
+  const { createVaultRegistry } = await import("./lib/vault-registry.mjs");
+  await migrateToPerVaultWorkspaces({
+    registry: createVaultRegistry({
+      env,
+      rootPath: env.VAULTS_ROOT || "",
+      registryPath: env.VAULT_REGISTRY_PATH || paths.registryPath,
+    }),
+    anythingllm: createAnythingllmClient({
+      baseUrl: config.anythingllmBaseUrl,
+      apiKey: config.apiKey,
+    }),
+    stateRoot: paths.stateRoot,
+    log: console.error,
+  }).catch((error) =>
+    console.error(`[any-obs-app] per-vault migration failed: ${error?.message ?? error}`),
   );
   const profile = await installation.load();
 

@@ -421,17 +421,9 @@ test("MCP on the public plane is token-gated with the four RAG/pipeline tools", 
   const tools = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(tools, [
     "any_obs_job_get",
-    "any_obs_rag_answer",
     "any_obs_rag_search",
     "any_obs_shared_refresh",
   ]);
-
-  // answer demands an explicit workspace the caller may read
-  const noWorkspace = await client.callTool({
-    name: "any_obs_rag_answer",
-    arguments: { question: "hi" },
-  });
-  assert.equal(noWorkspace.isError, true);
 
   await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
     method: "POST",
@@ -454,23 +446,6 @@ test("MCP on the public plane is token-gated with the four RAG/pipeline tools", 
     search.results.map((chunk) => chunk.workspace),
     ["company-kb"],
   );
-
-  const answer = JSON.parse(
-    (
-      await client.callTool({
-        name: "any_obs_rag_answer",
-        arguments: { question: "hi", workspace: "company-kb" },
-      })
-    ).content[0].text,
-  );
-  assert.equal(answer.textResponse, "answer");
-
-  const denied = await client.callTool({
-    name: "any_obs_rag_answer",
-    arguments: { question: "hi", workspace: "other-secret" },
-  });
-  assert.equal(denied.isError, true);
-  assert.match(denied.content[0].text, /not readable/);
 
   await client.close();
 });

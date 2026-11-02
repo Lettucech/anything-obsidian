@@ -64,10 +64,14 @@ have been established through an authorized path.
 ## Retrieve and verify knowledge
 
 - Prefer `any_obs_rag_search` to discover candidate notes and source
-  passages. The index is unified across every managed vault: search first,
-  then read each result's `vaultId` and vault-relative path to pick the vault
-  to work in — no need to guess where the knowledge lives. Use
-  `any_obs_rag_answer` only when a synthesized answer is useful.
+  passages. One query fans out across every workspace this instance can see
+  — one per managed vault — and every vault's best chunk is guaranteed a
+  slot: search first, then read each result's `vaultId` and vault-relative
+  path to pick the vault to work in. Synthesize from the chunks yourself
+  (the chat-style `any_obs_rag_answer` is retired). When chunks from
+  different vaults disagree — the same information in different versions —
+  surface both versions and ask which is current instead of silently
+  picking one.
 - Use `any_obs_file_list` to inspect the actual vault structure and
   `any_obs_file_read` to verify the current source text.
 - Preserve the source path and any relevant date, revision, decision state, or

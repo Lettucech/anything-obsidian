@@ -115,17 +115,21 @@ credentials are supported.
   its traversal checks to. Never collapse the two: a managed resolve must not
   accept an absolute path, and an imported resolve must not be re-joined onto
   the root.
-- One unified AnythingLLM workspace per instance (registry top-level
-  `workspace`), namespaced `any-obs-<host>-<suffix>` so instances sharing one
-  AnythingLLM never collide. All vaults embed into it; upload chunk sources
-  carry `<vaultId>/<vault-relative path>` so unified RAG results map back to
-  the owning vault. Document folders stay per vault
-  (`anything-obsidian-vault-<vaultId>`, single segment).
-- Removing a vault from management never deletes its repository, the unified
-  workspace, or the user's files — preserve this rule everywhere, including
-  scripts. Its derived chunks and document folder do leave the unified index
-  (manifest-driven purge on removal); that is required to keep the shared
-  index truthful.
+- One AnythingLLM workspace **per vault** (per-vault model, 2026-11 — see
+  `docs/superpowers/specs/2026-11-02-per-vault-workspaces.md`), slugged
+  `any-obs-<host>-<vaultId>` (deterministic, recorded on the vault record's
+  `workspaceSlug`) so instances sharing one AnythingLLM never collide. Upload
+  chunk sources carry `<vaultId>/<vault-relative path>` so RAG results map
+  back to the owning vault. Document folders stay per vault
+  (`anything-obsidian-vault-<vaultId>`, single segment). The registry's
+  top-level `workspace` record is a legacy migration marker only; the
+  first app start after upgrade migrates a unified install (assign per-vault
+  slugs, wipe manifests for a full re-embed, delete the unified workspace
+  best-effort, clear the marker).
+- Removing a vault from management never deletes its repository or the
+  user's files — preserve this rule everywhere, including scripts. Its
+  derived chunks and document folder leave the index, and its own (now
+  empty) workspace is deleted; other vaults' workspaces are never touched.
 
 ## Data directories (never delete casually)
 

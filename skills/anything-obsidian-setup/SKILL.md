@@ -1,6 +1,6 @@
 ---
 name: anything-obsidian-setup
-description: Install, configure, verify, update, stop, restart, or remove Anything Obsidian using its native installer or optional Docker client/gateway flavor.
+description: Install, configure, verify, update, stop, restart, or remove Anything Obsidian using its native installer or optional Docker client/server flavor.
 ---
 
 # Anything Obsidian Setup
@@ -25,18 +25,19 @@ as an implicit part of this setup. No Docker or desktop shell is required for
 the bridge. Source directories are the user's notes and must be preserved.
 
 One install, one process, one dashboard. A single app service hosts the
-dashboard (21502), local MCP (21503) and sync scheduler; the gateway and the
+dashboard (21502), local MCP (21503) and sync scheduler; the server (public
 LAN MCP are opt-in in-process listeners. Interactive `setup` opens with an
 arrow-key choice of mode — the two credential kinds are never merged into
 one question:
 
-- **Local** (default, gateway feature off): the AnythingLLM URL and its
+- **Local** (default, server feature off): the AnythingLLM URL and its
   developer API key.
-- **Join a gateway**: the gateway URL (`http://<server>:21500`) and the
+- **Join a server**: the server URL (`http://<server>:21500`) and the
   administrator-issued user token. Members can index their own vaults;
   readers can search.
-- **Serving others**: local setup plus the gateway feature
-  (`anything-obsidian gateway on`, or `install.sh --server`). Collect the
+- **Serving others**: local setup plus the server feature
+  (`anything-obsidian server on`, or `install.sh --server`; `gateway on` is a
+  deprecated alias). Collect the
   external AnythingLLM URL and developer API key from Settings → Developer
   API; it is stored in `gateway/gateway.json` and belongs only on that
   machine.
@@ -53,7 +54,7 @@ run `docker compose run --rm client setup` (or `gateway setup`), then
 `docker compose up -d client` (or `gateway`). Verify with
 `docker compose exec <service> anything-obsidian status --json`. Retrieve the
 separate dashboard admin token from that service's `/data/secrets/container-admin-token`;
-never log it or confuse it with a gateway user/upstream token. Docker supports
+never log it or confuse it with a server user/upstream token. Docker supports
 Git clones only: never mount host notes, native data directories or the Docker
 socket, and never offer local-directory import. Lifecycle, daemon startup and
 image updates belong to Docker; do not invoke native autostart or updater commands
@@ -66,7 +67,7 @@ Supply the collected values to avoid prompts:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
   --vaults-root <absolute-path> --url <url> --api-key <key> --no-browser
-# add --server to also enable the gateway feature (alias: install-server.sh)
+# add --server to also enable the server feature (alias: install-server.sh)
 ```
 
 Interactive users can omit the values. Git is required; the installer downloads
@@ -74,12 +75,14 @@ a supported Node runtime if necessary. It stages dependencies and validates the
 app before installation.
 
 For an existing app, configure with `anything-obsidian setup` and toggle the
-gateway with `anything-obsidian gateway on|off|status`.
+server with `anything-obsidian server on|off|status` (`gateway on|off|status`
+still works as a deprecated alias).
 `--url`, `--api-key`, `--vaults-root` and `--port` avoid prompts. Setup
 validates the credential before saving it, records the role, starts the app
 service and checks readiness. Reconfiguration keeps the existing autostart
-preference. Toggling the gateway or LAN never restarts the service: listeners
-open and close in-process.
+preference. Toggling the server never restarts the service: listeners
+open and close in-process. (`lan` is retired: remote access is the server
+feature; LAN agent tokens migrated automatically at the next start.)
 
 A new installation enables autostart. macOS starts after the user logs in.
 Linux requires `loginctl enable-linger <user>` for boot without login;
@@ -97,9 +100,10 @@ anything-obsidian status --json
 Require exit code 0 and `ok:true`. Inspect:
 
 - `configRoot` and `roles`: the intended absolute data root and roles
-  (gateway enabled ⇔ `roles` contains `"gateway"`).
+  (server enabled ⇔ `roles` contains `"server"`; a legacy `"gateway"`
+  entry migrates automatically at the first start).
 - `services`: the app service running and each HTTP endpoint healthy
-  (gateway public plane only when the feature is enabled).
+  (server public plane only when the feature is enabled).
 - `autostart`: preference, actual registration and startup guarantee; Linux
   must report `at-boot` when autostart is enabled and linger is set.
 - `indexing`: failed jobs or pending cleanup require attention even when the

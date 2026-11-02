@@ -23,15 +23,24 @@ test("vault config resolves service endpoints from the environment without docke
   await writeFile(
     env.VAULT_REGISTRY_PATH,
     JSON.stringify({
-      workspace: { slug: "any-obs-custom-01", name: "Anything Obsidian" },
-      vaults: [{ id: "work", name: "w", directory: "work", gitUserName: "A", gitUserEmail: "a@b" }],
+      vaults: [{ id: "work", name: "w", directory: "work", workspaceSlug: "any-obs-custom-work", gitUserName: "A", gitUserEmail: "a@b" }],
     }),
   );
-  const config = await loadVaultConfig(env, "work");
-  assert.equal(config.anythingllmBaseUrl, "http://custom:3001");
-  assert.equal(config.mcpBaseUrl, "http://127.0.0.1:21503");
-  assert.equal(config.vaultStateRoot, env.VAULT_STATE_ROOT);
-  assert.equal(config.workspaceSlug, "any-obs-custom-01");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/api/v1/workspaces"))
+      return new Response(JSON.stringify({ workspaces: [{ slug: "any-obs-custom-work" }] }));
+    return new Response(JSON.stringify({}), { status: 404 });
+  };
+  try {
+    const config = await loadVaultConfig(env, "work");
+    assert.equal(config.anythingllmBaseUrl, "http://custom:3001");
+    assert.equal(config.mcpBaseUrl, "http://127.0.0.1:21503");
+    assert.equal(config.vaultStateRoot, env.VAULT_STATE_ROOT);
+    assert.equal(config.workspaceSlug, "any-obs-custom-work");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("worker rejects unknown commands", async () => {

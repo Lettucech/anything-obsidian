@@ -13,7 +13,7 @@ import { z } from "zod";
 
 import { mcpHttpOptions } from "./http-config.mjs";
 import { extractChunks, mergeChunksByScore, partialResultsNote, vectorSearchJson } from "../lib/fanout.mjs";
-import { ADMIN_IDENTITY, ANONYMOUS_IDENTITY, loadVaults, loadWorkspace, resolveVault, visibleVaults } from "./vault-registry.mjs";
+import { ADMIN_IDENTITY, ANONYMOUS_IDENTITY, loadVaults, resolveVault, visibleVaults } from "./vault-registry.mjs";
 import { attributeRagResults } from "./rag-attribution.mjs";
 import { resolveIdentity } from "./agent-identity.mjs";
 import { createVaultFileService } from "./vault-files.mjs";
@@ -24,7 +24,6 @@ import { defaultConfigRoot, configPaths } from "../lib/app-config.mjs";
 const { readFile } = await import("node:fs/promises");
 const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
-const chatPathTemplate = process.env.ANYTHINGLLM_CHAT_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/chat";
 const vectorSearchPathTemplate = process.env.ANYTHINGLLM_VECTOR_SEARCH_PATH_TEMPLATE ?? "/api/v1/workspace/{slug}/vector-search";
 
 export function createServer(profile = "local", identity = ANONYMOUS_IDENTITY) {
@@ -114,30 +113,15 @@ function registerLocalVaultTools(server, vaultFiles) {
 }
 
 function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identity) {
-  server.tool(
-    "any_obs_rag_answer",
-    "Ask AnythingLLM to answer strictly from RAG over this instance's unified index of all managed vaults: queries whose retrieval scores fall below the workspace's relevance cutoff are refused, so generic queries may answer nothing — use any_obs_rag_search for raw attributed chunks regardless of score.",
-    {
-      question: z.string().min(1),
-    },
-    async ({ question }) => {
-      const visible = await visibleRagWorkspaces(vaultRegistryPath, { baseUrl, apiKey });
-      // Cross-vault synthesis targets this instance's own unified workspace;
-      // gateway-granted shared workspaces stay search-only surfaces. Clients
-      // without their own workspace answer from the first visible one.
-      const own = await loadWorkspace(vaultRegistryPath).catch(() => null);
-      const slug = own && visible.includes(own.slug) ? own.slug : visible[0];
-      const data = await requestJson(chatPathTemplate.replace("{slug}", encodeURIComponent(slug)), {
-        method: "POST",
-        body: JSON.stringify({ message: question, mode: "query" }),
-      }, { baseUrl, apiKey });
-      return asJsonContent(data);
-    },
-  );
-
+  // Search-first (2026-11): the chat-based any_obs_rag_answer was retired
+  // with the unified workspace — a chat call answers from exactly one
+  // workspace, which the per-vault model has N of. Agents retrieve
+  // attributed chunks here and synthesize themselves, where the
+  // conversation context lives. AnythingLLM is a pure RAG index engine for
+  // any-obs: no any-obs code path touches its LLM anymore.
   server.tool(
     "any_obs_rag_search",
-    "Search every RAG workspace this instance can see — its own unified index plus any gateway-granted shared workspaces — in one query. Chunks are merged by score and tagged with their workspace, vaultId, and vault-relative path so the source file can be read from the owning vault. vaultId optionally filters results to one vault. Prefer this for agent RAG.",
+    "Search every RAG workspace this instance can see — one workspace per managed vault, plus any server-granted shared workspaces — in one query. Chunks are merged by score, tagged with their workspace, vaultId, and vault-relative path, and every vault's best chunk is guaranteed a slot, so divergent copies of the same information surface together. Read the chunks and synthesize; when versions from different vaults disagree, point both out and ask which is current. vaultId optionally filters to one vault.",
     {
       query: z.string().min(1),
       vaultId: z.string().min(1).optional(),
@@ -200,26 +184,16 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
 }
 
 // One query across everything the configured key can see. Against plain
-// AnythingLLM that is exactly the instance's unified workspace (key = the
-// instance's developer key); against a gateway it is the filtered list the
-// proxy answers with — personal plus granted shared workspaces.
-// What the configured key can see is the source of truth: a gateway answers
-// with the token's granted + owned workspaces (which may not include any
-// local unified workspace — a consumer client with no vaults still has
-// shared grants to search). Only when the backend answers nothing do we fall
-// back to the local registry's unified workspace, and only then is "no
-// workspace" an error.
-async function visibleRagWorkspaces(vaultRegistryPath, { baseUrl, apiKey }) {
-  try {
-    const data = await requestJson("/api/v1/workspaces", { method: "GET" }, { baseUrl, apiKey });
-    const slugs = (data?.workspaces ?? []).map((workspace) => workspace.slug).filter(Boolean);
-    if (slugs.length) return slugs;
-  } catch {
-    // fall through to the local registry (plain AnythingLLM, or no backend)
-  }
-  const workspace = await loadWorkspace(vaultRegistryPath);
-  if (workspace) return [workspace.slug];
-  throw new Error("No RAG workspaces are visible yet. Add a vault to create this instance's own workspace, or ask your gateway admin to grant a shared workspace to your user.");
+// AnythingLLM that is every workspace on the instance — one per managed
+// vault plus anything else the operator keeps there; against a server it is
+// the filtered list the proxy answers with — the caller's per-vault and
+// granted shared workspaces. What the configured key can see is the source
+// of truth; an empty answer is an error worth explaining.
+async function visibleRagWorkspaces(_vaultRegistryPath, { baseUrl, apiKey }) {
+  const data = await requestJson("/api/v1/workspaces", { method: "GET" }, { baseUrl, apiKey });
+  const slugs = (data?.workspaces ?? []).map((workspace) => workspace.slug).filter(Boolean);
+  if (slugs.length) return slugs;
+  throw new Error("No RAG workspaces are visible yet. Add a vault to create this instance's own workspace, or ask your server admin to grant a shared workspace to your user.");
 }
 
 async function requestJson(pathOrUrl, init, { baseUrl, apiKey }) {

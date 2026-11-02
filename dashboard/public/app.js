@@ -76,7 +76,7 @@ export function dashboardMetrics(status, vaults) {
   const services = status.services ?? [];
   return [
     { label: "Managed vaults", value: vaults.length },
-    { label: "RAG workspaces", value: status.visibleWorkspaces?.length || (status.workspace ? 1 : 0) || "Not set up yet" },
+    { label: "RAG workspaces", value: status.visibleWorkspaces?.length || status.vaultWorkspaces?.filter((entry) => entry.slug).length || "Not set up yet" },
     { label: "Scheduled sync", value: vaults.filter((vault) => vault.enabled).length },
     { label: "Healthy services", value: `${services.filter((service) => service.running && service.health?.ok).length}/${services.length}` },
   ];
@@ -196,7 +196,7 @@ if (typeof document !== "undefined") {
     const { vaultId, action } = button.dataset;
     if (action === "edit") return showForm(state.vaults.find((vault) => vault.id === vaultId));
     if (action === "remove") {
-      if (!window.confirm(`Remove '${vaultId}' from management? Its repository and files stay on disk; its indexed chunks leave the shared RAG workspace.`)) return;
+      if (!window.confirm(`Remove '${vaultId}' from management? Its repository and files stay on disk; its indexed chunks and workspace leave the RAG index.`)) return;
       await request(`/api/vaults/${encodeURIComponent(vaultId)}`, { method: "DELETE" });
       message(`Removed '${vaultId}' from management.`);
     } else {
@@ -504,11 +504,13 @@ if (typeof document !== "undefined") {
     const list = els.ragworkspaces;
     if (!list) return;
     if (!workspaces.length) {
-      list.replaceChildren(element("p", "note", "No RAG workspaces are visible yet. Add a vault to create this instance's own workspace, or ask your gateway admin to grant a shared workspace to this client."));
+      list.replaceChildren(element("p", "note", "No RAG workspaces are visible yet. Add a vault to create this instance's own workspace, or ask your server admin to grant a shared workspace to this client."));
       return;
     }
+    // Per-vault model: this instance's own slugs are its vaults' workspaces.
+    const own = new Set((state.status.vaultWorkspaces ?? []).map((entry) => entry.slug));
     list.replaceChildren(...workspaces.map((slug) => {
-      const local = slug === state.status.workspace?.slug;
+      const local = own.has(slug);
       const item = element("div", `workspace-label ${local ? "workspace-local" : "workspace-available"}`);
       // The API supplies slugs, not upstream workspace kinds. An index other
       // than our own is available, but is not necessarily a shared workspace.

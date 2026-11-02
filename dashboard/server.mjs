@@ -24,7 +24,7 @@ import { createSyncStatusStore } from "../lib/sync-status.mjs";
 import { createServiceController } from "../lib/services.mjs";
 import { rotateLogs } from "../lib/log-rotate.mjs";
 import { compareVersions, currentVersionValue, fetchLatestVersion } from "../lib/update-check.mjs";
-import { ensureUnifiedWorkspace, purgeVaultEmbeddings } from "../lib/unified-workspace.mjs";
+import { ensureVaultWorkspace, purgeVaultEmbeddings } from "../lib/unified-workspace.mjs";
 import { configPaths, defaultConfigRoot } from "../lib/app-config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -163,8 +163,10 @@ export function createDashboardServer({
           gitAuth,
           repositoryVisibility,
           sourceMode = "clone",
+          // Legacy unified-era fields are accepted and ignored (per-vault
+          // workspaces are minted automatically below).
           workspaceMode,
-          workspaceSlug,
+          workspaceSlug: legacyWorkspaceSlug,
           ...request
         } = input;
         if (sourceMode === "import" || request.importPath || request.location === "imported")
@@ -178,14 +180,6 @@ export function createDashboardServer({
         if (validationError) return sendJson(res, 400, { error: validationError });
         const effectiveGitAuth = gitAuthForVisibility(repositoryVisibility, gitAuth);
         await verifyAnythingllmConnection(anythingllm);
-        // One unified workspace per instance; the legacy per-vault
-        // workspaceMode/attach fields only seed the first-time attach.
-        await ensureUnifiedWorkspace({
-          registry,
-          anythingllm,
-          stateRoot: stateRootFor(env),
-          attachSlug: workspaceMode === "attach" && workspaceSlug ? String(workspaceSlug) : "",
-        });
         let discovered;
         if (sourceMode === "clone") {
           await vaultStorage.testConnection({
@@ -205,28 +199,30 @@ export function createDashboardServer({
         };
         const vault = await registry.create(vaultInput);
         await secrets.save(vault.id, effectiveGitAuth);
+        // The vault's own workspace is minted right away (per-vault model):
+        // deterministic slug, created upstream and recorded on the vault.
+        const minted = await ensureVaultWorkspace({
+          vaultId: vault.id,
+          registry,
+          anythingllm,
+        }).catch((error) => {
+          throw new Error(
+            `Vault added, but its workspace could not be created: ${
+              error instanceof Error ? error.message : String(error)
+            } (retry Embed)`,
+          );
+        });
         await rm(path.join(stateRootFor(env), "removals", `${vault.id}.json`), { force: true });
-        return sendJson(res, 201, vault);
+        return sendJson(res, 201, { ...vault, workspaceSlug: minted.workspaceSlug });
       }
       if (req.method === "GET" && url.pathname === "/api/workspace") {
-        return sendJson(res, 200, { workspace: await registry.getWorkspace() });
-      }
-      if (req.method === "POST" && url.pathname === "/api/workspace/attach") {
-        const input = await readJsonBody(req);
-        const slug = String(input?.slug ?? "").trim();
-        if (!slug) return sendJson(res, 400, { error: "slug is required" });
-        const workspace = (await anythingllm.listWorkspaces()).find(
-          (candidate) => candidate.slug === slug,
-        );
-        if (!workspace) return sendJson(res, 400, { error: "Workspace was not found" });
-        await registry.setWorkspace(workspace);
-        // Switching the unified workspace invalidates every embed manifest.
-        const stateRoot = stateRootFor(env);
-        if (stateRoot) {
-          const { rm } = await import("node:fs/promises");
-          await rm(path.join(stateRoot, "manifests"), { recursive: true, force: true });
-        }
-        return sendJson(res, 200, { workspace });
+        // Per-vault model: the instance-level workspace record is only a
+        // migration marker; each vault carries its own workspaceSlug.
+        const vaults = await registry.list();
+        return sendJson(res, 200, {
+          workspace: null,
+          vaultWorkspaces: vaults.map((vault) => ({ vaultId: vault.id, slug: vault.workspaceSlug ?? "" })),
+        });
       }
       if (req.method === "PATCH" && url.pathname.startsWith("/api/vaults/")) {
         const id = url.pathname.slice("/api/vaults/".length);
@@ -249,12 +245,14 @@ export function createDashboardServer({
           requestedAt: new Date().toISOString(),
         });
         await registry.update(id, { enabled: false });
-        const workspace = await registry.getWorkspace();
-        if (workspace) {
+        // Purge targets the vault's own workspace (per-vault model); a vault
+        // still on the legacy unified record falls back to it.
+        const workspaceSlug = vault.workspaceSlug || (await registry.getWorkspace())?.slug || "";
+        if (workspaceSlug) {
           const purge = await purgeVaultEmbeddings({
             baseUrl: env.ANYTHINGLLM_BASE_URL || "",
             apiKey: env.ANYTHINGLLM_API_KEY || "",
-            workspaceSlug: workspace.slug,
+            workspaceSlug,
             vaultId: vault.id,
             stateRoot: stateRootFor(env),
             fetchImpl,
@@ -264,6 +262,10 @@ export function createDashboardServer({
               error: "Index cleanup incomplete. Vault is disabled; retry Remove.",
               details: purge.errors,
             });
+          // The vault's own workspace leaves with it (empty by now). Best
+          // effort: a leftover empty workspace upstream is harmless.
+          if (vault.workspaceSlug === workspaceSlug)
+            await anythingllm.deleteWorkspace({ slug: workspaceSlug }).catch(() => {});
         }
         await registry.remove(id);
         await secrets.remove(id);
@@ -447,10 +449,14 @@ async function statusPayload(context) {
     ok: services.every((service) => service.running),
     systemState: classifySystemState(services),
     services,
-    workspace: await registry.getWorkspace(),
-    // Every RAG workspace the configured key can see: the instance's own
-    // unified workspace, plus gateway-granted shared workspaces when this
-    // client connects through a gateway.
+    // Per-vault model: no instance-level workspace; each vault names its own.
+    vaultWorkspaces: (await registry.list()).map((vault) => ({
+      vaultId: vault.id,
+      slug: vault.workspaceSlug ?? "",
+    })),
+    // Every RAG workspace the configured key can see: this instance's
+    // per-vault workspaces, plus server-granted shared workspaces when this
+    // client connects through a server.
     visibleWorkspaces: await visibleWorkspaces(anythingllm).catch(() => []),
     latestJob: jobs.latest(),
     jobs: jobs.list?.() ?? [],
@@ -559,7 +565,7 @@ async function probeGit(execFileImpl) {
   }
 }
 
-// The gateway console (server/dashboard) served at a subpath of the unified
+// The server console (server/dashboard) served at a subpath of the one
 // dashboard. Asset references in its index.html are relative, and unknown
 // extension-less paths fall back to the shell so deep links keep working.
 async function serveGatewayConsole(res, pathname) {

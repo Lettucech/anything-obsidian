@@ -27,7 +27,6 @@ test("local MCP exposes read-only vault tools, RAG tools, and management tools",
     "any_obs_file_list",
     "any_obs_file_read",
     "any_obs_job_get",
-    "any_obs_rag_answer",
     "any_obs_rag_search",
     "any_obs_status",
     "any_obs_vault_add",
@@ -120,14 +119,13 @@ test("vault_list entries carry the last sync outcome without error details", asy
   }
 });
 
-test("rag tools query the unified workspace with attribution and access filtering", async () => {
+test("rag tools fan out over per-vault workspaces with attribution and access filtering", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-rag-"));
   const registryPath = path.join(root, "vaults.json");
   await writeFile(registryPath, JSON.stringify({
-    workspace: { slug: "any-obs-test-01", name: "Anything Obsidian" },
     vaults: [
-      { id: "work", name: "Work", directory: "work", enabled: true, accessMode: "open", allowlist: [] },
-      { id: "secret", name: "Secret", directory: "secret", enabled: true, accessMode: "restricted", allowlist: ["scout"] },
+      { id: "work", name: "Work", directory: "work", workspaceSlug: "any-obs-test-work", enabled: true, accessMode: "open", allowlist: [] },
+      { id: "secret", name: "Secret", directory: "secret", workspaceSlug: "any-obs-test-secret", enabled: true, accessMode: "restricted", allowlist: ["scout"] },
     ],
   }));
 
@@ -135,17 +133,21 @@ test("rag tools query the unified workspace with attribution and access filterin
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url: String(url), init });
-    return {
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({
-        results: [
-          { score: 0.9, chunkSource: "work/notes/a.md" },
-          { score: 0.8, chunkSource: "secret/notes/s.md" },
-          { score: 0.7, chunkSource: "work/notes/b.md" },
-        ],
-      }),
-    };
+    const parsed = new URL(String(url));
+    if (parsed.pathname === "/api/v1/workspaces") {
+      return jsonResponse({
+        workspaces: [{ slug: "any-obs-test-work" }, { slug: "any-obs-test-secret" }],
+      });
+    }
+    const slug = decodeURIComponent(parsed.pathname.split("/")[4] ?? "");
+    return jsonResponse({
+      results: slug === "any-obs-test-secret"
+        ? [{ score: 0.8, chunkSource: "secret/notes/s.md" }]
+        : [
+            { score: 0.9, chunkSource: "work/notes/a.md" },
+            { score: 0.7, chunkSource: "work/notes/b.md" },
+          ],
+    });
   };
 
   const previous = captureEnv({
@@ -160,9 +162,16 @@ test("rag tools query the unified workspace with attribution and access filterin
       name: "any_obs_rag_search",
       arguments: { query: "meeting notes" },
     })).content[0].text);
-    assert.deepEqual(requests.at(-1).url, "http://anythingllm.test/api/v1/workspace/any-obs-test-01/vector-search");
+    // Both vault workspaces were searched, one vector-search each.
+    assert.deepEqual(
+      requests.filter((request) => request.url.endsWith("/vector-search")).map((request) => request.url),
+      [
+        "http://anythingllm.test/api/v1/workspace/any-obs-test-work/vector-search",
+        "http://anythingllm.test/api/v1/workspace/any-obs-test-secret/vector-search",
+      ],
+    );
     // The restricted vault is invisible to an anonymous caller even though
-    // its chunks live in the shared index.
+    // its workspace answered.
     assert.deepEqual(search.results.map((chunk) => [chunk.vaultId, chunk.vaultPath]), [
       ["work", "notes/a.md"],
       ["work", "notes/b.md"],
@@ -182,15 +191,6 @@ test("rag tools query the unified workspace with attribution and access filterin
     assert.equal(denied.isError, true);
     assert.match(denied.content[0].text, /restricted and this caller has no access/);
 
-    const answer = JSON.parse((await client.callTool({
-      name: "any_obs_rag_answer",
-      arguments: { question: "what changed?" },
-    })).content[0].text);
-    assert.deepEqual(requests.at(-1).url, "http://anythingllm.test/api/v1/workspace/any-obs-test-01/chat");
-    // The tool takes no mode argument: it always talks strict RAG query mode.
-    assert.deepEqual(JSON.parse(requests.at(-1).init.body), { message: "what changed?", mode: "query" });
-    assert.equal(answer.results.length, 3);
-
     await client.close();
     await server.close();
   } finally {
@@ -199,12 +199,18 @@ test("rag tools query the unified workspace with attribution and access filterin
   }
 });
 
-test("rag tools explain themselves when no unified workspace is configured yet", async () => {
+test("rag tools explain themselves when no workspace is visible yet", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-rag-empty-"));
   const registryPath = path.join(root, "vaults.json");
   await writeFile(registryPath, JSON.stringify({ vaults: [] }));
 
-  const previous = captureEnv({ VAULT_REGISTRY_PATH: registryPath });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => jsonResponse({ workspaces: [] });
+  const previous = captureEnv({
+    VAULT_REGISTRY_PATH: registryPath,
+    ANYTHINGLLM_BASE_URL: "http://anythingllm.test",
+    ANYTHINGLLM_API_KEY: "key",
+  });
   try {
     const [client, server] = await connect("local", ANONYMOUS_IDENTITY);
     const result = await client.callTool({ name: "any_obs_rag_search", arguments: { query: "anything" } });
@@ -213,6 +219,7 @@ test("rag tools explain themselves when no unified workspace is configured yet",
     await client.close();
     await server.close();
   } finally {
+    globalThis.fetch = originalFetch;
     restoreEnv(previous);
   }
 });
@@ -306,68 +313,19 @@ function jsonResponse(data) {
   };
 }
 
-test("rag_answer targets the instance's own unified workspace, not an arbitrary visible one", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-answer-own-"));
-  const registryPath = path.join(root, "vaults.json");
-  await writeFile(registryPath, JSON.stringify({
-    workspace: { slug: "any-obs-own-01", name: "Anything Obsidian" },
-    vaults: [],
-  }));
-
-  const originalFetch = globalThis.fetch;
-  const chatUrls = [];
-  globalThis.fetch = async (url, init = {}) => {
-    const parsed = new URL(String(url));
-    if (parsed.pathname === "/api/v1/workspaces") {
-      // The own workspace is deliberately not first: answer mode must still
-      // pick it over the first-listed grant.
-      return jsonResponse({ workspaces: [{ slug: "company-kb" }, { slug: "any-obs-own-01" }] });
-    }
-    if (parsed.pathname.endsWith("/chat")) {
-      chatUrls.push(String(url));
-      return jsonResponse({ textResponse: "answered from own workspace" });
-    }
-    return jsonResponse({ results: [] });
-  };
-
-  const previous = captureEnv({
-    VAULT_REGISTRY_PATH: registryPath,
-    ANYTHINGLLM_BASE_URL: "http://anythingllm.test",
-    ANYTHINGLLM_API_KEY: "user-token",
-  });
-  try {
-    const [client, server] = await connect("local", ANONYMOUS_IDENTITY);
-    const answer = JSON.parse((await client.callTool({
-      name: "any_obs_rag_answer",
-      arguments: { question: "what changed?" },
-    })).content[0].text);
-    assert.equal(answer.textResponse, "answered from own workspace");
-    assert.deepEqual(chatUrls, ["http://anythingllm.test/api/v1/workspace/any-obs-own-01/chat"]);
-
-    await client.close();
-    await server.close();
-  } finally {
-    globalThis.fetch = originalFetch;
-    restoreEnv(previous);
-  }
-});
-
-test("a consumer client with no vaults still searches gateway-granted shared workspaces", async () => {
+test("a consumer client with no vaults still searches server-granted shared workspaces", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "anything-obsidian-mcp-consumer-"));
   const registryPath = path.join(root, "vaults.json");
-  // No workspace in the registry, no vaults at all: this client exists only
-  // to consume the gateway's shared knowledge.
+  // No vaults at all: this client exists only to consume the server's
+  // shared knowledge.
   await writeFile(registryPath, JSON.stringify({ vaults: [] }));
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
     const parsed = new URL(String(url));
     if (parsed.pathname === "/api/v1/workspaces") {
-      // The gateway answers with the granted shared workspace only.
+      // The server answers with the granted shared workspace only.
       return jsonResponse({ workspaces: [{ slug: "company-kb" }] });
-    }
-    if (parsed.pathname.endsWith("/chat")) {
-      return jsonResponse({ textResponse: "answer" });
     }
     const slug = decodeURIComponent(parsed.pathname.split("/")[4] ?? "");
     return jsonResponse({
@@ -392,12 +350,6 @@ test("a consumer client with no vaults still searches gateway-granted shared wor
     assert.deepEqual(search.results.map((chunk) => [chunk.workspace, chunk.text]), [
       ["company-kb", "shared hit"],
     ]);
-
-    const answer = JSON.parse((await client.callTool({
-      name: "any_obs_rag_answer",
-      arguments: { question: "hi" },
-    })).content[0].text);
-    assert.equal(answer.textResponse, "answer");
 
     await client.close();
     await server.close();

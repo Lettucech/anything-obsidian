@@ -52,7 +52,7 @@ export function registerManagementTools(server, api, { z }) {
 
   server.tool(
     "any_obs_vault_add",
-    isContainer() ? "Clone an HTTP(S) Git repository into this Docker client's data volume and unified RAG workspace. Local directory import is unavailable. Requires repository URL, commit identity and visibility." : "Add a vault to management: clone a Git repository, import a directory beneath the vault root, or import any directory on this machine by passing its absolute importPath. The vault embeds into this instance's unified RAG workspace. Requires the same fields as the dashboard's Add vault dialog (repository URL or import directory, commit identity, visibility).",
+    isContainer() ? "Clone an HTTP(S) Git repository into this Docker client's data volume and its own RAG workspace. Local directory import is unavailable. Requires repository URL, commit identity and visibility." : "Add a vault to management: clone a Git repository, import a directory beneath the vault root, or import any directory on this machine by passing its absolute importPath. The vault embeds into its own RAG workspace (one per vault). Requires the same fields as the dashboard's Add vault dialog (repository URL or import directory, commit identity, visibility).",
     {
       sourceMode: z.enum(isContainer() ? ["clone"] : ["clone", "import"]).default("clone"),
       repositoryUrl: z.string().optional(),

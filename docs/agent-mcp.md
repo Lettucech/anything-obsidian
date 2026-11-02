@@ -23,12 +23,13 @@ filesystem authority to make edits outside this project's MCP scope.
 non-secret sync settings, source-of-truth status, and RAG freshness boundary so
 the agent can assess the edit surface before opening that directory.
 
-RAG is unified across the instance: both `any_obs_rag_*` tools query one
-shared index covering every managed vault, so an agent never has to know
-which vault holds the answer before searching. Search results carry each
-chunk's `vaultId` and vault-relative path (mapping straight to
-`any_obs_file_read` in the owning vault), and the optional `vaultId` argument
-filters results to one vault.
+RAG is one query across every workspace this instance can see — one
+workspace per managed vault, plus any server-granted shared workspaces — so
+an agent never has to know which vault holds the answer before searching.
+Search results carry each chunk's `vaultId` and vault-relative path (mapping
+straight to `any_obs_file_read` in the owning vault), every vault's best
+chunk is guaranteed a slot in the merged results, and the optional `vaultId`
+argument filters to one vault.
 
 Read and RAG tools:
 
@@ -38,26 +39,28 @@ Read and RAG tools:
 - `any_obs_file_list`
 - `any_obs_file_read`
 - `any_obs_rag_search`
-- `any_obs_rag_answer`
 
 Management tools (local profile only): `any_obs_vault_add`,
 `any_obs_vault_update`, `any_obs_vault_remove`, `any_obs_vault_sync`,
 `any_obs_vault_embed`, `any_obs_vault_doctor`, `any_obs_job_get`,
 `any_obs_status`, `any_obs_autostart`.
 
-Search and answer apply relevance differently. `any_obs_rag_search` is a raw
-vector search: with an explicit low `scoreThreshold` it returns the nearest
-chunks regardless of quality. `any_obs_rag_answer` is strict RAG in AnythingLLM
-query mode and refuses when nothing scores above the workspace's relevance
-cutoff — generic queries can legitimately answer nothing while search still
-returns chunks. Reach for search first; reserve answer for questions that
-should be synthesised.
+**Search-first, no chat tool:** `any_obs_rag_answer` was retired with the
+unified workspace (2026-11) — a chat call answers from exactly one
+workspace, and the per-vault model has one per vault. Retrieve attributed
+chunks with `any_obs_rag_search` and synthesize yourself, where the
+conversation context lives. Two behaviors follow from that: when chunks from
+different vaults disagree (same information, different versions), point both
+versions out and ask which is current; and when every score looks weak, say
+so instead of forcing an answer. AnythingLLM is a pure RAG index engine for
+any-obs — no any-obs code path touches its LLM.
 
-Two more things worth knowing: answer targets this instance's own unified
-workspace (gateway-granted shared workspaces are search surfaces), and
-chunks from workspaces outside the local registry — for example shared
-team knowledge — carry only their `workspace` tag, no `vaultId`, because
-they cannot be resolved to a locally readable file.
+`any_obs_rag_search` is a raw vector search: with an explicit low
+`scoreThreshold` it returns the nearest chunks regardless of quality, so a
+weak retrieval is visible in the scores rather than hidden behind a refusal
+or a confident paragraph. Chunks from workspaces outside the local registry
+— for example shared team knowledge — carry only their `workspace` tag, no
+`vaultId`, because they cannot be resolved to a locally readable file.
 
 For a reusable retrieval and edit workflow, install the repository skill:
 
@@ -70,7 +73,7 @@ Its context-first flow is:
 1. List vaults with `any_obs_vault_list`; file operations and edits always
    target one explicit `vaultId`.
 2. Call `any_obs_vault_context` and read the returned policy files.
-3. Use unified RAG search to discover candidates (results name the owning
+3. Use RAG search to discover candidates (results name the owning
    vault) and raw file reads to verify source truth.
 4. For an approved edit, open the returned local directory and use normal
    filesystem and Git checks under the vault's own rules.

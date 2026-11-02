@@ -13,6 +13,9 @@ export function createAnythingllmClient({ baseUrl, apiKey, fetchImpl = fetch, ti
       const data = await request("/api/v1/workspaces", { method: "GET" });
       return Array.isArray(data?.workspaces) ? data.workspaces.map(workspace) : [];
     },
+    async deleteWorkspace({ slug }) {
+      await request(`/api/v1/workspace/${encodeURIComponent(slug)}`, { method: "DELETE" });
+    },
   };
 
   async function request(apiPath, init) {

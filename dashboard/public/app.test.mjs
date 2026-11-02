@@ -83,10 +83,10 @@ test("slugifyName turns a folder name into a valid vault id", () => {
   assert.equal(slugifyName(""), "");
 });
 
-test("dashboard metrics summarize the unified workspace, schedules, and services", () => {
+test("dashboard metrics summarize RAG workspaces, schedules, and services", () => {
   assert.deepEqual(dashboardMetrics({
-    workspace: { slug: "any-obs-test-01" },
-    visibleWorkspaces: ["any-obs-test-01", "company-kb"],
+    vaultWorkspaces: [{ vaultId: "work", slug: "any-obs-test-work" }],
+    visibleWorkspaces: ["any-obs-test-work", "company-kb"],
     services: [
       { running: true, health: { ok: true } },
       { running: true, health: { ok: false } },

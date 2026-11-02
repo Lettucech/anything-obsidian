@@ -25,7 +25,7 @@ function createDashboardServer(options) {
 
 import { createSyncStatusStore } from "../lib/sync-status.mjs";
 
-test("vault routes clone a repository and initialise the unified workspace", async () => {
+test("vault routes clone a repository and mint the vault's own workspace", async () => {
   const registry = fakeRegistry();
   const workspaceNames = [];
   const anythingllm = {
@@ -34,7 +34,7 @@ test("vault routes clone a repository and initialise the unified workspace", asy
     },
     async createWorkspace({ name }) {
       workspaceNames.push(name);
-      return { id: 1, name, slug: "unified" };
+      return { id: 1, name, slug: "any-obs-test-host-work" };
     },
   };
   const secrets = fakeSecrets();
@@ -54,14 +54,15 @@ test("vault routes clone a repository and initialise the unified workspace", asy
 
   assert.equal(created.status, 201);
   assert.equal(created.body.id, "work");
-  assert.equal(created.body.workspaceSlug, undefined);
+  assert.equal(created.body.workspaceSlug, "any-obs-test-host-work");
   assert.equal(created.body.gitBranch, "main");
-  // One namespaced workspace per instance, shared by every vault.
+  // One namespaced workspace per vault, minted at creation.
   assert.equal(workspaceNames.length, 1);
-  assert.match(workspaceNames[0], /^any-obs-/);
-  assert.equal((await registry.getWorkspace()).slug, "unified");
+  assert.match(workspaceNames[0], /^any-obs-.*-work$/);
+  assert.equal(await registry.getWorkspace(), null);
   assert.deepEqual((await request(app, "GET", "/api/workspace")).body, {
-    workspace: { slug: "unified", name: workspaceNames[0] },
+    workspace: null,
+    vaultWorkspaces: [{ vaultId: "work", slug: "any-obs-test-host-work" }],
   });
   assert.equal(vaultStorage.cloned[0].repositoryUrl, "https://github.com/acme/work.git");
   assert.deepEqual(vaultStorage.cloned[0].gitAuth, {
@@ -76,11 +77,18 @@ test("vault routes clone a repository and initialise the unified workspace", asy
   assert.equal((await request(app, "GET", "/api/vaults")).body.vaults.length, 1);
 });
 
-test("vault routes import a local repository into an attached workspace and purge its index on removal", async () => {
+test("vault routes import a local repository and purge its workspace on removal", async () => {
   const registry = fakeRegistry();
+  const deletedWorkspaces = [];
   const anythingllm = {
     async listWorkspaces() {
-      return [{ id: 2, name: "Personal", slug: "personal" }];
+      return [];
+    },
+    async createWorkspace({ name }) {
+      return { id: 2, name, slug: name };
+    },
+    async deleteWorkspace({ slug }) {
+      deletedWorkspaces.push(slug);
     },
   };
   const secrets = fakeSecrets();
@@ -96,10 +104,6 @@ test("vault routes import a local repository into an attached workspace and purg
     native: nativePaths(),
   });
 
-  const attached = await request(app, "POST", "/api/workspace/attach", { slug: "personal" });
-  assert.equal(attached.status, 200);
-  assert.equal(attached.body.workspace.slug, "personal");
-
   const created = await request(app, "POST", "/api/vaults", {
     sourceMode: "import",
     id: "personal",
@@ -110,11 +114,13 @@ test("vault routes import a local repository into an attached workspace and purg
     gitUserEmail: "personal@example.test",
   });
   assert.equal(created.status, 201);
+  assert.match(created.body.workspaceSlug, /-personal$/);
   assert.equal((await request(app, "DELETE", "/api/vaults/personal")).status, 204);
   assert.deepEqual(secrets.removed, ["personal"]);
   assert.deepEqual((await request(app, "GET", "/api/vaults")).body.vaults, []);
-  // Removal leaves the workspace alone but clears the vault's derived data.
-  assert.equal((await registry.getWorkspace()).slug, "personal");
+  // Removal clears the vault's derived data and takes its own (now empty)
+  // workspace with it.
+  assert.deepEqual(deletedWorkspaces, [created.body.workspaceSlug]);
   assert.deepEqual(
     purge.calls
       .filter(({ init }) => init.method === "DELETE")
@@ -123,7 +129,7 @@ test("vault routes import a local repository into an attached workspace and purg
   );
 });
 
-test("workspace attach rejects unknown slugs", async () => {
+test("the retired workspace attach route is gone", async () => {
   const app = createDashboardServer({
     jobs: fakeJobs(),
     registry: fakeRegistry(),
@@ -138,13 +144,10 @@ test("workspace attach rejects unknown slugs", async () => {
     native: nativePaths(),
   });
 
-  assert.equal((await request(app, "POST", "/api/workspace/attach", { slug: "" })).status, 400);
-  const missing = await request(app, "POST", "/api/workspace/attach", { slug: "nope" });
-  assert.equal(missing.status, 400);
-  assert.match(missing.body.error, /Workspace was not found/);
+  assert.equal((await request(app, "POST", "/api/workspace/attach", { slug: "known" })).status, 404);
 });
 
-test("vault creation falls back to a namespaced unified workspace name", async () => {
+test("vault creation mints a namespaced per-vault workspace name", async () => {
   const createdWorkspaces = [];
   const app = createDashboardServer({
     jobs: fakeJobs(),
@@ -155,7 +158,7 @@ test("vault creation falls back to a namespaced unified workspace name", async (
       },
       async createWorkspace({ name }) {
         createdWorkspaces.push(name);
-        return { id: 3, name, slug: "any-obs-test-01" };
+        return { id: 3, name, slug: name };
       },
     },
     vaultStorage: fakeVaultStorage(),
@@ -176,7 +179,7 @@ test("vault creation falls back to a namespaced unified workspace name", async (
 
   assert.equal(response.status, 201);
   assert.deepEqual(createdWorkspaces, [createdWorkspaces[0]]);
-  assert.match(createdWorkspaces[0], /^any-obs-/);
+  assert.match(createdWorkspaces[0], /^any-obs-.*-diary$/);
 });
 
 test("retired agent and lan routes answer 404", async () => {
