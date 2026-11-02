@@ -59,8 +59,10 @@ curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/in
 anything-obsidian status --json   # exit 0 + "ok": true == done
 ```
 
-For a client, collect its gateway URL and issued user token; a solo client may
-use AnythingLLM directly. For a gateway, collect the external AnythingLLM URL
+For a client, setup asks the mode explicitly: local (AnythingLLM URL +
+developer key, the default) or join a gateway (gateway URL + issued user
+token). For serving others, enable the gateway feature after a local setup
+(`gateway on` or `setup --server`); collect the external AnythingLLM URL
 and developer API key (Settings → Developer API). Never invent a credential. Verify with `status --json` after every change.
 
 The installer calls `setup`, which configures the installation, starts the

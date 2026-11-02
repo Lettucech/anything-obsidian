@@ -139,6 +139,53 @@ test("rejected credentials are not saved and services are not started", async (t
   assert.deepEqual(f.calls, []);
 });
 
+function fakePromptFactory(f, questions) {
+  return () => ({
+    question: async (text, fallback) => {
+      questions.push(text);
+      const answer = f.answers.shift();
+      return answer === undefined ? fallback : answer;
+    },
+    confirm: async () => true,
+    secret: async (text, fallback) => {
+      questions.push(text);
+      const answer = f.answers.shift();
+      return answer === undefined ? fallback : answer;
+    },
+    close() {},
+  });
+}
+
+test("interactive setup asks the mode and collects gateway join values separately", async (t) => {
+  const f = await fixture(t);
+  const questions = [];
+  f.deps.promptFactory = fakePromptFactory(f, questions);
+  f.answers = ["2", "http://gateway.test", "issued-token"];
+  assert.equal(await f.run(["setup", "--vaults-root", f.root + "/vaults"]), 0);
+  const asked = questions.join("\n");
+  assert.match(asked, /joining a gateway/);
+  assert.match(asked, /Gateway URL/);
+  assert.match(asked, /User token from your administrator/);
+  assert.doesNotMatch(asked, /developer API key/);
+  const config = await f.store.load();
+  assert.equal(config.anythingllmBaseUrl, "http://gateway.test");
+  assert.equal(config.apiKey, "issued-token");
+});
+
+test("interactive setup defaults to the local AnythingLLM prompts", async (t) => {
+  const f = await fixture(t);
+  const questions = [];
+  f.deps.promptFactory = fakePromptFactory(f, questions);
+  // Empty answer accepts the default mode (local).
+  f.answers = ["", "http://anythingllm.test", "dev-key"];
+  assert.equal(await f.run(["setup", "--vaults-root", f.root + "/vaults"]), 0);
+  const asked = questions.join("\n");
+  assert.match(asked, /AnythingLLM URL/);
+  assert.match(asked, /AnythingLLM developer API key/);
+  assert.doesNotMatch(asked, /User token from your administrator/);
+  assert.equal((await f.store.load()).apiKey, "dev-key");
+});
+
 test("status fails for stopped or unhealthy services, and succeeds only when every required service is ready", async (t) => {
   const f = await fixture(t);
   await f.run(["setup", ...clientFlags(f.root)]);

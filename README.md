@@ -65,8 +65,11 @@ Choose **native** when you need to import local directories, or the optional
 Docker uses Git sources and separate persistent volumes; it does not import host
 directories. Both flavors use the same indexing pipeline and external AnythingLLM.
 
-Install once. The installer prepares the app and its dependencies, asks for
-connection details, then starts and verifies all required services:
+Install once. The installer prepares the app and its dependencies, asks which
+mode this machine is in, then starts and verifies the app service:
+
+- **Local** (default): the AnythingLLM URL and its developer API key.
+- **Join a gateway**: the gateway URL and the administrator-issued user token.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh

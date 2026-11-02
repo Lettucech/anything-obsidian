@@ -39,7 +39,9 @@ export const REQUIRED_NODE_MAJOR = 22;
 export const MANAGED_VAULTS_ROOT = "~/.anything-obsidian/vaults";
 const USAGE = `Usage: anything-obsidian <command>
 
-  setup       Connect and configure this machine; start its services
+  setup       Connect and configure this machine; start its services.
+              Asks the mode first: local AnythingLLM (URL + developer key)
+              or join a gateway (URL + administrator-issued user token).
   start       Start the app service in the background (idempotent)
   stop        Stop the app service; preserve autostart preference
   restart     Restart the app service and verify readiness
@@ -54,12 +56,12 @@ const USAGE = `Usage: anything-obsidian <command>
 One install, one process, one dashboard. The gateway is an opt-in feature:
 enable it with "gateway on" or in the dashboard, then manage users and shared
 workspaces at /gateway/.
-  --url <url>          AnythingLLM URL (or a gateway URL when joining one)
-  --api-key <value>    AnythingLLM developer key, or a user token from a gateway
+  --url <url>          AnythingLLM URL (local mode) or gateway URL (join mode)
+  --api-key <value>    AnythingLLM developer key (local) or gateway user token (join)
   --vaults-root <path> Vault root
   --port <number>      Dashboard port (setup) or gateway public port (setup --server)
   --admin-port <port>  Legacy gateway admin port, recorded for compatibility
-  --server             Alias: setup, then enable the gateway feature
+  --server             Alias: local setup, then enable the gateway feature
 LAN: lan on --allowed-hosts <comma-separated hostnames or IPs>
 
 Setup enables autostart by default. macOS starts after login; Linux needs
@@ -319,19 +321,43 @@ async function setup(ctx, flags) {
       !(await prompt.confirm("Replace this configuration? [y/N] ", false))
     )
       throw new Error("Setup cancelled; existing configuration was kept");
+    // Two different credential kinds deserve two different questions. The
+    // mode is asked explicitly; --server always means local AnythingLLM
+    // (it enables this machine's own gateway feature afterwards).
+    let mode = server ? "local" : null;
+    if (prompt && !mode) {
+      const answer = await prompt.question(
+        [
+          "Is this machine joining a gateway, or talking to AnythingLLM directly?",
+          "  1) Local — direct AnythingLLM (default)",
+          "  2) Join a gateway as a client",
+          "Choose [1]: ",
+        ].join("\n"),
+        "1",
+      );
+      mode = ["2", "gateway", "g", "join"].includes(answer.trim().toLowerCase())
+        ? "gateway"
+        : "local";
+    }
+    if (!mode) mode = "local"; // flag-driven setup: prompts are skipped anyway
     const defaultUrl =
       previousClient?.anythingllmBaseUrl ||
       previousGateway?.anythingllmBaseUrl ||
-      "http://localhost:21501";
+      (mode === "gateway" ? "http://localhost:21500" : "http://localhost:21501");
     const anythingllmBaseUrl =
       flags.url ||
-      (await prompt.question(`AnythingLLM URL [${defaultUrl}] `, defaultUrl));
+      (await prompt.question(
+        `${mode === "gateway" ? "Gateway" : "AnythingLLM"} URL [${defaultUrl}] `,
+        defaultUrl,
+      ));
     const parsed = new URL(anythingllmBaseUrl);
     if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("URL must use HTTP(S)");
     const apiKey =
       flags["api-key"] ||
       (await (prompt.secret ?? prompt.question)(
-        "API key (AnythingLLM developer key, or a user token from your gateway): ",
+        mode === "gateway"
+          ? "User token from your administrator: "
+          : "AnythingLLM developer API key: ",
         previousClient?.apiKey || "",
       ));
     if (!apiKey) throw new Error("An API key or user token is required");
@@ -410,7 +436,13 @@ async function setup(ctx, flags) {
     log(
       server && isContainer(env)
         ? `Configuration saved: ${path.join(ctx.root, "gateway", "gateway.json")}`
-        : `Configuration saved: ${store.paths.configPath}${server ? " (gateway feature enabled)" : ""}`,
+        : `Configuration saved: ${store.paths.configPath}${
+            server
+              ? " (gateway feature enabled)"
+              : mode === "gateway"
+                ? " (joined a gateway)"
+                : ""
+          }`,
     );
     return { role: server ? "gateway" : "client", reconfigure: Boolean(previous) };
   } finally {

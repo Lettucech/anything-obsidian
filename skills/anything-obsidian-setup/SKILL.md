@@ -26,18 +26,19 @@ the bridge. Source directories are the user's notes and must be preserved.
 
 One install, one process, one dashboard. A single app service hosts the
 dashboard (21502), local MCP (21503) and sync scheduler; the gateway and the
-LAN MCP are opt-in in-process listeners. Decide with the user:
+LAN MCP are opt-in in-process listeners. Interactive `setup` asks the mode
+first — the two credential kinds are never merged into one question:
 
-- Solo: a direct AnythingLLM URL and developer API key. The gateway feature
-  stays off (the default).
-- Serving others: the same install with the gateway feature enabled
+- **Local** (default, gateway feature off): the AnythingLLM URL and its
+  developer API key.
+- **Join a gateway**: the gateway URL (`http://<server>:21500`) and the
+  administrator-issued user token. Members can index their own vaults;
+  readers can search.
+- **Serving others**: local setup plus the gateway feature
   (`anything-obsidian gateway on`, or `install.sh --server`). Collect the
   external AnythingLLM URL and developer API key from Settings → Developer
   API; it is stored in `gateway/gateway.json` and belongs only on that
   machine.
-- Joining a gateway: collect the gateway URL
-  (`http://<server>:21500`) and the administrator-issued user token. Members
-  can index their own vaults; readers can search.
 
 Never invent credentials or send them anywhere except the configured upstream.
 Propose `~/.anything-obsidian/vaults` for managed vaults. Existing note directories
