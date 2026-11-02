@@ -12,6 +12,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { z } from "zod";
 
 import { mcpHttpOptions } from "./http-config.mjs";
+import { extractChunks, mergeChunksByScore, partialResultsNote, vectorSearchJson } from "../lib/fanout.mjs";
 import { ADMIN_IDENTITY, ANONYMOUS_IDENTITY, loadVaults, loadWorkspace, resolveVault, visibleVaults } from "./vault-registry.mjs";
 import { attributeRagResults } from "./rag-attribution.mjs";
 import { resolveIdentity } from "./agent-identity.mjs";
@@ -151,17 +152,24 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
       const accessibleIds = new Set(accessible.map((vault) => vault.id));
       const blockedVaultIds = vaults.filter((vault) => !accessibleIds.has(vault.id)).map((vault) => vault.id);
 
-      const bodies = workspaces.map((slug) =>
-        requestJson(vectorSearchPathTemplate.replace("{slug}", encodeURIComponent(slug)), {
-          method: "POST",
-          body: JSON.stringify({ query, topN, ...(scoreThreshold !== undefined ? { scoreThreshold } : {}) }),
-        }, { baseUrl, apiKey })
+      // Fan-out mechanics live in lib/fanout.mjs, shared with the server
+      // plane; attribution stays here because only this side knows the
+      // local vault registry.
+      const responses = await Promise.all(workspaces.map((slug) =>
+        vectorSearchJson({
+          slug,
+          query,
+          topN,
+          scoreThreshold,
+          baseUrl,
+          apiKey,
+          pathTemplate: vectorSearchPathTemplate,
+        })
           .then((data) => ({ slug, data }))
           .catch((error) => ({ slug, error: error instanceof Error ? error.message : String(error) })),
-      );
-      const responses = await Promise.all(bodies);
+      ));
 
-      const merged = [];
+      const answered = [];
       const failures = [];
       const attribution = { attributed: 0, dropped: 0 };
       for (const response of responses) {
@@ -176,50 +184,19 @@ function registerRagTools(server, { baseUrl, apiKey, vaultRegistryPath }, identi
         });
         attribution.attributed += summary.attributed;
         attribution.dropped += summary.dropped;
-        for (const chunk of extractRagChunks(enriched)) {
-          merged.push({ ...chunk, workspace: response.slug });
-        }
+        answered.push({ slug: response.slug, chunks: extractChunks(enriched) });
       }
-      merged.sort((a, b) => (typeof b.score === "number" ? b.score : 0) - (typeof a.score === "number" ? a.score : 0));
+      const note = partialResultsNote(failures);
       const payload = {
         query,
-        results: merged.slice(0, topN),
+        results: mergeChunksByScore({ answered, topN }),
         vaultAttribution: attribution,
         workspaces: { searched: workspaces, failed: failures },
-        ...(failures.length ? { note: "Results are partial: some workspaces failed to answer" } : {}),
+        ...(note ? { note } : {}),
       };
       return asJsonContent(payload);
     },
   );
-}
-
-// AnythingLLM has never committed to one vector-search response shape: find
-// the first array of chunk-looking objects anywhere in the payload.
-function extractRagChunks(data) {
-  const chunks = [];
-  walk(data);
-  return chunks;
-
-  function walk(value) {
-    if (Array.isArray(value)) {
-      if (value.some(looksLikeChunk)) {
-        chunks.push(...value.filter(looksLikeChunk));
-        return;
-      }
-      for (const item of value) walk(item);
-      return;
-    }
-    if (value && typeof value === "object") {
-      for (const inner of Object.values(value)) {
-        if (Array.isArray(inner) || (inner && typeof inner === "object")) walk(inner);
-      }
-    }
-  }
-
-  function looksLikeChunk(item) {
-    return Boolean(item) && typeof item === "object" && !Array.isArray(item) &&
-      (typeof item.text === "string" || typeof item.score === "number");
-  }
 }
 
 // One query across everything the configured key can see. Against plain
