@@ -42,13 +42,8 @@ test("dashboard api maps every management call to its REST route", async () => {
     "DELETE /api/vaults/:id": () => null,
     "POST /api/vaults/:id/actions/:action": (call) => ({ id: "job-1", actionId: call.body ?? "sync" }),
     "GET /api/jobs/:jobId": () => ({ id: "job-1", status: "succeeded" }),
-    "GET /api/agents": () => ({ agents: [] }),
-    "POST /api/agents": (call) => ({ agent: { name: call.body.name }, token: "raw-token" }),
-    "DELETE /api/agents/:name": () => ({ removed: true }),
     "GET /api/autostart": () => ({ enabled: true }),
     "POST /api/autostart": (call) => ({ enabled: call.body.action === "on" }),
-    "GET /api/lan": () => ({ enabled: false }),
-    "POST /api/lan": (call) => ({ enabled: true, ...(call.body.action === "on" ? { token: "generated" } : {}) }),
   });
   const api = dashboardApi({ baseUrl: "http://dash", fetchImpl: dashboard.fetchImpl });
 
@@ -57,9 +52,7 @@ test("dashboard api maps every management call to its REST route", async () => {
   assert.deepEqual(await api.updateVault("work", { name: "W" }), { id: "W", patched: true });
   assert.equal(await api.removeVault("work"), null);
   assert.deepEqual(await api.job("job-1"), { id: "job-1", status: "succeeded" });
-  assert.deepEqual(await api.createAgent("scout"), { agent: { name: "scout" }, token: "raw-token" });
   assert.deepEqual(await api.setAutostart("on"), { enabled: true });
-  assert.deepEqual(await api.setLan("on"), { enabled: true, token: "generated" });
 
   assert.deepEqual(dashboard.calls.map((call) => call.key), [
     "GET /api/status",
@@ -67,9 +60,7 @@ test("dashboard api maps every management call to its REST route", async () => {
     "PATCH /api/vaults/work",
     "DELETE /api/vaults/work",
     "GET /api/jobs/job-1",
-    "POST /api/agents",
     "POST /api/autostart",
-    "POST /api/lan",
   ]);
 });
 

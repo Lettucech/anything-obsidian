@@ -37,13 +37,8 @@ export function dashboardApi({ baseUrl = process.env.AO_DASHBOARD_URL ?? DEFAULT
     removeVault: (vaultId) => request("DELETE", `/api/vaults/${encodeURIComponent(vaultId)}`),
     vaultAction: (vaultId, actionId) => request("POST", `/api/vaults/${encodeURIComponent(vaultId)}/actions/${encodeURIComponent(actionId)}`),
     job: (jobId) => request("GET", `/api/jobs/${encodeURIComponent(jobId)}`),
-    agents: () => request("GET", "/api/agents"),
-    createAgent: (name) => request("POST", "/api/agents", { name }),
-    revokeAgent: (name) => request("DELETE", `/api/agents/${encodeURIComponent(name)}`),
     autostart: () => request("GET", "/api/autostart"),
     setAutostart: (action) => request("POST", "/api/autostart", { action }),
-    lan: () => request("GET", "/api/lan"),
-    setLan: (action, token) => request("POST", "/api/lan", { action, ...(token !== undefined ? { token } : {}) }),
   };
 }
 
@@ -143,34 +138,10 @@ export function registerManagementTools(server, api, { z }) {
   );
 
   server.tool(
-    "any_obs_agent_create",
-    "Create a named MCP agent token. The raw token is returned once; store it for the client. Add the agent name to vault allowlists to scope its access.",
-    { name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "lowercase dash-separated name") },
-    async ({ name }) => asJson(await api.createAgent(name)),
-  );
-
-  server.tool(
-    "any_obs_agent_revoke",
-    "Revoke an MCP agent token. Clients using it lose MCP access immediately.",
-    { name: z.string().min(1) },
-    async ({ name }) => asJson(await api.revokeAgent(name)),
-  );
-
-  server.tool(
     "any_obs_autostart",
     "Turn the login auto-start / crash auto-restart services on or off (dashboard, scheduler, and the MCP endpoint). Changing startup preference leaves running services alone; use the CLI stop command to stop now.",
     { action: z.enum(["on", "off"]) },
     async ({ action }) => asJson(await api.setAutostart(action)),
-  );
-
-  server.tool(
-    "any_obs_lan",
-    "Manage the LAN RAG MCP endpoint: turn it on or off, or set its admin Bearer token. 'on' generates and returns a token when none is configured.",
-    {
-      action: z.enum(["on", "off", "token"]),
-      token: z.string().optional(),
-    },
-    async ({ action, token }) => asJson(await api.setLan(action, token)),
   );
 }
 

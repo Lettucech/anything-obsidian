@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // The whole installation in one process: dashboard (21502), local MCP
-// (21503), the vault-sync scheduler loop, plus the opt-in LAN MCP (21504)
-// and gateway (21500) listeners. `anything-obsidian run app` is the only
-// supervised service; feature toggles open and close listeners inside this
-// process without restarting it.
+// (21503), the vault-sync scheduler loop, plus the opt-in server listener
+// (21500). `anything-obsidian run app` is the only supervised service;
+// feature toggles open and close listeners inside this process without
+// restarting it.
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
@@ -12,6 +12,7 @@ import { createDashboardServer } from "./dashboard/server.mjs";
 import { createMcpHttpListener } from "./mcp/index.mjs";
 import { createFeatureManager } from "./lib/features.mjs";
 import { createInstallationStore } from "./lib/installation.mjs";
+import { migrateLanAgents } from "./lib/lan-migration.mjs";
 import {
   createAppConfigStore,
   defaultConfigRoot,
@@ -26,6 +27,21 @@ export async function startApp({ env = process.env, root = defaultConfigRoot({ e
   if (!config) throw new Error("This installation is not configured. Run: anything-obsidian setup");
   const paths = store.paths;
   const installation = createInstallationStore(root);
+
+  // Upgrade steps run before any listener opens: persist the "gateway" →
+  // "server" role rename, then retire the LAN flag by moving hashed agent
+  // tokens into the server user directory.
+  const roleMigration = await installation.migrate();
+  if (roleMigration.migrated)
+    console.error("[any-obs-app] installation roles migrated: gateway → server");
+  await migrateLanAgents({
+    root,
+    installation,
+    vaultRegistryPath: env.VAULT_REGISTRY_PATH || paths.registryPath,
+    log: console.error,
+  }).catch((error) =>
+    console.error(`[any-obs-app] LAN retirement failed: ${error?.message ?? error}`),
+  );
   const profile = await installation.load();
 
   // One service env, exactly what the per-role child processes used to
@@ -35,7 +51,6 @@ export async function startApp({ env = process.env, root = defaultConfigRoot({ e
     ...nativeEnv(config, paths, { env }),
     MCP_TRANSPORT: "http",
     MCP_PROFILE: "local",
-    ...(config.lanToken ? { MCP_AUTH_TOKEN: config.lanToken } : {}),
   });
 
   const features = createFeatureManager({ env, root, installation });
@@ -66,13 +81,9 @@ export async function startApp({ env = process.env, root = defaultConfigRoot({ e
 
   // Saved preferences become live listeners; a failure to start an optional
   // one must not take the app down.
-  if (profile.lan && config.lanToken)
-    await features.startLan(config.lanToken).catch((error) =>
-      console.error(`[any-obs-lan] could not start: ${error?.message ?? error}`),
-    );
-  if (profile.roles.includes("gateway"))
+  if (profile.roles.includes("server"))
     await features.startGateway().catch((error) =>
-      console.error(`[any-obs-gateway] could not start: ${error?.message ?? error}`),
+      console.error(`[any-obs-server] could not start: ${error?.message ?? error}`),
     );
   features.startScheduler();
 

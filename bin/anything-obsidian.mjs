@@ -41,28 +41,27 @@ const USAGE = `Usage: anything-obsidian <command>
 
   setup       Connect and configure this machine; start its services.
               Asks the mode with an arrow-key choice: local AnythingLLM
-              (URL + developer key) or join a gateway (URL + user token).
+              (URL + developer key) or join a server (URL + user token).
   start       Start the app service in the background (idempotent)
   stop        Stop the app service; preserve autostart preference
   restart     Restart the app service and verify readiness
   status      Show configuration, readiness and startup guarantee (--json)
   logs        Show logs: [app|dashboard|scheduler|mcp|mcp-lan|gateway] [-f|--follow]
   autostart   on | off | status (changing this does not stop running services)
-  gateway     on | off | status — serve other users through this machine (default off)
-  lan         on | off | token <value> | status
+  server      on | off | status — serve other users through this machine (default off)
+  gateway     Deprecated alias for "server"
   update      Stage, verify and activate an update; roll back failed activation
   run         <service> in the foreground for diagnostics ("app" is the merged service)
 
-One install, one process, one dashboard. The gateway is an opt-in feature:
-enable it with "gateway on" or in the dashboard, then manage users and shared
+One install, one process, one dashboard. The server is an opt-in feature:
+enable it with "server on" or in the dashboard, then manage users and shared
 workspaces at /gateway/.
-  --url <url>          AnythingLLM URL (local mode) or gateway URL (join mode)
-  --api-key <value>    AnythingLLM developer key (local) or gateway user token (join)
+  --url <url>          AnythingLLM URL (local mode) or server URL (join mode)
+  --api-key <value>    AnythingLLM developer key (local) or server user token (join)
   --vaults-root <path> Vault root
-  --port <number>      Dashboard port (setup) or gateway public port (setup --server)
-  --admin-port <port>  Legacy gateway admin port, recorded for compatibility
-  --server             Alias: local setup, then enable the gateway feature
-LAN: lan on --allowed-hosts <comma-separated hostnames or IPs>
+  --port <number>      Dashboard port (setup) or server public port (setup --server)
+  --admin-port <port>  Legacy server admin port, recorded for compatibility
+  --server             Local setup, then enable the server feature
 
 Setup enables autostart by default. macOS starts after login; Linux needs
 loginctl enable-linger for operation at boot without a login.
@@ -118,11 +117,9 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
         }
       : command === "logs"
         ? { follow: { type: "boolean", short: "f" }, lines: { type: "string" } }
-        : command === "lan"
+        : ["status", "autostart", "server", "gateway", "lan"].includes(command)
           ? { json: { type: "boolean" }, "allowed-hosts": { type: "string" } }
-          : ["status", "autostart"].includes(command)
-            ? { json: { type: "boolean" } }
-            : {};
+          : {};
   let machineReadable = false;
   try {
     const { values: flags, positionals } = parseArgs({
@@ -139,12 +136,12 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
     const context = { root, env, store, installation, gateway, controller, fetchImpl, log, deps };
     if (
       isContainer(env) &&
-      ["start", "stop", "restart", "autostart", "lan", "update"].includes(command)
+      ["start", "stop", "restart", "autostart", "update"].includes(command)
     )
       throw new Error(
         "Docker manages lifecycle and startup. Use docker compose up -d, stop, restart, or logs; rebuild the image to update.",
       );
-    if (!["run", "logs", "autostart", "lan", "gateway"].includes(command) && positionals.length)
+    if (!["run", "logs", "autostart", "lan", "server", "gateway"].includes(command) && positionals.length)
       throw new Error(`Unexpected argument: ${positionals[0]}`);
     switch (command) {
       case "setup": {
@@ -166,11 +163,14 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
         if (configured.reconfigure) await controller().restart();
         return await start(context, false);
       }
+      case "server":
       case "gateway": {
         const [action = "status", ...rest] = positionals;
         if (!["on", "off", "status"].includes(action) || rest.length)
-          throw new Error("Usage: anything-obsidian gateway on|off|status");
-        return await gatewayCommand(context, action, flags.json);
+          throw new Error(`Usage: anything-obsidian ${command} on|off|status`);
+        if (command === "gateway" && !flags.json)
+          log('Deprecation: "gateway" is now "server"; the alias keeps working.');
+        return await serverCommand(context, action, flags.json);
       }
       case "start":
         return await start(context, false);
@@ -196,51 +196,13 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
         return 0;
       }
       case "lan": {
-        const [action = "status", token] = positionals;
-        if (
-          !["on", "off", "token", "status"].includes(action) ||
-          positionals.length > (action === "token" ? 2 : 1)
-        )
-          throw new Error("Usage: anything-obsidian lan on|off|token <value>|status");
-        let config = await requireClient(store);
-        if (flags["allowed-hosts"] !== undefined) {
-          if (action !== "on") throw new Error("--allowed-hosts is only valid with lan on");
-          const hosts = flags["allowed-hosts"].split(",").map((host) => host.trim());
-          if (hosts.some((host) => !/^[a-z0-9.:[\]-]+$/i.test(host)))
-            throw new Error("Allowed hosts must be hostnames or IP addresses");
-          config = await store.save({ ...config, mcpAllowedHosts: hosts.join(",") });
-        }
-        if (action === "token" || (action === "on" && !config.lanToken)) {
-          const value = token || (await import("node:crypto")).randomBytes(32).toString("hex");
-          if (action === "token" && !token) throw new Error("A token value is required");
-          await store.save({ ...config, lanToken: value });
-          if (action === "on") {
-            if (!flags.json) log(`Save this LAN token now: ${value}`);
-            context.lanToken = value;
-          }
-        }
-        if (action === "on" || action === "off") await controller().setLan(action === "on");
-        if (action === "token" && (await installation.load()).lan) {
-          // The listener picks the new token up by cycling: off then on.
-          await dashboardRequest(context, "POST", "/api/lan", { action: "off" }).catch(() => {});
-          await dashboardRequest(context, "POST", "/api/lan", { action: "on" }).catch(() => {
-            if (!flags.json) log("The running app could not be reached; it restarts the LAN listener with the new token at next start.");
-          });
-        } else if (action === "on" || action === "off") {
-          const applied = await dashboardRequest(context, "POST", "/api/lan", {
-            action,
-          }).catch((error) => (unreachable(error) ? null : Promise.reject(error)));
-          if (!applied && !flags.json)
-            log("App is not running; the listener opens at the next start.");
-        }
-        const profile = await installation.load();
+        // The LAN MCP listener (21504) was retired; remote access is the
+        // server feature. Existing agent tokens migrate automatically at the
+        // next app start.
         log(
           flags.json
-            ? JSON.stringify({
-                enabled: profile.lan,
-                ...(context.lanToken ? { token: context.lanToken } : {}),
-              })
-            : `LAN MCP: ${profile.lan ? "on" : "off"}`,
+            ? JSON.stringify({ deprecated: true, message: "LAN MCP was removed; use 'anything-obsidian server on' and user tokens" })
+            : "LAN MCP was removed. For remote access run: anything-obsidian server on — then issue user tokens in the dashboard. Existing LAN agent tokens migrate automatically at the next app start.",
         );
         return 0;
       }
@@ -323,19 +285,19 @@ async function setup(ctx, flags) {
       throw new Error("Setup cancelled; existing configuration was kept");
     // Two different credential kinds deserve two different questions. The
     // mode is asked explicitly (arrow-key choice on a terminal); --server
-    // always means local AnythingLLM (it enables this machine's own gateway
+    // always means local AnythingLLM (it enables this machine's own server
     // feature afterwards).
     let mode = server ? "local" : null;
     if (prompt && !mode) {
       const index = prompt.choose
         ? await prompt.choose(
-            "Is this machine joining a gateway, or talking to AnythingLLM directly?",
-            ["Local — direct AnythingLLM", "Join a gateway as a client"],
+            "Is this machine joining a server, or talking to AnythingLLM directly?",
+            ["Local — direct AnythingLLM", "Join a server as a client"],
             { defaultIndex: 0 },
           )
         : Number(
             (await prompt.question(
-              "Local (default) or join a gateway? [1=local, 2=gateway] ",
+              "Local (default) or join a server? [1=local, 2=server] ",
               "1",
             )) || "1",
           ) - 1;
@@ -349,7 +311,7 @@ async function setup(ctx, flags) {
     const anythingllmBaseUrl =
       flags.url ||
       (await prompt.question(
-        `${mode === "gateway" ? "Gateway" : "AnythingLLM"} URL [${defaultUrl}] `,
+        `${mode === "gateway" ? "Server" : "AnythingLLM"} URL [${defaultUrl}] `,
         defaultUrl,
       ));
     const parsed = new URL(anythingllmBaseUrl);
@@ -362,6 +324,8 @@ async function setup(ctx, flags) {
           : "AnythingLLM developer API key: ",
         previousClient?.apiKey || "",
       ));
+    // (mode "gateway" is the join-a-server flow; the name predates the
+    // gateway→server rename and stays internal.)
     if (!apiKey) throw new Error("An API key or user token is required");
     const probe = await fetchWithTimeout(
       fetchImpl,
@@ -434,19 +398,19 @@ async function setup(ctx, flags) {
       });
     await store.ensureLayout();
     if (!isContainer(env) || !server) await installation.addRole("client");
-    if (server) await installation.addRole("gateway");
+    if (server) await installation.addRole("server");
     log(
       server && isContainer(env)
         ? `Configuration saved: ${path.join(ctx.root, "gateway", "gateway.json")}`
         : `Configuration saved: ${store.paths.configPath}${
             server
-              ? " (gateway feature enabled)"
+              ? " (server feature enabled)"
               : mode === "gateway"
-                ? " (joined a gateway)"
+                ? " (joined a server)"
                 : ""
           }`,
     );
-    return { role: server ? "gateway" : "client", reconfigure: Boolean(previous) };
+    return { role: server ? "server" : "client", reconfigure: Boolean(previous) };
   } finally {
     prompt?.close();
   }
@@ -460,7 +424,7 @@ async function start(ctx, restart) {
     );
   if (migration?.convertedGatewayOnly)
     ctx.log(
-      "Gateway-only install converted: client configured from gateway.json; the gateway feature stays enabled.",
+      "Server-only install converted: client configured from gateway.json; the server feature stays enabled.",
     );
   const report = await waitReady(ctx);
   printStatus(ctx.log, report);
@@ -473,17 +437,18 @@ async function start(ctx, restart) {
   return 0;
 }
 
-// The gateway toggle prefers the running app's own feature API so listeners
+// The server toggle prefers the running app's own feature API so listeners
 // open and close in-process; with nothing running it edits state directly and
-// the change applies at the next start.
-async function gatewayCommand(ctx, action, json) {
+// the change applies at the next start. The dashboard endpoints keep their
+// /api/features/gateway paths for compatibility.
+async function serverCommand(ctx, action, json) {
   const { log } = ctx;
   const localState = async () => {
     const profile = await ctx.installation.load();
     const state = await ctx.gateway.load();
     return {
       available: !isContainer(ctx.env),
-      enabled: profile.roles.includes("gateway"),
+      enabled: profile.roles.includes("server"),
       running: false,
       configured: Boolean(state.apiKey && state.anythingllmBaseUrl),
       port: state.port ?? 21500,
@@ -495,7 +460,7 @@ async function gatewayCommand(ctx, action, json) {
     log(
       json
         ? JSON.stringify(state)
-        : `Gateway: ${state.enabled ? "on" : "off"}${state.running ? " (running)" : ""} — console ${dashboardUrl(ctx)}/gateway/`,
+        : `Server: ${state.enabled ? "on" : "off"}${state.running ? " (running)" : ""} — console ${dashboardUrl(ctx)}/gateway/`,
     );
     return 0;
   }
@@ -504,18 +469,18 @@ async function gatewayCommand(ctx, action, json) {
   );
   if (remote) {
     if (remote.status === 400 || remote.status === 503) {
-      // A running app answered: needsDevKey (400) or gateway listener trouble.
+      // A running app answered: needsDevKey (400) or server listener trouble.
       log(
         json
           ? JSON.stringify(remote.data)
-          : `Error: ${remote.data.error ?? remote.data.reason ?? "could not toggle the gateway"}`,
+          : `Error: ${remote.data.error ?? remote.data.reason ?? "could not toggle the server"}`,
       );
       return 1;
     }
     log(
       json
         ? JSON.stringify(remote.data)
-        : `Gateway ${action}: ${remote.data.enabled ? "on" : "off"}`,
+        : `Server ${action}: ${remote.data.enabled ? "on" : "off"}`,
     );
     return 0;
   }
@@ -527,7 +492,7 @@ async function gatewayCommand(ctx, action, json) {
   });
   if (action === "off") {
     const state = await features.disableGateway();
-    log(json ? JSON.stringify(state) : "Gateway off (it was not running).");
+    log(json ? JSON.stringify(state) : "Server off (it was not running).");
     return 0;
   }
   const result = await features.enableGateway();
@@ -535,14 +500,14 @@ async function gatewayCommand(ctx, action, json) {
     log(
       json
         ? JSON.stringify(result)
-        : `Error: ${result.reason ?? "the gateway needs an AnythingLLM developer key"}. Start the app and use the dashboard, or re-run setup --server.`,
+        : `Error: ${result.reason ?? "the server needs an AnythingLLM developer key"}. Start the app and use the dashboard, or re-run setup --server.`,
     );
     return 1;
   }
   log(
     json
       ? JSON.stringify(result)
-      : `Gateway on (not running yet); it will listen on port ${result.port} at the next start. Manage it at ${dashboardUrl(ctx)}/gateway/`,
+      : `Server on (not running yet); it will listen on port ${result.port} at the next start. Manage it at ${dashboardUrl(ctx)}/gateway/`,
   );
   return 0;
 }
@@ -619,10 +584,8 @@ async function status(ctx) {
   const dashboardBase = `http://127.0.0.1:${dashboardPort}`;
   endpoints.push(["dashboard", `${dashboardBase}/ready`, "any-obs-dashboard"]);
   endpoints.push(["mcp", "http://127.0.0.1:21503/health", "anything-obsidian-mcp"]);
-  if (profile.lan)
-    endpoints.push(["mcp-lan", "http://127.0.0.1:21504/health", "anything-obsidian-mcp"]);
   report.dashboardUrl = `http://localhost:${dashboardPort}`;
-  if (profile.roles.includes("gateway")) {
+  if (profile.roles.includes("server")) {
     const gatewayConfig = await ctx.gateway.load();
     endpoints.push([
       "gateway",
@@ -632,7 +595,7 @@ async function status(ctx) {
     report.gatewayUrl = `http://localhost:${dashboardPort}/gateway/`;
     if (runtime.autostart.enabled && runtime.autostart.linger === false) {
       report.startupBlocked = true;
-      report.detail = `Gateway startup at boot is not configured. Run once: loginctl enable-linger ${ctx.env.USER || os.userInfo().username}`;
+      report.detail = `Server startup at boot is not configured. Run once: loginctl enable-linger ${ctx.env.USER || os.userInfo().username}`;
     }
   }
   await Promise.all(
@@ -764,7 +727,7 @@ function printStatus(log, report) {
       : `Autostart: ${report.autostart.enabled ? "on" : "off"} (${report.autostart.guarantee})`,
   );
   if (report.dashboardUrl) log(`Dashboard: ${report.dashboardUrl}`);
-  if (report.gatewayUrl) log(`Gateway dashboard: ${report.gatewayUrl}`);
+  if (report.gatewayUrl) log(`Server console: ${report.gatewayUrl}`);
   for (const items of [report.indexing?.client || [], report.indexing?.gateway || []])
     for (const item of items)
       log(
@@ -791,8 +754,10 @@ export function gatewayEnvironment(root, env = process.env) {
   };
 }
 // Legacy names stay runnable: the container runtime still spawns per-role
-// services by name, and they are handy for diagnostics.
-const RUNNABLE_SERVICES = [...SERVICE_NAMES, ...LEGACY_SERVICE_NAMES];
+// services by name, and they are handy for diagnostics. mcp-lan is gone
+// with the LAN listener, but its old logs stay readable.
+const RUNNABLE_SERVICES = [...SERVICE_NAMES, ...LEGACY_SERVICE_NAMES.filter((name) => name !== "mcp-lan")];
+const LOG_SERVICE_NAMES = [...RUNNABLE_SERVICES, "mcp-lan"];
 
 async function runForeground(ctx, role) {
   if (!RUNNABLE_SERVICES.includes(role)) throw new Error(`Unknown service: ${role}`);
@@ -808,10 +773,12 @@ async function spawnForeground(ctx, role) {
   const profile = await ctx.installation.load();
   // The merged app service needs the merged role set; legacy names map to
   // the role that used to own them (and always run inside containers).
+  // profile.roles is normalized, so a legacy "gateway" role token on disk
+  // satisfies the "server" check.
   const legacyRoleAllowed =
     LEGACY_SERVICE_NAMES.includes(role) &&
     (role === "gateway"
-      ? profile.roles.includes("gateway")
+      ? profile.roles.includes("server")
       : profile.roles.includes("client"));
   if (!installedServices(profile).includes(role) && !legacyRoleAllowed)
     throw new Error(`Service is not configured: ${role}`);
@@ -835,13 +802,13 @@ async function spawnForeground(ctx, role) {
       args = ["scheduler"];
     } else {
       script = path.join(repoRoot, "mcp", "index.mjs");
-      args = ["--http", ...(role === "mcp-lan" ? ["--lan"] : [])];
-      if (role === "mcp-lan" && !config.lanToken)
-        throw new Error("LAN token is missing. Run: anything-obsidian lan on");
+      args = ["--http"];
       Object.assign(childEnv, {
         MCP_TRANSPORT: "http",
-        MCP_PROFILE: role === "mcp-lan" ? "lan" : "local",
-        ...(role === "mcp-lan" || isContainer(ctx.env) ? { MCP_AUTH_TOKEN: config.lanToken } : {}),
+        MCP_PROFILE: "local",
+        ...(isContainer(ctx.env) && config.lanToken
+          ? { MCP_AUTH_TOKEN: config.lanToken }
+          : {}),
       });
     }
   }
@@ -868,7 +835,7 @@ async function spawnForeground(ctx, role) {
 
 async function logs(ctx, role, flags) {
   role ??= "app";
-  if (!RUNNABLE_SERVICES.includes(role)) throw new Error(`Unknown service: ${role}`);
+  if (!LOG_SERVICE_NAMES.includes(role)) throw new Error(`Unknown service: ${role}`);
   const lines = Number(flags.lines ?? 100);
   if (!Number.isInteger(lines) || lines < 1 || lines > 1000)
     throw new Error("--lines must be between 1 and 1000");

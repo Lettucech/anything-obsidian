@@ -12,29 +12,36 @@ AnythingLLM RAG index. AnythingLLM is always an external, user-provided
 dependency (URL + API key in config) — the app never hosts it.
 
 It ships as a plain Node app, installed by `install.sh`, managed by the
-`anything-obsidian` CLI and a browser dashboard on port 21502. MCP endpoints:
-loopback 21503, optional LAN 21504 (`lan on`, Bearer token required).
+`anything-obsidian` CLI and a browser dashboard on port 21502. MCP endpoint:
+loopback 21503. There are exactly **two connection kinds**: local
+(loopback, owner-trusted, full tool surface) and remote (the opt-in
+**server**, token-gated, RAG-only). The former LAN MCP listener (21504)
+and its agent-token store were retired 2026-11; `lan on` is a no-op and
+old agent tokens migrated by hash into server users
+(`lib/lan-migration.mjs`).
 
 **One install, one process, one dashboard.** A single supervised service
 (`anything-obsidian run app`, launchd/systemd label
 `app.anything-obsidian.app`) hosts the dashboard, the local MCP listener and
-the sync scheduler in one process. The IAM **gateway** is an opt-in feature
-of that same process — off by default: enable it with
-`anything-obsidian gateway on` or the dashboard Gateway card, and it opens
-the public plane on 21500 (token-gated) while its admin surface mounts on
-the dashboard (`/api/gateway/*`) with its console at `/gateway/`. Toggling
-features never restarts the service; listeners open and close in-process
-(`lib/features.mjs`). `setup --server` survives only as an alias for
-"setup, then enable the gateway". The gateway is the sole holder of the
-AnythingLLM admin key (in `gateway/gateway.json`, never in env), scopes
-every client with per-user tokens, and its shared-source pipeline is the
-only writer to shared workspaces. Disabling the gateway keeps its users,
-workspaces and sources on disk. AnythingLLM itself is never bundled
-or hosted — it is always an external dependency the user provides (an
-optional reference compose for running it ships at
+the sync scheduler in one process. The **server** (formerly "gateway") is an
+opt-in feature of that same process — off by default: enable it with
+`anything-obsidian server on` or the dashboard Server card (`gateway on`
+stays as a deprecated alias), and it opens the public plane on 21500
+(token-gated) while its admin surface mounts on the dashboard
+(`/api/gateway/*` — URL paths kept for compatibility) with its console at
+`/gateway/`. Toggling features never restarts the service; listeners open
+and close in-process (`lib/features.mjs`). `setup --server` is the real
+name for "setup, then enable the server". The server is the sole holder of
+the AnythingLLM admin key (in `gateway/gateway.json` — filename kept —
+never in env), scopes every client with per-user tokens, and its
+shared-source pipeline is the only writer to shared workspaces. Disabling
+the server keeps its users, workspaces and sources on disk. AnythingLLM
+itself is never bundled or hosted — it is always an external dependency the
+user provides (an optional reference compose for running it ships at
 `server/anythingllm.compose.yml`, but the operator starts it and any-obs
 never manages its lifecycle). See
-`docs/superpowers/specs/2026-10-28-iam-middleware.md`.
+`docs/superpowers/specs/2026-10-28-iam-middleware.md` and
+`docs/superpowers/specs/2026-11-02-client-server-simplification.md`.
 
 Native Node remains the default; an optional Docker flavor keeps the older
 one-role-per-container model (`Dockerfile`, `compose.yaml`,
@@ -60,9 +67,9 @@ anything-obsidian status --json   # exit 0 + "ok": true == done
 ```
 
 For a client, setup asks the mode explicitly: local (AnythingLLM URL +
-developer key, the default) or join a gateway (gateway URL + issued user
-token). For serving others, enable the gateway feature after a local setup
-(`gateway on` or `setup --server`); collect the external AnythingLLM URL
+developer key, the default) or join a server (server URL + issued user
+token). For serving others, enable the server feature after a local setup
+(`server on` or `setup --server`); collect the external AnythingLLM URL
 and developer API key (Settings → Developer API). Never invent a credential. Verify with `status --json` after every change.
 
 The installer calls `setup`, which configures the installation, starts the
@@ -76,13 +83,15 @@ Use both to stop permanently. `restart`, `status --json`, and
 macOS starts after login. Linux installs need `loginctl enable-linger <user>`
 for boot without login; status must not claim that guarantee unless verified.
 Service definitions pin the absolute data root. Client config is `config.json`;
-gateway upstream credentials and ports are exclusively `gateway/gateway.json`.
-`installation.json` records roles, the `lan` flag and autostart preference
-(gateway enabled ⇔ `roles` contains `"gateway"`). First `start`/`restart`
-after an upgrade migrates automatically: legacy per-role launchd/systemd
-definitions are removed, and a gateway-only install gains a `config.json`
-synthesized from `gateway.json`. No legacy command
-aliases or environment overrides of gateway credentials are supported.
+server upstream credentials and ports are exclusively `gateway/gateway.json`.
+`installation.json` records roles and autostart preference (server enabled ⇔
+`roles` contains `"server"`). First `start`/`restart` after an upgrade
+migrates automatically: legacy per-role launchd/systemd definitions are
+removed, a server-only install gains a `config.json` synthesized from
+`gateway.json`, a legacy `"gateway"` role token is rewritten to `"server"`,
+and LAN agent tokens become server users. The only supported legacy alias
+is `gateway on|off|status` → `server`; no environment overrides of server
+credentials are supported.
 
 ## Repo conventions
 
@@ -91,13 +100,13 @@ aliases or environment overrides of gateway credentials are supported.
   global `fetch` first, and think twice before adding anything else.
 - Tests: `npm test` runs `node --test` over `mcp/ dashboard/ lib/ scripts/
   bin/ server/` (the MCP server is plain JS now).
-- Network boundaries: native dashboard and local MCP bind `127.0.0.1` only (21502 /
-  21503); the LAN MCP (21504) is opt-in, RAG-only, and token-gated. Secrets
-  never appear in API responses or logs (`redactSecretsText` /
-  `redactSecretsObject`).
+- Network boundaries: native dashboard and local MCP bind `127.0.0.1` only
+  (21502 / 21503); the server plane (21500) is opt-in, RAG-only, and
+  token-gated. Secrets never appear in API responses or logs
+  (`redactSecretsText` / `redactSecretsObject`).
   Docker binds these listeners inside its network namespace, publishes host
   loopback ports by default, requires an admin token/session for dashboards and
-  a Bearer/agent token for client MCP. Keep native loopback trust unchanged.
+  a Bearer token for client MCP. Keep native loopback trust unchanged.
 - Vault locations come in two flavours, and the registry records which:
   `managed` entries live beneath `VAULTS_ROOT` and must be direct children of
   it — any-obs owns that area; `imported` entries store an absolute

@@ -68,6 +68,25 @@ export function createUserStore({ dataDir }) {
       await write(state);
       return { user: { name, role, createdAt: user.createdAt }, token };
     },
+    // Adopt an identity minted elsewhere (LAN agent tokens at retirement):
+    // the hash moves as-is, so the existing holder's token keeps working.
+    // Returns null on a name collision; the caller decides what to report.
+    async importUser(input) {
+      const name = String(input?.name ?? "");
+      if (!USER_NAME_PATTERN.test(name)) {
+        throw new Error("User name must be lowercase dash-separated text");
+      }
+      const role = normalizeRole(input?.role);
+      const tokenHash = String(input?.tokenHash ?? "");
+      if (!/^[a-f0-9]{64}$/i.test(tokenHash))
+        throw new Error("tokenHash must be a sha-256 hex digest");
+      const state = await read();
+      if (state.users.some((user) => user.name === name)) return null;
+      const user = { name, role, tokenHash, createdAt: new Date().toISOString() };
+      state.users.push(user);
+      await write(state);
+      return { name, role, createdAt: user.createdAt };
+    },
     async updateRole(name, input) {
       const role = normalizeRole(input);
       const state = await read();

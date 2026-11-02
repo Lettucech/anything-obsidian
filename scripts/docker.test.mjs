@@ -164,8 +164,10 @@ test("Docker setup saves an isolated client without invoking a native supervisor
   assert.equal(config.vaultsRoot, root + "/vaults");
   assert.ok(config.lanToken.length >= 32);
   assert.ok(!output.join("\n").includes("test-key"));
-  for (const command of ["start", "stop", "restart", "update", "autostart", "lan"])
+  for (const command of ["start", "stop", "restart", "update", "autostart"])
     assert.equal(await runCli([command], { env, services, log: () => {} }), 1);
+  // The retired lan command is a portable no-op, even in a container.
+  assert.equal(await runCli(["lan"], { env, services, log: () => {} }), 0);
 });
 
 test("container supervisor pauses/resumes the scheduler and drains siblings after an unexpected service exit", async (t) => {

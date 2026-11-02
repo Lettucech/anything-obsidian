@@ -14,7 +14,7 @@ import { z } from "zod";
 import { mcpHttpOptions } from "./http-config.mjs";
 import { ADMIN_IDENTITY, ANONYMOUS_IDENTITY, loadVaults, loadWorkspace, resolveVault, visibleVaults } from "./vault-registry.mjs";
 import { attributeRagResults } from "./rag-attribution.mjs";
-import { loadAgentIdentities, resolveIdentity } from "./agent-identity.mjs";
+import { resolveIdentity } from "./agent-identity.mjs";
 import { createVaultFileService } from "./vault-files.mjs";
 import { dashboardApi, registerManagementTools } from "./manage.mjs";
 import { createSyncStatusStore, syncStatusPath } from "../lib/sync-status.mjs";
@@ -285,26 +285,23 @@ function stripTrailingSlash(value) {
 }
 
 // One MCP HTTP listener. The standalone CLI entry uses it directly; the
-// merged single-process app entry creates the local (21503) listener at boot
-// and opens/closes the LAN (21504) listener on demand, so it must return the
-// server handle and report bind failures instead of exiting the process.
+// merged single-process app entry creates the local (21503) listener at
+// boot, so it must return the server handle and report bind failures
+// instead of exiting the process.
 export function createMcpHttpListener({
   profile = "local",
   port,
   bind,
   adminToken,
-  agentTokensPath,
   allowedHosts,
   env = process.env,
 } = {}) {
   const effectiveAdminToken = adminToken ?? env.MCP_AUTH_TOKEN ?? "";
   const container = isContainer(env);
-  if ((profile === "lan" || container) && !effectiveAdminToken)
+  if (container && !effectiveAdminToken)
     throw new Error("MCP_AUTH_TOKEN is required for network MCP");
-  const bindHost = bind ?? (profile === "lan" || container ? "0.0.0.0" : "127.0.0.1");
-  const listenPort = port ?? mcpPort(profile, env);
-  const tokensPath =
-    agentTokensPath ?? env.MCP_AGENT_TOKENS_PATH ?? path.join(defaultPaths().agentTokensRoot, "agents.json");
+  const bindHost = bind ?? (container ? "0.0.0.0" : "127.0.0.1");
+  const listenPort = port ?? mcpPort(env);
   const app = createMcpExpressApp(mcpHttpOptions(allowedHosts ?? env.MCP_ALLOWED_HOSTS, { host: bindHost }));
 
   app.get("/health", (_req, res) => {
@@ -314,9 +311,8 @@ export function createMcpHttpListener({
   app.post("/mcp", async (req, res) => {
     const identity = resolveIdentity(req.get("authorization"), {
       adminToken: effectiveAdminToken,
-      agents: await loadAgentIdentities(tokensPath),
     });
-    if ((profile === "lan" || container) && identity.kind === "anonymous") {
+    if (container && identity.kind === "anonymous") {
       return res.status(401).json({ error: "Bearer token required" });
     }
     const server = createServer(profile, identity);
@@ -347,13 +343,12 @@ export function createMcpHttpListener({
   });
 }
 
-function mcpPort(profile, env = process.env) {
-  if (profile === "lan") return Number(env.MCP_LAN_PORT ?? 21504);
+function mcpPort(env = process.env) {
   return Number(env.MCP_PORT ?? 21503);
 }
 
 if (process.argv[1] && import.meta.url === entryUrl()) {
-  const profile = process.argv.includes("--lan") || process.env.MCP_PROFILE === "lan" ? "lan" : "local";
+  const profile = "local";
   if (process.argv.includes("--http") || process.env.MCP_TRANSPORT === "http") {
     createMcpHttpListener({ profile }).catch((error) => {
       console.error("Failed to start MCP HTTP server:", error);

@@ -23,13 +23,10 @@ async function toolNames(profile) {
 
 test("local MCP exposes read-only vault tools, RAG tools, and management tools", async () => {
   assert.deepEqual(await toolNames("local"), [
-    "any_obs_agent_create",
-    "any_obs_agent_revoke",
     "any_obs_autostart",
     "any_obs_file_list",
     "any_obs_file_read",
     "any_obs_job_get",
-    "any_obs_lan",
     "any_obs_rag_answer",
     "any_obs_rag_search",
     "any_obs_status",
@@ -42,14 +39,6 @@ test("local MCP exposes read-only vault tools, RAG tools, and management tools",
     "any_obs_vault_remove",
     "any_obs_vault_sync",
     "any_obs_vault_update",
-  ]);
-});
-
-test("LAN MCP exposes only RAG and safe vault selection metadata", async () => {
-  assert.deepEqual(await toolNames("lan"), [
-    "any_obs_rag_answer",
-    "any_obs_rag_search",
-    "any_obs_vault_list",
   ]);
 });
 
@@ -82,9 +71,10 @@ test("obsidian_vault_list is filtered by caller identity", async () => {
   process.env.VAULT_REGISTRY_PATH = registryPath;
   try {
     assert.deepEqual(await listedVaults("local", ANONYMOUS_IDENTITY), ["open-vault"]);
+    assert.deepEqual(await listedVaults("local", { kind: "admin" }), ["open-vault", "secret-vault"]);
+    // Allowlist filtering still honors agent-shaped identities if one is ever
+    // passed, but no listener produces them anymore (LAN retired 2026-11).
     assert.deepEqual(await listedVaults("local", { kind: "agent", name: "scout" }), ["open-vault", "secret-vault"]);
-    assert.deepEqual(await listedVaults("local", { kind: "agent", name: "other" }), ["open-vault"]);
-    assert.deepEqual(await listedVaults("lan", { kind: "admin" }), ["open-vault", "secret-vault"]);
   } finally {
     if (previous === undefined) delete process.env.VAULT_REGISTRY_PATH;
     else process.env.VAULT_REGISTRY_PATH = previous;

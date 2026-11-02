@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  absoluteCrumbs, actionDisabledReason, activeTheme, agentCreatedLabel, agentRevokeMessage, breadcrumbSegments, dashboardMetrics,
-  failedSyncs, gitAuthForRepository, jobProgressLabel, lastSyncLabel, nextTheme, restrictedAccessNote, serviceTone, syncBanner, systemPowerLabel, useFolderBlockedReason, vaultActionUrl,
+  absoluteCrumbs, actionDisabledReason, activeTheme, breadcrumbSegments, dashboardMetrics,
+  failedSyncs, gitAuthForRepository, jobProgressLabel, lastSyncLabel, nextTheme, serviceTone, syncBanner, systemPowerLabel, useFolderBlockedReason, vaultActionUrl,
   slugifyName,
   vaultSourcePayload,
 } from "./app.js";
@@ -108,19 +108,6 @@ test("theme resolves a saved preference before the system preference", () => {
   assert.equal(activeTheme(null, false), "light");
   assert.equal(nextTheme("dark"), "light");
   assert.equal(nextTheme("light"), "dark");
-});
-
-test("restricted access notes name the allowlisted agents or the lockout", () => {
-  assert.equal(restrictedAccessNote(["work-agent", "research-agent"]), "Restricted: only allowlisted MCP agents (work-agent, research-agent) can read this vault.");
-  assert.equal(restrictedAccessNote([]), "Restricted: no agent is allowlisted, so MCP callers cannot read this vault.");
-  assert.equal(restrictedAccessNote(), "Restricted: no agent is allowlisted, so MCP callers cannot read this vault.");
-});
-
-test("agent labels and revoke messages report dangling allowlists", () => {
-  assert.equal(agentCreatedLabel("2026-10-04T00:00:00.000Z"), new Date("2026-10-04T00:00:00.000Z").toLocaleDateString());
-  assert.equal(agentCreatedLabel("not-a-date"), "");
-  assert.equal(agentRevokeMessage("scout"), "Agent 'scout' revoked.");
-  assert.equal(agentRevokeMessage("scout", ["secret-vault", "diary"]), "Agent 'scout' revoked. These vault allowlists still name it: secret-vault, diary");
 });
 
 test("import breadcrumbs walk from the vault root to the browsed folder", () => {

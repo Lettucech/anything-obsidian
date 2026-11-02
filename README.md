@@ -20,19 +20,21 @@ loopback unless marked otherwise:
 
 | Port | Surface | Where |
 |---|---|---|
-| 21500 | Gateway public plane (MCP + user API) — opt-in feature | published on the LAN when enabled |
+| 21500 | Server public plane (MCP + user API) — opt-in feature | published when enabled |
 | 21501 | AnythingLLM UI (wherever you host it) | host loopback only (first-boot setup) |
-| 21502 | Dashboard (gateway console included at `/gateway/`) | loopback only |
+| 21502 | Dashboard (server console included at `/gateway/`) | loopback only |
 | 21503 | Local MCP | loopback only |
-| 21504 | LAN MCP | opt-in, LAN, Bearer token required |
-| 21505 | Legacy gateway admin plane (Docker flavor only) | loopback only |
+| 21505 | Legacy server admin plane (Docker flavor only) | loopback only |
 | 21506–21510 | Reserved for future any-obs surfaces | — |
 
 AnythingLLM itself keeps its container port 3001 and is never published
 beyond the host loopback of the machine it runs on. Ports are overridable per
-surface (`setup --port`; gateway ports via `gateway/gateway.json`). One
+surface (`setup --port`; server ports via `gateway/gateway.json`). One
 process serves the dashboard, local MCP, scheduler, and — when you turn the
-gateway feature on — the public plane.
+server feature on — the public plane. There are exactly two connection
+kinds: local (loopback, owner-trusted) and remote (the server, token-gated,
+RAG-only). The former LAN MCP listener on 21504 was retired; its agent
+tokens migrated into the server's user directory.
 
 ## Boundaries
 
@@ -41,9 +43,10 @@ gateway feature on — the public plane.
   anywhere on disk, and stores only validated registry metadata. All vaults
   of one instance embed into a single shared AnythingLLM workspace created
   on first use.
-- **Agent-scoped MCP access:** dashboard-issued agent tokens limit a client's
-  MCP visibility to the vaults whose allowlist names it. Tokenless local
-  connections keep their existing access to open vaults.
+- **Two connection kinds:** local (loopback) has the owner's full tool
+  surface; every remote caller — LAN or internet — authenticates with a
+  server user token and reaches RAG surfaces only. Raw vault files never
+  leave the machine.
 - **Optional Git sync:** the scheduler (or an agent via `any_obs_vault_sync`)
   may pull, commit, and push according to a vault's dashboard configuration.
   Sync follows the configured policy; no MCP tool accepts arbitrary Git
@@ -69,19 +72,19 @@ Install once. The installer prepares the app and its dependencies, asks which
 mode this machine is in, then starts and verifies the app service:
 
 - **Local** (default): the AnythingLLM URL and its developer API key.
-- **Join a gateway**: the gateway URL and the administrator-issued user token.
+- **Join a server**: the server URL and the administrator-issued user token.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh
 ```
 
-For unattended client setup, supply the gateway URL and the user token issued
+For unattended client setup, supply the server URL and the user token issued
 by its administrator (members can index; readers can search):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
   --vaults-root "$HOME/.anything-obsidian/vaults" \
-  --url http://<gateway-host>:21500 --api-key <user-token> --no-browser
+  --url http://<server-host>:21500 --api-key <user-token> --no-browser
 ```
 
 A solo client can use an AnythingLLM URL and developer key directly. AnythingLLM
@@ -96,9 +99,11 @@ anything-obsidian restart        # restart and verify readiness
 anything-obsidian status         # readiness, startup and indexing health
 anything-obsidian status --json  # exit 0 and ok:true only when healthy
 anything-obsidian logs -f        # follow the app log
-anything-obsidian gateway on     # opt-in: serve other users (default off)
-anything-obsidian lan on         # opt-in: LAN MCP endpoint
+anything-obsidian server on      # opt-in: serve other users (default off)
 ```
+
+`gateway on` still works as a deprecated alias for `server on`; `lan on` is a
+retired no-op that points at the server feature.
 
 `start` is idempotent: repeating it leaves a healthy service running. There is
 no `--bg`, `start-bg`, separate gateway start command, or detached PID-file
@@ -119,10 +124,10 @@ leaves running services alone. To stop now and prevent future automatic starts,
 run `anything-obsidian autostart off`, then `anything-obsidian stop`.
 
 The dashboard is at [localhost:21502](http://localhost:21502). It manages
-vaults, sync policy, index rebuilds and agent access — plus the gateway card:
-turn the gateway feature on and its console lives at `/gateway/` on the same
-origin. Managed vaults live beneath the configured root; imported directories
-stay where their owner keeps them.
+vaults, sync policy and index rebuilds — plus the server card: turn the
+server feature on and its console lives at `/gateway/` on the same origin.
+Managed vaults live beneath the configured root; imported directories stay
+where their owner keeps them.
 
 Configuration lives under one absolute data root:
 
@@ -133,18 +138,20 @@ Configuration lives under one absolute data root:
 The installer pins the resolved root in its CLI launcher. Every service also
 records that root explicitly, so shell environment changes and login sessions
 cannot select another configuration accidentally. `status` prints the root.
-`installation.json` records roles and startup preference (gateway on ⇔ `roles`
-contains `"gateway"`); `config.json` holds instance settings;
-`gateway/gateway.json` holds the gateway's own credential pair and is the only
-store the gateway code ever reads.
+`installation.json` records roles and startup preference (server on ⇔ `roles`
+contains `"server"`; a legacy `"gateway"` entry migrates automatically on the
+first start after upgrading); `config.json` holds instance settings;
+`gateway/gateway.json` holds the server's own credential pair and is the only
+store the server code ever reads.
 
 Update with `anything-obsidian update`. Dependencies and entry points validate in
 staging before the running release is replaced. Activation restarts the app
 service and checks readiness; a failed activation restores and verifies the
 previous release. Configuration and source files stay in the data/vault roots.
 The first `start`/`restart` after this upgrade migrates automatically: legacy
-per-role service definitions are removed, and a gateway-only install gains a
-`config.json` synthesized from `gateway.json` (the gateway stays enabled).
+per-role service definitions are removed, a server-only install gains a
+`config.json` synthesized from `gateway.json` (the server stays enabled), and
+LAN agent tokens become server user tokens with the same values.
 
 **Breaking operations release:** old CLI commands are removed. Existing installs
 must run `anything-obsidian setup` once to record their configuration. Existing

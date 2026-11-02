@@ -92,14 +92,13 @@ test("native status reports AnythingLLM, the app service, and git", async () => 
   assert.equal(response.status, 200);
   assert.deepEqual(
     response.body.services.map((service) => service.id),
-    ["anythingllm", "app", "mcp", "mcp-lan", "git"],
+    ["anythingllm", "app", "mcp", "git"],
   );
   const byId = Object.fromEntries(response.body.services.map((service) => [service.id, service]));
   assert.equal(byId.anythingllm.running, true);
   assert.equal(byId.anythingllm.health.ok, true);
   assert.equal(byId.app.running, false);
   assert.equal(byId.mcp.running, false);
-  assert.equal(byId["mcp-lan"].state, "off");
   assert.equal(byId.git.running, true);
   assert.match(byId.git.health.status, /git version/);
   assert.equal(response.body.systemState, "partial");

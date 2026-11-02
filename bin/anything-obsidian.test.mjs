@@ -36,7 +36,6 @@ async function fixture(t) {
       running = true;
     },
     setAutostart: async (enabled) => installation.update({ autostart: enabled }),
-    setLan: async (lan) => installation.update({ lan }),
     status: async () => {
       const p = await installation.load();
       return {
@@ -128,7 +127,7 @@ test("setup --server configures the client and enables the gateway; gateway.json
       serverFirst ? "client-key" : "developer-key",
     );
     const roles = (await f.installation.load()).roles;
-    assert.ok(roles.includes("client") && roles.includes("gateway"));
+    assert.ok(roles.includes("client") && roles.includes("server"));
   }
 });
 
@@ -163,19 +162,19 @@ function fakePromptFactory(f, questions) {
   });
 }
 
-test("interactive setup asks the mode and collects gateway join values separately", async (t) => {
+test("interactive setup asks the mode and collects server join values separately", async (t) => {
   const f = await fixture(t);
   const questions = [];
   f.deps.promptFactory = fakePromptFactory(f, questions);
-  f.answers = ["2", "http://gateway.test", "issued-token"];
+  f.answers = ["2", "http://server.test", "issued-token"];
   assert.equal(await f.run(["setup", "--vaults-root", f.root + "/vaults"]), 0);
   const asked = questions.join("\n");
-  assert.match(asked, /joining a gateway/);
-  assert.match(asked, /Gateway URL/);
+  assert.match(asked, /joining a server/);
+  assert.match(asked, /Server URL/);
   assert.match(asked, /User token from your administrator/);
   assert.doesNotMatch(asked, /developer API key/);
   const config = await f.store.load();
-  assert.equal(config.anythingllmBaseUrl, "http://gateway.test");
+  assert.equal(config.anythingllmBaseUrl, "http://server.test");
   assert.equal(config.apiKey, "issued-token");
 });
 
@@ -274,19 +273,28 @@ test("reconfiguration applies the changed role and preserves vault location, LAN
   assert.ok(f.calls.includes("restart"));
 });
 
-test("LAN allowed hosts and generated token are persisted and JSON output is one object", async (t) => {
+test("the retired lan command is a no-op pointing at the server feature", async (t) => {
   const f = await fixture(t);
   await f.run(["setup", ...clientFlags(f.root)]);
   f.lines.length = 0;
-  assert.equal(
-    await f.run(["lan", "on", "--allowed-hosts", "notes.local,192.168.1.10", "--json"]),
-    0,
-  );
-  assert.equal(f.lines.length, 1);
+  assert.equal(await f.run(["lan", "on", "--json"]), 0);
   const output = JSON.parse(f.lines[0]);
-  assert.ok(output.token);
-  assert.equal((await f.store.load()).mcpAllowedHosts, "notes.local,192.168.1.10");
-  assert.equal((await f.store.load()).lanToken, output.token);
+  assert.equal(output.deprecated, true);
+  assert.match(output.message, /server on/);
+  // Nothing changed on disk.
+  assert.equal((await f.store.load()).lanToken, undefined);
+});
+
+test("the server command reports status and gateway stays as a deprecated alias", async (t) => {
+  const f = await fixture(t);
+  await f.run(["setup", ...clientFlags(f.root)]);
+  f.lines.length = 0;
+  assert.equal(await f.run(["server", "status"]), 0);
+  assert.match(f.lines.at(-1), /^Server: off/);
+  f.lines.length = 0;
+  assert.equal(await f.run(["gateway", "status"]), 0);
+  assert.match(f.lines[0], /Deprecation/);
+  assert.match(f.lines.at(-1), /^Server: off/);
 });
 
 test("JSON status errors remain machine readable when configuration is corrupt", async (t) => {

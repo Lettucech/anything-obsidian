@@ -8,7 +8,7 @@ import test from "node:test";
 import { createDashboardServer } from "./server.mjs";
 import { fakeServices } from "./test-services.mjs";
 
-// Isolated data root so /api/lan and friends never touch a real install.
+// Isolated data root so the feature endpoints never touch a real install.
 async function isolatedRoot(t) {
   const root = await mkdtemp(path.join(tmpdir(), "any-obs-gw-dash-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -19,7 +19,6 @@ async function isolatedRoot(t) {
       vaultsRoot: path.join(root, "vaults"),
       anythingllmBaseUrl: "http://localhost:11301",
       apiKey: "key",
-      lanToken: "lan-secret",
     }),
   );
   return root;
@@ -45,8 +44,6 @@ function fakeFeatures(overrides = {}) {
     },
     startScheduler: () => calls.push(["scheduler-on"]),
     stopScheduler: async () => calls.push(["scheduler-off"]),
-    startLan: async () => calls.push(["lan-on"]),
-    stopLan: async () => calls.push(["lan-off"]),
   };
 }
 
@@ -207,14 +204,10 @@ test("the gateway console is served at /gateway/ with redirect and traversal gua
   app.shutdown();
 });
 
-test("lan toggles drive the in-process listener instead of a supervisor service", async (t) => {
+test("the retired /api/lan endpoint is gone", async (t) => {
   const features = fakeFeatures();
   const app = nativeApp(features, await isolatedRoot(t));
-  const response = await request(app, "POST", "/api/lan", { action: "on" });
-  assert.equal(response.status, 200);
-  assert.deepEqual(features.calls.at(-1), ["lan-on"]);
-  const off = await request(app, "POST", "/api/lan", { action: "off" });
-  assert.equal(off.status, 200);
-  assert.deepEqual(features.calls.at(-1), ["lan-off"]);
+  assert.equal((await request(app, "POST", "/api/lan", { action: "on" })).status, 404);
+  assert.equal((await request(app, "GET", "/api/lan")).status, 404);
   app.shutdown();
 });

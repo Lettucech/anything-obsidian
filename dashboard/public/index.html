@@ -41,16 +41,6 @@
         <div id="rag-workspaces" class="rag-workspaces" aria-live="polite"></div>
       </section>
 
-      <section class="section-shell agents-section" aria-labelledby="agents-title">
-        <div class="section-heading">
-          <div><h2 id="agents-title">Agent access</h2><p>Named tokens control which vaults an agent can read.</p></div>
-          <button id="add-agent" class="button button-secondary" type="button">Add agent</button>
-        </div>
-        <p id="agent-message" class="message" role="status"></p>
-        <div class="agent-columns" aria-hidden="true"><span>Agent name</span><span>Created</span><span>Actions</span></div>
-        <section id="agents" class="agents" aria-live="polite"></section>
-      </section>
-
       <section class="dashboard-grid" aria-label="System overview">
         <section class="section-shell service-section" aria-labelledby="services-title">
           <div class="section-heading compact"><h2 id="services-title">Service health</h2><span id="service-summary" class="section-status">Checking services</span></div>
@@ -136,7 +126,6 @@
               <div class="form-grid">
                 <label>Access mode <select name="accessMode"><option value="open">Open</option><option value="restricted">Restricted</option></select></label>
                 <label class="checkbox"><input name="enabled" type="checkbox" checked /> Enable scheduled sync</label>
-                <label id="allowlist-field" class="allowlist" hidden>Allowlist (one agent name per line)<textarea name="allowlist" rows="3" placeholder="work-agent&#10;research-agent"></textarea></label>
               </div>
             </details>
           </section>
@@ -145,53 +134,20 @@
         </form>
       </dialog>
 
-      <dialog id="lan-dialog" aria-labelledby="lan-title">
-        <div class="dialog-heading">
-          <div>
-            <h2 id="lan-title">LAN endpoint enabled</h2>
-          </div>
-        </div>
-        <p class="note">Remote clients connect to <code>http://&lt;this-host&gt;:21504/mcp</code> (RAG-only) with this admin Bearer token. Copy it now — it is stored and will not be shown again.</p>
-        <pre id="lan-token-value" class="agent-token"></pre>
-        <div class="form-actions"><button id="lan-done" class="button button-primary" type="button">Done</button></div>
-      </dialog>
-
       <dialog id="gateway-dialog" aria-labelledby="gateway-title">
         <form id="gateway-form">
           <div class="dialog-heading">
             <div>
-              <h2 id="gateway-title">Enable the gateway</h2>
+              <h2 id="gateway-title">Enable the server</h2>
             </div>
           </div>
-          <p class="note" id="gateway-dialog-note">The gateway serves other users and agents through this machine. Enter the AnythingLLM developer API key it should use — it is stored in <code>gateway/gateway.json</code> on this machine and is never handed to clients.</p>
+          <p class="note" id="gateway-dialog-note">The server serves other users and agents through this machine. Enter the AnythingLLM developer API key it should use — it is stored in <code>gateway/gateway.json</code> on this machine and is never handed to clients.</p>
           <div class="form-grid">
             <label class="form-grid-wide">AnythingLLM URL <input name="baseUrl" type="url" placeholder="https://your-anythingllm.example.com" /></label>
             <label class="form-grid-wide">Developer API key <input name="apiKey" type="password" autocomplete="off" required /></label>
           </div>
           <p id="gateway-dialog-message" class="message dialog-message" role="status"></p>
-          <div class="form-actions"><button id="gateway-submit" class="button button-primary" type="submit">Enable gateway</button><button id="cancel-gateway" class="button button-quiet" type="button">Cancel</button></div>
-        </form>
-      </dialog>
-
-      <dialog id="agent-dialog" aria-labelledby="agent-form-title">
-        <form id="agent-form">
-          <div class="dialog-heading">
-            <div>
-              <h2 id="agent-form-title">Add agent</h2>
-            </div>
-          </div>
-          <section id="agent-create-fields" class="form-section">
-            <p class="note">Create a named token for one agent or a group of agents. Agents send it as an Authorization: Bearer header and can only reach vaults whose allowlist names them.</p>
-            <div class="form-grid">
-              <label class="form-grid-wide">Agent name <input name="name" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="e.g. claude-work" required /></label>
-            </div>
-          </section>
-          <section id="agent-token-reveal" hidden>
-            <p class="note">Copy this token now — it is shown only once and stored only as a hash.</p>
-            <pre id="agent-token-value" class="agent-token"></pre>
-          </section>
-          <p id="agent-dialog-message" class="message dialog-message" role="status"></p>
-          <div class="form-actions"><button id="agent-submit" class="button button-primary" type="submit">Create agent</button><button id="cancel-agent" class="button button-quiet" type="button">Cancel</button></div>
+          <div class="form-actions"><button id="gateway-submit" class="button button-primary" type="submit">Enable server</button><button id="cancel-gateway" class="button button-quiet" type="button">Cancel</button></div>
         </form>
       </dialog>
     </main>

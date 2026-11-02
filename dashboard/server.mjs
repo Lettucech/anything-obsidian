@@ -16,7 +16,6 @@ import { createLocalJobManager, tailLogFile } from "./local-jobs.mjs";
 import { redactSecretsObject, redactSecretsText } from "./redact.mjs";
 import { createVaultRegistry } from "../lib/vault-registry.mjs";
 import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
-import { createAgentTokenStore } from "../lib/agent-tokens.mjs";
 import { createAnythingllmClient } from "./anythingllm.mjs";
 import { createVaultStorage } from "./vault-storage.mjs";
 import { importTree } from "./import-tree.mjs";
@@ -27,7 +26,6 @@ import { rotateLogs } from "../lib/log-rotate.mjs";
 import { compareVersions, currentVersionValue, fetchLatestVersion } from "../lib/update-check.mjs";
 import { ensureUnifiedWorkspace, purgeVaultEmbeddings } from "../lib/unified-workspace.mjs";
 import { configPaths, defaultConfigRoot } from "../lib/app-config.mjs";
-import { randomBytes } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(__dirname, "public");
@@ -57,9 +55,6 @@ export function createDashboardServer({
   vaultStorage = createVaultStorage({ registry, env }),
   secrets = createVaultSecretStore({
     rootPath: env.VAULT_SECRETS_PATH || "",
-  }),
-  agentTokens = createAgentTokenStore({
-    rootPath: env.AGENT_TOKENS_PATH || "",
   }),
 } = {}) {
   if (!native?.schedulerPidPath) {
@@ -274,28 +269,6 @@ export function createDashboardServer({
         await secrets.remove(id);
         return sendJson(res, 204, {});
       }
-      if (req.method === "GET" && url.pathname === "/api/agents") {
-        return sendJson(res, 200, { agents: await agentTokens.list() });
-      }
-      if (req.method === "POST" && url.pathname === "/api/agents") {
-        const input = await readJsonBody(req);
-        const name = String(input?.name ?? "").trim();
-        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
-          return sendJson(res, 400, { error: "Agent name must be lowercase dash-separated text" });
-        }
-        const { agent, token } = await agentTokens.create(name);
-        return sendJson(res, 201, { agent, token });
-      }
-      if (req.method === "DELETE" && url.pathname.startsWith("/api/agents/")) {
-        const name = url.pathname.slice("/api/agents/".length);
-        const removed = await agentTokens.remove(name);
-        if (!removed) return sendJson(res, 404, { error: "Agent was not found" });
-        const vaults = await registry.list();
-        const referencedBy = vaults
-          .filter((vault) => Array.isArray(vault.allowlist) && vault.allowlist.includes(name))
-          .map((vault) => vault.id);
-        return sendJson(res, 200, { removed: true, referencedBy });
-      }
       if (req.method === "GET" && url.pathname === "/api/status") {
         return sendJson(res, 200, await statusPayload(context));
       }
@@ -323,43 +296,7 @@ export function createDashboardServer({
         return sendJson(res, 200, {
           ...state,
           enabled: state.autostart.enabled,
-          lanEnabled: (await manager.status()).lan,
         });
-      }
-      if (url.pathname === "/api/lan") {
-        const manager = serviceManagerFor(context);
-        if (req.method === "GET") {
-          return sendJson(res, 200, { enabled: (await manager.status()).lan });
-        }
-        if (req.method === "POST") {
-          const input = await readJsonBody(req);
-          if (input.action === "token") {
-            if (!String(input.token ?? "").trim())
-              return sendJson(res, 400, { error: "token is required" });
-            await registryUpdateLanToken(env, String(input.token).trim());
-            return sendJson(res, 200, { tokenConfigured: true });
-          }
-          if (input.action !== "on" && input.action !== "off") {
-            return sendJson(res, 400, { error: "action must be on, off, or token" });
-          }
-          if (input.action === "off") {
-            await manager.setLan(false);
-            if (features) await features.stopLan();
-            return sendJson(res, 200, { enabled: false });
-          }
-          let lanToken = await readLanToken(env);
-          let generated = null;
-          if (!lanToken) {
-            generated = randomBytes(24).toString("base64url");
-            await registryUpdateLanToken(env, generated);
-            lanToken = generated;
-          }
-          await manager.setLan(true);
-          // The listener opens inside this process; the fresh token must be
-          // handed over because the boot-time env may not have had one.
-          if (features) await features.startLan(lanToken);
-          return sendJson(res, 200, { enabled: true, ...(generated ? { token: generated } : {}) });
-        }
       }
       if (req.method === "GET" && url.pathname === "/api/logs") {
         const id = url.searchParams.get("service") || "";
@@ -498,44 +435,16 @@ function stateRootFor(env) {
   return env.VAULT_STATE_ROOT || configPaths(defaultConfigRoot({ env })).stateRoot;
 }
 
-async function configStoreFor(env) {
-  const { createAppConfigStore, defaultConfigRoot } = await import("../lib/app-config.mjs");
-  const rootDir = env.ANYTHING_OBSIDIAN_HOME || defaultConfigRoot({ env });
-  return createAppConfigStore({ rootDir });
-}
-
-async function readLanToken(env) {
-  const config = await (await configStoreFor(env)).load();
-  return config?.lanToken ?? null;
-}
-
-async function registryUpdateLanToken(env, token) {
-  const store = await configStoreFor(env);
-  const config = await store.load();
-  if (!config) throw new Error("This app is not initialized yet. Run: anything-obsidian setup");
-  await store.save({ ...config, lanToken: token });
-}
-
 async function statusPayload(context) {
   const { jobs, env, fetchImpl, native, anythingllm, registry, platform, launchctl, systemctl, features } =
     context;
-  const services = (await serviceSnapshot(context)).filter(
-    (service) => !isContainer(env) || service.id !== "mcp-lan",
-  );
-  let lanEnabled = false;
-  try {
-    lanEnabled = (await serviceManagerFor(context).status()).lan;
-  } catch {
-    lanEnabled = false;
-  }
+  const services = await serviceSnapshot(context);
   let gateway = { available: false, enabled: false, running: false };
   if (features) gateway = await features.gatewayState().catch(() => gateway);
   const current = await currentVersionValue();
   const latest = await fetchLatestVersion({ fetchImpl });
   return redactSecretsObject({
-    ok: services
-      .filter((service) => service.id !== "mcp-lan" || lanEnabled)
-      .every((service) => service.running),
+    ok: services.every((service) => service.running),
     systemState: classifySystemState(services),
     services,
     workspace: await registry.getWorkspace(),
@@ -548,7 +457,6 @@ async function statusPayload(context) {
     config: publicConfig(env),
     deployment: deploymentCapabilities(env),
     update: { current, latest, available: Boolean(latest) && compareVersions(current, latest) < 0 },
-    lan: { enabled: lanEnabled },
     gateway,
   });
 }
@@ -567,8 +475,7 @@ async function serviceSnapshot(context) {
   // Ports come from the service environment so a test never probes whatever
   // happens to be listening on the real machine's MCP ports.
   const mcpPort = Number(env.MCP_PORT ?? 21503);
-  const mcpLanPort = Number(env.MCP_LAN_PORT ?? 21504);
-  const [anythingllmHealth, appStatus, gitHealth, mcpHealth, mcpLanHealth] =
+  const [anythingllmHealth, appStatus, gitHealth, mcpHealth] =
     await Promise.all([
       probeAnythingllm(anythingllm),
       serviceManagerFor(context)
@@ -580,7 +487,6 @@ async function serviceSnapshot(context) {
         ),
       probeGit(native.execFileImpl || promisify(nodeExecFile)),
       probeHttp(fetchImpl, `http://127.0.0.1:${mcpPort}/health`),
-      probeHttp(fetchImpl, `http://127.0.0.1:${mcpLanPort}/health`),
     ]);
   return [
     {
@@ -614,15 +520,6 @@ async function serviceSnapshot(context) {
           : "running (loopback 21503)"
         : "stopped",
       health: mcpHealth.ok ? mcpHealth : { ok: false, status: "stopped" },
-    },
-    {
-      id: "mcp-lan",
-      label: "MCP (LAN)",
-      found: true,
-      powerManaged: false,
-      running: mcpLanHealth.ok,
-      state: mcpLanHealth.ok ? "running (21504, token required)" : "off",
-      health: mcpLanHealth.ok ? mcpLanHealth : { ok: true, status: "off by default" },
     },
     {
       id: "git",

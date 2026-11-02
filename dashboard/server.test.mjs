@@ -23,7 +23,6 @@ function createDashboardServer(options) {
   });
 }
 
-import { createAgentTokenStore } from "../lib/agent-tokens.mjs";
 import { createSyncStatusStore } from "../lib/sync-status.mjs";
 
 test("vault routes clone a repository and initialise the unified workspace", async () => {
@@ -180,13 +179,10 @@ test("vault creation falls back to a namespaced unified workspace name", async (
   assert.match(createdWorkspaces[0], /^any-obs-/);
 });
 
-test("agent token routes create, list, and revoke MCP agent identities", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-dashboard-agents-"));
-  const registry = fakeRegistry();
-  await registry.create({ id: "secret-vault", allowlist: ["scout"] });
+test("retired agent and lan routes answer 404", async () => {
   const app = createDashboardServer({
     jobs: fakeJobs(),
-    registry,
+    registry: fakeRegistry(),
     anythingllm: {
       async listWorkspaces() {
         return [];
@@ -194,29 +190,12 @@ test("agent token routes create, list, and revoke MCP agent identities", async (
     },
     vaultStorage: fakeVaultStorage(),
     secrets: fakeSecrets(),
-    agentTokens: createAgentTokenStore({ rootPath: root }),
     env: nativeEnv(),
     native: nativePaths(),
   });
 
-  assert.deepEqual((await request(app, "GET", "/api/agents")).body, { agents: [] });
-  const created = await request(app, "POST", "/api/agents", { name: "scout" });
-  assert.equal(created.status, 201);
-  assert.equal(created.body.agent.name, "scout");
-  assert.ok(created.body.token.length > 0);
-
-  const duplicate = await request(app, "POST", "/api/agents", { name: "scout" });
-  assert.equal(duplicate.status, 500);
-  assert.match(duplicate.body.error, /Agent already exists/);
-
-  const invalid = await request(app, "POST", "/api/agents", { name: "Bad Name" });
-  assert.equal(invalid.status, 400);
-  assert.match(invalid.body.error, /lowercase dash-separated/);
-
-  const removed = await request(app, "DELETE", "/api/agents/scout");
-  assert.equal(removed.status, 200);
-  assert.deepEqual(removed.body, { removed: true, referencedBy: ["secret-vault"] });
-  assert.equal((await request(app, "DELETE", "/api/agents/scout")).status, 404);
+  assert.equal((await request(app, "GET", "/api/agents")).status, 404);
+  assert.equal((await request(app, "GET", "/api/lan")).status, 404);
 });
 
 test("vault creation requires an explicit automatic-commit identity and private HTTPS credential", async () => {
@@ -397,7 +376,7 @@ test("status returns classified system state and public config", async () => {
   assert.equal(response.body.systemState, "partial");
   assert.deepEqual(
     response.body.services.map((service) => service.id),
-    ["anythingllm", "app", "mcp", "mcp-lan", "git"],
+    ["anythingllm", "app", "mcp", "git"],
   );
   assert.equal(
     response.body.services.find((service) => service.id === "app").health.ok,
@@ -800,7 +779,7 @@ test("vault listings carry the last sync status when available", async () => {
   assert.equal((await request(withoutStore, "GET", "/api/vaults")).body.vaults[0].lastSync, null);
 });
 
-test("autostart and lan endpoints use the shared controller without changing runtime state", async () => {
+test("autostart endpoints use the shared controller without changing runtime state", async () => {
   const services = fakeServices({ running: true });
   const app = createDashboardServer({
     jobs: fakeJobs(),
@@ -814,40 +793,7 @@ test("autostart and lan endpoints use the shared controller without changing run
   assert.equal(on.body.enabled, true);
   assert.equal((await services.status()).services.scheduler.running, true);
   assert.equal((await request(app, "POST", "/api/autostart", { action: "toggle" })).status, 400);
-  assert.equal((await request(app, "POST", "/api/lan", { action: "off" })).body.enabled, false);
-  assert.deepEqual(services.calls, ["autostart:true", "lan:false"]);
-});
-
-test("lan on generates and stores a token when none is configured", async () => {
-  const home = tmpHome();
-  const { createAppConfigStore } = await import("../lib/app-config.mjs");
-  await createAppConfigStore({ rootDir: configRoot(home) }).save({
-    vaultsRoot: path.join(home, "v"),
-    anythingllmBaseUrl: "http://l",
-    apiKey: "k",
-  });
-  const paths = nativePaths();
-  const app = createDashboardServer({
-    jobs: fakeJobs(),
-    registry: fakeRegistry(),
-    secrets: fakeSecrets(),
-    vaultStorage: fakeVaultStorage(),
-    env: { ...nativeEnv(), ANYTHING_OBSIDIAN_HOME: configRoot(home) },
-    native: paths,
-    platform: "darwin",
-    launchctl: async (args) => {
-      if (args[0] === "print") throw new Error("not loaded");
-      return { stdout: "", stderr: "" };
-    },
-  });
-
-  const response = await request(app, "POST", "/api/lan", { action: "on" });
-
-  assert.equal(response.status, 200);
-  assert.equal(response.body.enabled, true);
-  assert.match(response.body.token, /^[A-Za-z0-9_-]{20,}$/);
-  const config = await createAppConfigStore({ rootDir: configRoot(home) }).load();
-  assert.equal(config.lanToken, response.body.token);
+  assert.deepEqual(services.calls, ["autostart:true"]);
 });
 
 let homeCounter = 0;

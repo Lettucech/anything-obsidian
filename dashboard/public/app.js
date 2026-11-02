@@ -92,23 +92,6 @@ export function actionDisabledReason(actionId, status, vaultId) {
   return "";
 }
 
-export function restrictedAccessNote(allowlist = []) {
-  const names = (allowlist ?? []).filter(Boolean);
-  return names.length
-    ? `Restricted: only allowlisted MCP agents (${names.join(", ")}) can read this vault.`
-    : "Restricted: no agent is allowlisted, so MCP callers cannot read this vault.";
-}
-
-export function agentCreatedLabel(iso) {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
-}
-
-export function agentRevokeMessage(name, referencedBy = []) {
-  if (!referencedBy.length) return `Agent '${name}' revoked.`;
-  return `Agent '${name}' revoked. These vault allowlists still name it: ${referencedBy.join(", ")}`;
-}
-
 export function breadcrumbSegments(rootPath, currentPath, rootLabel = "Vault root") {
   const crumbs = [{ name: rootLabel, path: rootPath }];
   if (!currentPath || currentPath === rootPath) return crumbs;
@@ -151,16 +134,14 @@ export function slugifyName(name) {
 }
 
 if (typeof document !== "undefined") {
-  const state = { status: null, vaults: [], agents: [], editingId: null, createdVaultId: null, createdAgentName: null, browse: { open: false, path: "", tree: null } };
+  const state = { status: null, vaults: [], editingId: null, createdVaultId: null, browse: { open: false, path: "", tree: null } };
   const els = Object.fromEntries([
-    "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form", "sync-banner", "update-badge", "lan-dialog", "lan-token-value", "lan-done",
+    "system-state", "power", "services", "vaults", "add-vault", "vault-dialog", "vault-form", "sync-banner", "update-badge",
     "gateway-dialog", "gateway-form", "gateway-message", "gateway-submit", "cancel-gateway", "gateway-dialog-note",
     "vault-form-title", "cancel-vault", "vault-message", "latest-job", "logs", "vault-source",
     "source-mode-field", "import-help", "import-id-field", "import-directory-field", "import-path-field",
-    "clone-url-field", "allowlist-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
+    "clone-url-field", "vault-submit", "test-vault-connection", "private-auth-fields", "edit-settings", "add-vault-note", "vault-dialog-message",
     "vault-summary", "service-summary", "theme-toggle", "theme-label", "theme-icon",
-    "agents", "agent-message", "add-agent", "agent-dialog", "agent-form", "agent-form-title",
-    "agent-create-fields", "agent-token-reveal", "agent-token-value", "agent-submit", "cancel-agent", "agent-dialog-message",
     "import-browse", "import-browse-toggle", "import-tree-panel", "import-breadcrumb", "import-tree", "import-tree-note", "import-use-folder", "import-refresh-tree", "import-path-jump", "import-jump",
     "rag-workspaces",
   ].map((id) => [id.replaceAll("-", ""), document.querySelector(`#${id}`)]));
@@ -187,11 +168,6 @@ if (typeof document !== "undefined") {
   els.vaultform.addEventListener("change", syncFormControls);
   els.vaultform.elements.importPath?.addEventListener("input", syncFormControls);
   els.vaultdialog.addEventListener("close", () => { state.editingId = null; state.createdVaultId = null; });
-  els.addagent.addEventListener("click", showAgentForm);
-  els.cancelagent.addEventListener("click", hideAgentForm);
-  els.agents.addEventListener("click", handleAgentAction);
-  els.agentform.addEventListener("submit", createAgent);
-  els.agentdialog.addEventListener("close", () => { state.createdAgentName = null; });
   els.importbrowsetoggle.addEventListener("click", toggleImportBrowse);
   els.importrefreshtree.addEventListener("click", () => loadImportTree(state.browse.path));
   // Optional-element guards: a cached old page must never crash the module
@@ -209,11 +185,9 @@ if (typeof document !== "undefined") {
   els.updatebadge.addEventListener("click", () => {
     message(`Version ${state.status.update?.latest} is available. Update in a terminal with: anything-obsidian update`);
   });
-  els.services.addEventListener("click", handleLanToggle);
   els.services.addEventListener("click", handleGatewayToggle);
   els.gatewayform.addEventListener("submit", submitGatewayKey);
   els.cancelgateway.addEventListener("click", () => els.gatewaydialog.close());
-  els.landone.addEventListener("click", () => els.landialog.close());
 
   async function handleVaultAction(event) {
     const button = event.target.closest("button[data-vault-id], button[data-dashboard-action]");
@@ -299,7 +273,7 @@ if (typeof document !== "undefined") {
       syncIntervalSeconds: Number(form.get("syncIntervalSeconds")), enabled: form.get("enabled") === "on",
       embedAfterSync: form.get("embedAfterSync") === "on", embedExtensions: form.get("embedExtensions"),
       embedExcludeDirs: form.get("embedExcludeDirs"),
-      accessMode: form.get("accessMode"), allowlist: String(form.get("allowlist") || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+      accessMode: form.get("accessMode"),
     };
   }
 
@@ -330,7 +304,6 @@ if (typeof document !== "undefined") {
     const completed = Boolean(state.createdVaultId);
     const importMode = !editing && form.elements.sourceMode.value === "import";
     const privateRepository = form.elements.repositoryVisibility.value === "private";
-    const restricted = form.elements.accessMode.value === "restricted";
 
     els.vaultsource.hidden = false;
     els.editsettings.hidden = !editing;
@@ -358,7 +331,6 @@ if (typeof document !== "undefined") {
     form.elements.repositoryUrl.required = !editing && !importMode;
     els.privateauthfields.hidden = !privateRepository;
     for (const name of ["gitAuthUsername", "gitAuthToken"]) form.elements[name].required = !editing && privateRepository;
-    els.allowlistfield.hidden = !restricted;
     els.vaultsubmit.textContent = editing ? "Save vault" : importMode ? "Import and add vault" : "Clone and add vault";
     els.vaultsubmit.hidden = completed;
     els.testvaultconnection.hidden = editing || completed || importMode;
@@ -480,8 +452,8 @@ if (typeof document !== "undefined") {
 
   async function refresh() {
     try {
-      [state.status, { vaults: state.vaults }, { agents: state.agents }] = await Promise.all([
-        fetchJson("/api/status"), fetchJson("/api/vaults"), fetchJson("/api/agents"),
+      [state.status, { vaults: state.vaults }] = await Promise.all([
+        fetchJson("/api/status"), fetchJson("/api/vaults"),
       ]);
       render();
       const logs = await fetchJson("/api/logs?service=syncer");
@@ -515,7 +487,6 @@ if (typeof document !== "undefined") {
     els.services.replaceChildren(...serviceCards());
     renderRagWorkspaces();
     els.vaults.replaceChildren(...(state.vaults.length ? state.vaults.map(renderVault) : [emptyState()]));
-    els.agents.replaceChildren(...(state.agents.length ? state.agents.map(renderAgent) : [element("p", "note", "No agent tokens yet. Create one, then name it in a vault's access policy allowlist.")]));
     els.vaultsummary.replaceChildren(...dashboardMetrics(state.status, state.vaults).map(renderMetric));
     const healthy = state.status.services.filter((service) => service.running && service.health?.ok).length;
     const total = state.status.services.length;
@@ -557,32 +528,31 @@ if (typeof document !== "undefined") {
   }
 
   function serviceCards() {
-    const cards = state.status.services
-      .filter((service) => state.status.deployment?.flavor !== "docker" || service.id !== "mcp-lan")
-      .map(renderService);
+    const cards = state.status.services.map(renderService);
     const gatewayCard = renderGatewayCard();
     if (gatewayCard) cards.push(gatewayCard);
     return cards;
   }
 
-  // The opt-in gateway feature of this same process: one card to turn it on,
-  // a link to its console once it is serving.
+  // The opt-in server feature of this same process: one card to turn it on,
+  // a link to its console once it is serving. The endpoint path stays
+  // /api/features/gateway for compatibility.
   function renderGatewayCard() {
     const gateway = state.status.gateway;
     if (!gateway?.available) return null;
     const article = element("article", `service ${gateway.running ? "ok" : "off"}`);
     const topline = element("div", "service-topline");
     topline.append(
-      element("h3", "", "Gateway"),
+      element("h3", "", "Server"),
       element("span", "service-status", gateway.enabled ? (gateway.running ? `Serving :${gateway.port}` : "Starting…") : "Off"),
     );
     article.append(topline, element("p", "", gateway.enabled ? "Serving shared workspaces and MCP to other users and agents." : "Share this instance's knowledge base with other users and agents. Off by default."));
     const actions = element("div", "vault-actions");
-    const toggle = element("button", "button button-quiet", gateway.enabled ? "Turn gateway off" : "Turn gateway on");
+    const toggle = element("button", "button button-quiet", gateway.enabled ? "Turn server off" : "Turn server on");
     toggle.dataset.gatewayToggle = gateway.enabled ? "off" : "on";
     actions.append(toggle);
     if (gateway.running) {
-      const open = element("a", "button button-secondary", "Open gateway console");
+      const open = element("a", "button button-secondary", "Open server console");
       open.href = "/gateway/";
       actions.append(open);
     }
@@ -599,18 +569,18 @@ if (typeof document !== "undefined") {
       // rejected.
       try {
         await request("/api/features/gateway", { method: "POST", body: JSON.stringify({ action: "on" }) });
-        message("Gateway enabled. Manage users and shared workspaces in its console.");
+        message("Server enabled. Manage users and shared workspaces in its console.");
         await refresh();
       } catch (error) {
         showGatewayDialog(error.message);
       }
       return;
     }
-    if (!window.confirm("Turn the gateway off? Remote users and agents lose access; their accounts, workspaces and sources are kept.")) return;
+    if (!window.confirm("Turn the server off? Remote users and agents lose access; their accounts, workspaces and sources are kept.")) return;
     button.disabled = true;
     try {
       await request("/api/features/gateway", { method: "POST", body: JSON.stringify({ action: "off" }) });
-      message("Gateway turned off.");
+      message("Server turned off.");
     } catch (error) {
       message(error.message, true);
     }
@@ -634,7 +604,7 @@ if (typeof document !== "undefined") {
         body: JSON.stringify({ action: "on", apiKey: form.get("apiKey"), ...(form.get("baseUrl") ? { baseUrl: form.get("baseUrl") } : {}) }),
       });
       els.gatewaydialog.close();
-      message("Gateway enabled. Manage users and shared workspaces in its console.");
+      message("Server enabled. Manage users and shared workspaces in its console.");
     } catch (error) {
       setGatewayDialogMessage(error.message, true);
     } finally {
@@ -650,13 +620,6 @@ if (typeof document !== "undefined") {
     const topline = element("div", "service-topline");
     topline.append(element("h3", "", service.label), element("span", "service-status", service.health?.ok ? "Healthy" : service.health?.status || "Needs attention"));
     article.append(topline, element("p", "", service.status || service.state));
-    if (service.id === "mcp-lan") {
-      const actions = element("div", "vault-actions");
-      const toggle = element("button", "button button-quiet", state.status.lan?.enabled ? "Turn LAN off" : "Turn LAN on");
-      toggle.dataset.lanToggle = state.status.lan?.enabled ? "off" : "on";
-      actions.append(toggle);
-      article.append(actions);
-    }
     return article;
   }
 
@@ -674,7 +637,6 @@ if (typeof document !== "undefined") {
     if (vault.lastSync?.status === "succeeded") details.lastElementChild.classList.add("sync-ok");
     if (vault.lastSync?.status === "failed") card.classList.add("sync-failed");
     card.append(header, details);
-    if (vault.accessMode === "restricted") card.append(element("p", "note", restrictedAccessNote(vault.allowlist)));
     const actions = element("div", "vault-actions");
     ["sync", "embed", "embed-all", "doctor", "edit", "remove"].forEach((action) => {
       const button = element("button", action === "remove" ? "button button-secondary button-danger" : "button button-secondary", actionLabel(action));
@@ -692,88 +654,6 @@ if (typeof document !== "undefined") {
     item.append(element("dt", "", label), element("dd", "", value));
     return item;
   }
-
-  function renderAgent(agent) {
-    const card = element("article", "agent-card");
-    const identity = element("div", "agent-identity");
-    identity.append(element("h3", "", agent.name));
-    const actions = element("div", "agent-actions");
-    const revoke = element("button", "button button-secondary button-danger", "Revoke");
-    revoke.dataset.agentName = agent.name;
-    revoke.dataset.agentAction = "revoke";
-    actions.append(revoke);
-    card.append(identity, element("p", "agent-created", agentCreatedLabel(agent.createdAt)), actions);
-    return card;
-  }
-
-  async function handleLanToggle(event) {
-    const button = event.target.closest("button[data-lan-toggle]");
-    if (!button) return;
-    const action = button.dataset.lanToggle;
-    if (action === "on" && !window.confirm("Enable the LAN RAG endpoint on port 21504? A Bearer token will be required for remote clients.")) return;
-    try {
-      const result = await request("/api/lan", { method: "POST", body: JSON.stringify({ action }) });
-      if (result.token) {
-        els.lantokenvalue.textContent = result.token;
-        els.landialog.showModal();
-      }
-      await refresh();
-    } catch (error) { message(error.message, true); }
-  }
-
-  async function handleAgentAction(event) {
-    const button = event.target.closest("button[data-agent-name]");
-    if (!button) return;
-    const { agentName } = button.dataset;
-    if (!window.confirm(`Revoke agent token '${agentName}'? Clients using it lose MCP access immediately.`)) return;
-    try {
-      const result = await request(`/api/agents/${encodeURIComponent(agentName)}`, { method: "DELETE" });
-      agentMessage(agentRevokeMessage(agentName, result.referencedBy));
-    } catch (error) {
-      agentMessage(error.message, true);
-    }
-    await refresh();
-  }
-
-  async function createAgent(event) {
-    event.preventDefault();
-    const form = new FormData(els.agentform);
-    setAgentDialogMessage("Creating agent token…");
-    els.agentsubmit.disabled = true;
-    try {
-      const created = await request("/api/agents", { method: "POST", body: JSON.stringify({ name: form.get("name") }) });
-      state.createdAgentName = created.agent.name;
-      els.agentformtitle.textContent = `Agent '${created.agent.name}' created`;
-      els.agentcreatefields.hidden = true;
-      els.agenttokenreveal.hidden = false;
-      els.agenttokenvalue.textContent = created.token;
-      els.agentsubmit.hidden = true;
-      els.cancelagent.textContent = "Done";
-      setAgentDialogMessage("");
-      await refresh();
-    } catch (error) {
-      setAgentDialogMessage(error.message, true);
-    } finally {
-      els.agentsubmit.disabled = false;
-    }
-  }
-
-  function showAgentForm() {
-    state.createdAgentName = null;
-    els.agentform.reset();
-    els.agentformtitle.textContent = "Add agent";
-    els.agentcreatefields.hidden = false;
-    els.agenttokenreveal.hidden = true;
-    els.agenttokenvalue.textContent = "";
-    els.agentsubmit.hidden = false;
-    els.cancelagent.textContent = "Cancel";
-    setAgentDialogMessage("");
-    els.agentdialog.showModal();
-  }
-
-  function hideAgentForm() { state.createdAgentName = null; els.agentdialog.close(); }
-  function agentMessage(text, error = false) { els.agentmessage.textContent = text; els.agentmessage.className = error ? "message error" : "message"; }
-  function setAgentDialogMessage(text, error = false) { els.agentdialogmessage.textContent = text; els.agentdialogmessage.className = error ? "message dialog-message error" : "message dialog-message"; }
 
   function emptyState() {
     const card = element("article", "empty-state");
