@@ -26,8 +26,9 @@ the bridge. Source directories are the user's notes and must be preserved.
 
 One install, one process, one dashboard. A single app service hosts the
 dashboard (21502), local MCP (21503) and sync scheduler; the gateway and the
-LAN MCP are opt-in in-process listeners. Interactive `setup` asks the mode
-first — the two credential kinds are never merged into one question:
+LAN MCP are opt-in in-process listeners. Interactive `setup` opens with an
+arrow-key choice of mode — the two credential kinds are never merged into
+one question:
 
 - **Local** (default, gateway feature off): the AnythingLLM URL and its
   developer API key.

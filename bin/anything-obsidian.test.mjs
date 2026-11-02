@@ -4,7 +4,8 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runCli, gatewayEnvironment, nodeVersionProblem } from "./anything-obsidian.mjs";
+import { PassThrough } from "node:stream";
+import { runCli, gatewayEnvironment, nodeVersionProblem, chooseOption } from "./anything-obsidian.mjs";
 import { createAppConfigStore } from "../lib/app-config.mjs";
 import { createInstallationStore } from "../lib/installation.mjs";
 import { createGatewayConfig } from "../server/gateway-config.mjs";
@@ -152,6 +153,12 @@ function fakePromptFactory(f, questions) {
       const answer = f.answers.shift();
       return answer === undefined ? fallback : answer;
     },
+    choose: async (text, options, opts = {}) => {
+      questions.push(text);
+      const answer = f.answers.shift();
+      if (answer === undefined || answer === "") return opts.defaultIndex ?? 0;
+      return Number(answer) - 1;
+    },
     close() {},
   });
 }
@@ -291,4 +298,45 @@ test("JSON status errors remain machine readable when configuration is corrupt",
   const output = JSON.parse(f.lines.at(-1));
   assert.equal(output.ok, false);
   assert.ok(output.error);
+});
+
+function rawIO() {
+  const input = new EventEmitter();
+  input.isTTY = true;
+  input.isRaw = false;
+  input.setRawMode = (value) => {
+    input.isRaw = value;
+  };
+  input.resume = () => {};
+  const written = [];
+  return { input, output: { write: (text) => written.push(String(text)) }, written };
+}
+
+test("chooseOption: arrow keys move, enter picks, digits shortcut, ctrl+c cancels", async () => {
+  const { input, output, written } = rawIO();
+  const pending = chooseOption({ input, output }, "Pick", ["Local", "Gateway"], { defaultIndex: 0 });
+  input.emit("data", "\x1b[B"); // down → Gateway
+  input.emit("data", "\x1b[A"); // up → Local
+  input.emit("data", "\x1b[B"); // down → Gateway
+  input.emit("data", "\r");
+  assert.equal(await pending, 1);
+  assert.equal(input.isRaw, false); // raw mode restored
+  assert.ok(written.join("").includes("❯"));
+
+  const second = chooseOption({ input, output }, "Pick", ["Local", "Gateway"], { defaultIndex: 0 });
+  input.emit("data", "2"); // digit shortcut
+  assert.equal(await second, 1);
+
+  const third = chooseOption({ input, output }, "Pick", ["Local", "Gateway"], { defaultIndex: 0 });
+  input.emit("data", "\x03");
+  await assert.rejects(third, /Setup cancelled/);
+});
+
+test("chooseOption: non-TTY input falls back to a numbered question", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const pending = chooseOption({ input, output }, "Pick", ["Local", "Gateway"], { defaultIndex: 0 });
+  input.write("2\n");
+  assert.equal(await pending, 1);
+  input.end();
 });

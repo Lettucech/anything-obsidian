@@ -40,8 +40,8 @@ export const MANAGED_VAULTS_ROOT = "~/.anything-obsidian/vaults";
 const USAGE = `Usage: anything-obsidian <command>
 
   setup       Connect and configure this machine; start its services.
-              Asks the mode first: local AnythingLLM (URL + developer key)
-              or join a gateway (URL + administrator-issued user token).
+              Asks the mode with an arrow-key choice: local AnythingLLM
+              (URL + developer key) or join a gateway (URL + user token).
   start       Start the app service in the background (idempotent)
   stop        Stop the app service; preserve autostart preference
   restart     Restart the app service and verify readiness
@@ -322,22 +322,24 @@ async function setup(ctx, flags) {
     )
       throw new Error("Setup cancelled; existing configuration was kept");
     // Two different credential kinds deserve two different questions. The
-    // mode is asked explicitly; --server always means local AnythingLLM
-    // (it enables this machine's own gateway feature afterwards).
+    // mode is asked explicitly (arrow-key choice on a terminal); --server
+    // always means local AnythingLLM (it enables this machine's own gateway
+    // feature afterwards).
     let mode = server ? "local" : null;
     if (prompt && !mode) {
-      const answer = await prompt.question(
-        [
-          "Is this machine joining a gateway, or talking to AnythingLLM directly?",
-          "  1) Local — direct AnythingLLM (default)",
-          "  2) Join a gateway as a client",
-          "Choose [1]: ",
-        ].join("\n"),
-        "1",
-      );
-      mode = ["2", "gateway", "g", "join"].includes(answer.trim().toLowerCase())
-        ? "gateway"
-        : "local";
+      const index = prompt.choose
+        ? await prompt.choose(
+            "Is this machine joining a gateway, or talking to AnythingLLM directly?",
+            ["Local — direct AnythingLLM", "Join a gateway as a client"],
+            { defaultIndex: 0 },
+          )
+        : Number(
+            (await prompt.question(
+              "Local (default) or join a gateway? [1=local, 2=gateway] ",
+              "1",
+            )) || "1",
+          ) - 1;
+      mode = index === 1 ? "gateway" : "local";
     }
     if (!mode) mode = "local"; // flag-driven setup: prompts are skipped anyway
     const defaultUrl =
@@ -904,6 +906,90 @@ async function logs(ctx, role, flags) {
   }
   return 0;
 }
+// One-shot readline question. Each prompt opens its own interface so the
+// arrow-key chooser below can own raw stdin without clashing with readline.
+async function askLine(io, text) {
+  const rl = createInterface({
+    input: io.input,
+    output: io.output,
+    terminal: Boolean(io.input.isTTY && io.output.isTTY),
+  });
+  try {
+    return await rl.question(text);
+  } finally {
+    rl.close();
+  }
+}
+
+// Single choice, arrow-key UI on a real terminal (↑/↓ move, Enter picks,
+// number keys are shortcuts, Ctrl+C cancels). Pipes, agents and tests fall
+// back to a plain numbered question.
+export function chooseOption(io, question, options, { defaultIndex = 0 } = {}) {
+  if (typeof io.input?.setRawMode !== "function" || !io.input.isTTY) {
+    const numbered =
+      [question, ...options.map((option, i) => `  ${i + 1}) ${option}`), "Choose [1]: "].join("\n");
+    return (async () => {
+      const answer = (await askLine(io, numbered)).trim().toLowerCase();
+      const digit = Number(answer);
+      if (Number.isInteger(digit) && digit >= 1 && digit <= options.length) return digit - 1;
+      if (answer && !Number.isNaN(digit)) {
+        const byName = options.findIndex((option) => option.toLowerCase().startsWith(answer));
+        if (byName >= 0) return byName;
+      }
+      return defaultIndex;
+    })();
+  }
+  return new Promise((resolve, reject) => {
+    const input = io.input;
+    const output = io.output;
+    let selected = Math.min(Math.max(defaultIndex, 0), options.length - 1);
+    const wasRaw = input.isRaw === true;
+    input.setRawMode(true);
+    input.resume();
+    const height = 1 + options.length;
+    const render = (first) => {
+      if (!first) output.write(`\x1b[${height}A`);
+      const lines = [question];
+      options.forEach((option, i) => {
+        lines.push(i === selected ? `\x1b[36m❯\x1b[0m ${option}` : `  ${option}`);
+      });
+      output.write(lines.map((line) => `\x1b[2K${line}`).join("\n") + "\n");
+    };
+    const cleanup = () => {
+      input.removeListener("data", onKey);
+      input.setRawMode(wasRaw);
+    };
+    const finish = (index) => {
+      cleanup();
+      resolve(index);
+    };
+    const cancel = () => {
+      cleanup();
+      output.write("\n");
+      reject(new Error("Setup cancelled"));
+    };
+    const onKey = (chunk) => {
+      const text = String(chunk);
+      if (text.includes("\x1b[A")) {
+        selected = (selected - 1 + options.length) % options.length;
+        return render(false);
+      }
+      if (text.includes("\x1b[B")) {
+        selected = (selected + 1) % options.length;
+        return render(false);
+      }
+      if (text === "\x03") return cancel();
+      if (/[\r\n]/.test(text)) return finish(selected);
+      const digit = Number(text.trim());
+      if (Number.isInteger(digit) && digit >= 1 && digit <= options.length) {
+        return finish(digit - 1);
+      }
+    };
+    input.on("data", onKey);
+    render(true);
+  });
+}
+
 function createPrompt(io) {
   let hidden = false;
   const output = new Writable({
@@ -914,28 +1000,25 @@ function createPrompt(io) {
   });
   output.isTTY = io.output.isTTY;
   output.columns = io.output.columns;
-  const input = createInterface({
-    input: io.input,
-    output,
-    terminal: Boolean(io.input.isTTY && io.output.isTTY),
-  });
   return {
-    question: async (text, fallback) => (await input.question(text)).trim() || fallback,
+    question: async (text, fallback) => (await askLine({ input: io.input, output }, text)).trim() || fallback,
     secret: async (text, fallback) => {
       io.output.write(text);
       hidden = true;
       try {
-        return (await input.question("")).trim() || fallback;
+        return (await askLine({ input: io.input, output }, "")).trim() || fallback;
       } finally {
         hidden = false;
         io.output.write("\n");
       }
     },
     confirm: async (text, fallback) => {
-      const answer = (await input.question(text)).trim().toLowerCase();
+      const answer = (await askLine({ input: io.input, output }, text)).trim().toLowerCase();
       return answer ? ["y", "yes"].includes(answer) : fallback;
     },
-    close: () => input.close(),
+    choose: (text, options, opts) =>
+      chooseOption({ input: io.input, output }, text, options, opts),
+    close() {},
   };
 }
 
