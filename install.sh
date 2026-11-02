@@ -42,6 +42,9 @@ Options:
   --no-browser    do not open the browser when done
   --server         server install: configure for the IAM gateway and register
                    the gateway service; client role is configured separately
+  --local <path>   stage the app from a local checkout instead of downloading
+                   from GitHub (development; replaces an existing app, keeping
+                   app.prev as the previous generation)
 
 Environment overrides:
   ANYTHING_OBSIDIAN_APP_HOME     where the app lives (default ~/.anything-obsidian)
@@ -69,7 +72,7 @@ if [ ! -t 0 ] && [ -z "${AO_INSTALLER_EXECED:-}" ]; then
 fi
 
 # ---------- flags ----------
-VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; SERVER=0; WANT_HELP=0
+VAULTS_ROOT=""; URL=""; API_KEY=""; PORT=""; NO_BROWSER=0; SERVER=0; WANT_HELP=0; LOCAL_SRC=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --vaults-root) VAULTS_ROOT="${2:?}"; shift 2 ;;
@@ -78,6 +81,7 @@ while [ $# -gt 0 ]; do
     --port) PORT="${2:?}"; shift 2 ;;
     --no-browser) NO_BROWSER=1; shift ;;
     --server) SERVER=1; NO_BROWSER=1; shift ;;
+    --local) LOCAL_SRC="${2:?}"; shift 2 ;;
     --help|-h) WANT_HELP=1; shift ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -156,13 +160,26 @@ fi
 say "  ✓ git: $(git --version | sed 's/^git version /git /')"
 
 # ---------- app ----------
-say "  downloading the app from github.com/$REPO ($BRANCH)…"
+if [ -n "$LOCAL_SRC" ]; then
+  say "  staging the app from $LOCAL_SRC…"
+  [ -d "$LOCAL_SRC" ] || die "Local app source not found: $LOCAL_SRC"
+  [ -f "$LOCAL_SRC/app.mjs" ] || die "Not an any-obs checkout (no app.mjs): $LOCAL_SRC"
+else
+  say "  downloading the app from github.com/$REPO ($BRANCH)…"
+fi
 STAGING="$APP_ROOT/download.$$"
 mkdir -p "$STAGING"
-curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$STAGING" \
-  || die "Could not download the repository. Check github.com/$REPO is reachable."
-SOURCE_DIR="$(find "$STAGING" -maxdepth 1 -mindepth 1 -type d | head -1)"
-if [ -z "$SOURCE_DIR" ]; then die "Downloaded archive was empty."; fi
+if [ -n "$LOCAL_SRC" ]; then
+  # Copy the checkout without VCS/dependency dirs; npm ci rebuilds deps below.
+  command -v rsync >/dev/null 2>&1 || die "rsync is required for --local"
+  rsync -a --exclude .git --exclude node_modules "$LOCAL_SRC/" "$STAGING/"
+  SOURCE_DIR="$STAGING"
+else
+  curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$STAGING" \
+    || die "Could not download the repository. Check github.com/$REPO is reachable."
+  SOURCE_DIR="$(find "$STAGING" -maxdepth 1 -mindepth 1 -type d | head -1)"
+  if [ -z "$SOURCE_DIR" ]; then die "Downloaded archive was empty."; fi
+fi
 # Guard against a CDN-cached pre-merge tarball: the merged app entry is part
 # of every current release, so its absence means the download is stale.
 if [ ! -f "$SOURCE_DIR/app.mjs" ]; then
@@ -178,8 +195,13 @@ say "  installing dependencies in staging…"
   || die "Dependencies failed. Existing installation was kept."
 "$NODE_BIN" "$SOURCE_DIR/bin/anything-obsidian.mjs" --help >/dev/null \
   || die "Staged app validation failed. Existing installation was kept."
-if [ -d "$APP_DIR" ]; then
+if [ -d "$APP_DIR" ] && [ -z "$LOCAL_SRC" ]; then
   die "An app already exists at $APP_DIR. Use anything-obsidian update; it supports rollback."
+fi
+# --local over an existing install: keep one previous generation for rollback.
+if [ -d "$APP_DIR" ]; then
+  rm -rf "$APP_DIR.prev"
+  mv "$APP_DIR" "$APP_DIR.prev"
 fi
 mv "$SOURCE_DIR" "$APP_DIR"
 rm -rf "$STAGING"
