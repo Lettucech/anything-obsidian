@@ -54,11 +54,10 @@ codex plugin marketplace add Lettucech/anything-obsidian
 codex plugin add anything-obsidian@anything-obsidian
 ```
 
-The endpoint defaults to this machine's local install. Claude Code asks
-for it when the plugin is enabled; for Codex, override the server by name
-in `~/.codex/config.toml` with `[mcp_servers."anything-obsidian"]` and a
-`url` of your own. Pointing away from loopback should mean the server
-plane (below), which needs its Bearer header as well.
+The plugin is the local profile, so its endpoint is fixed to
+`127.0.0.1:21503` — it only exists where any-obs is installed, and the
+local listener rejects non-loopback Hosts. Agents on machines without an
+any-obs install use the server plane (below) instead.
 
 After connecting, the command probes the endpoint's `/health` and points at
 `anything-obsidian start` when the app is not running. It wires the local

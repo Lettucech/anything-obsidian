@@ -27,25 +27,16 @@ codex plugin add anything-obsidian@anything-obsidian
 (For a checkout of this repository, pass the local path to
 `marketplace add` instead of the GitHub slug.)
 
-## Configuring the endpoint
+## Why the endpoint is fixed
 
-Claude Code asks for the endpoint when the plugin is enabled
-(`mcp_url`, default `http://127.0.0.1:21503/mcp` — this machine's local
-install). Change it later in the plugin's settings
-(`pluginConfigs` in `settings.json`).
-
-Codex CLI plugins take a fixed `.mcp.json`; to point the plugin at another
-endpoint, override the server by name in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers."anything-obsidian"]
-url = "http://<host>:21503/mcp"
-```
-
-A non-loopback endpoint should be the any-obs **server plane**
-(`anything-obsidian server on`, port 21500, RAG-only), which expects an
-`Authorization: Bearer <user-token>` header — see `docs/agent-mcp.md` for
-the boundary between the local and server profiles.
+The plugin registers `http://127.0.0.1:21503/mcp` and nothing else — that
+is the local profile by construction. It only exists where any-obs is
+installed, and the local MCP listener accepts loopback Host headers only,
+so a different value could never connect. Agents on machines without an
+any-obs install join a team server instead
+(`anything-obsidian server on`, port 21500, RAG-only,
+`Authorization: Bearer <user-token>`) — that setup is configured by hand,
+see `docs/agent-mcp.md`.
 
 ## Requirements
 

@@ -42,13 +42,15 @@ endpoint. This change closes that gap:
   (MCP arrives via plugins and project `.mcp.json`), so its target prints
   the project-level snippet instead of inventing a config location.
 
-The endpoint is configurable, not hard-coded: Claude Code resolves
-`${user_config.mcp_url}` in the plugin's MCP `url` (declared via
-`userConfig`, default loopback 21503 — asked at enable time), while Codex
-plugins take a fixed `.mcp.json` and are overridden by name from
-`~/.codex/config.toml` (verified live: a same-name
-`[mcp_servers."anything-obsidian"]` table supersedes the plugin value).
-Both defaults remain the local loopback install.
+The endpoint is hard-coded loopback **by design** (settled 2026-11-03,
+reverting a brief userConfig experiment): the plugin is the local profile,
+which only exists where any-obs is installed; join-server clients still
+get a local 21503 (RAG proxies to the remote server); and the local MCP
+listener rejects non-loopback Host headers, so no other URL could ever
+connect. The one legitimate non-loopback case — an agent machine with no
+any-obs install joining a team server (port 21500 + Bearer header) — needs
+headers, not just a URL, and stays a manual setup documented in
+`docs/agent-mcp.md`.
 
 ## Surface
 
