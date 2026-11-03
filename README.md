@@ -6,7 +6,10 @@ provided AnythingLLM instance. It owns the vault side — registration
 on your disk) and optional Git-based sync — and mirrors vault content into
 the RAG index of an AnythingLLM instance you provide and run yourself
 (Docker, AnythingLLM Desktop, or a remote server). It never hosts
-AnythingLLM.
+AnythingLLM — and it never uses its chat model. AnythingLLM serves as a
+pure RAG index engine here: embedding and vector search only. No any-obs
+code path calls an LLM — its chat model is never exercised — so answers
+are synthesized by the coding agent you connect.
 
 The vault repository is the source of truth; the RAG index is rebuildable
 derived data. Over MCP, agents never write vault source files; the local
@@ -175,17 +178,6 @@ The endpoint is bound to loopback only and starts with autostart:
 http://localhost:21503/mcp
 ```
 
-Register coding agents with one command instead of editing each config by
-hand — `anything-obsidian connect` writes the matching MCP entry for Claude
-Code, Cursor, Windsurf, Codex, Gemini CLI and VS Code (idempotent;
-`--remove` unregisters). Agents with a plugin system can install the
-repository's plugin instead: Claude Code via `/plugin marketplace add
-Lettucech/anything-obsidian` + `/plugin install
-anything-obsidian@anything-obsidian`, Codex CLI via `codex plugin
-marketplace add Lettucech/anything-obsidian` + `codex plugin add
-anything-obsidian@anything-obsidian`. Details and the per-agent config
-table live in `docs/agent-mcp.md`.
-
 Every tool is prefixed `any_obs_` — they all belong to this system. The
 second segment names the domain:
 
@@ -219,6 +211,37 @@ Vault file content stays read-only over MCP — there are no tools for
 writing, patching, or uploading notes. Management tools change how the
 system runs (registration, jobs, services), never vault source
 files.
+
+### Connect your coding agents
+
+Register the endpoint with the agents installed on this machine in one
+command — no hand-editing of per-agent configs:
+
+```sh
+anything-obsidian connect            # wire every detected agent
+anything-obsidian connect --list     # show what was detected
+anything-obsidian connect --remove   # unregister again
+```
+
+Supported: Claude Code, Cursor, Windsurf, Codex, Gemini CLI and VS Code
+(idempotent, one key per agent config). Agents with a plugin system can
+install the repository's plugin instead — same fixed loopback endpoint:
+
+```text
+# Claude Code
+/plugin marketplace add Lettucech/anything-obsidian
+/plugin install anything-obsidian@anything-obsidian
+```
+
+```sh
+# Codex CLI (v0.117.0+)
+codex plugin marketplace add Lettucech/anything-obsidian
+codex plugin add anything-obsidian@anything-obsidian
+```
+
+For the reusable retrieval-and-edit workflow, also install the skill
+(below). The per-agent config table and tool reference live in
+`docs/agent-mcp.md`.
 
 ### Agent workflow skill
 
