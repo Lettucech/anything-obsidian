@@ -15,6 +15,42 @@ Start the default stack and connect to:
 http://localhost:21503/mcp
 ```
 
+### Register coding agents (one command)
+
+`anything-obsidian connect` writes this endpoint into each coding agent's
+own config — every writer is idempotent, touches exactly one key, and
+preserves every other entry:
+
+```bash
+anything-obsidian connect                 # every detected agent
+anything-obsidian connect codex cursor    # or an explicit list
+anything-obsidian connect --list          # show what is detected
+anything-obsidian connect --remove [agent...]   # unregister again
+```
+
+| Agent | Config | Entry |
+|---|---|---|
+| Claude Code | `~/.claude.json` | `mcpServers` → `{type: "http", url}` |
+| Cursor | `~/.cursor/mcp.json` | `mcpServers` → `{url}` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | `mcpServers` → `{serverUrl}` |
+| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.anything-obsidian]` |
+| Gemini CLI | `~/.gemini/settings.json` | `mcpServers` → `{httpUrl}` |
+| VS Code (Copilot) | `~/.vscode/mcp.json` | `servers` → `{type: "http", url}` |
+| ZCode | — | no user-global MCP config; prints the project `.mcp.json` snippet instead |
+
+Claude Code users can alternatively install the repository's plugin, which
+carries the same registration:
+
+```text
+/plugin marketplace add Lettucech/anything-obsidian
+/plugin install anything-obsidian@anything-obsidian
+```
+
+After connecting, the command probes the endpoint's `/health` and points at
+`anything-obsidian start` when the app is not running. It wires the local
+profile only; remote agents (below) add `Authorization: Bearer <user-token>`
+headers by hand for now.
+
 The local profile provides RAG plus raw-vault discovery and bounded source
 reads. `any_obs_vault_directory` is local-only and returns the configured
 host path of a selected vault, allowing an agent that already has local
@@ -94,8 +130,9 @@ anything-obsidian server on       # then open the dashboard → Server → conso
 Remote clients connect to `http://<host>:21500/mcp` with
 `Authorization: Bearer <user-token>`. The server exposes only:
 
-- `any_obs_vault_list`
-- `any_obs_rag_search`
+- `any_obs_rag_search` (workspaces the token's grants permit)
+- `any_obs_shared_refresh` (queue refresh + reindex of shared sources)
+- `any_obs_job_get` (status of shared-source pipeline jobs)
 
 It does not mount the vault root and cannot return vault directories or raw
 source files — that boundary is by construction, not convention. What a

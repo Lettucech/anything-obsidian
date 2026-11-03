@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -347,4 +347,76 @@ test("chooseOption: non-TTY input falls back to a numbered question", async () =
   input.write("2\n");
   assert.equal(await pending, 1);
   input.end();
+});
+
+test("connect --list reports detected coding agents", async (t) => {
+  const f = await fixture(t);
+  await mkdir(path.join(f.root, ".codex"), { recursive: true });
+  await mkdir(path.join(f.root, ".cursor"), { recursive: true });
+  assert.equal(await f.run(["connect", "--list", "--json"]), 0);
+  const rows = JSON.parse(f.lines.at(-1));
+  const byId = Object.fromEntries(rows.map((row) => [row.id, row.detected]));
+  assert.equal(byId.codex, true);
+  assert.equal(byId.cursor, true);
+  assert.equal(byId["claude-code"], false);
+});
+
+test("connect <agent> writes the config, is idempotent and removes cleanly", async (t) => {
+  const f = await fixture(t);
+  await mkdir(path.join(f.root, ".codex"), { recursive: true });
+  const tomlPath = path.join(f.root, ".codex", "config.toml");
+
+  assert.equal(await f.run(["connect", "codex", "--json"]), 0);
+  const first = JSON.parse(f.lines.at(-1));
+  assert.equal(first.results[0].status, "connected");
+  assert.equal(first.appReachable, true);
+  assert.match(await readFile(tomlPath, "utf8"), /\[mcp_servers\.anything-obsidian\]/);
+
+  assert.equal(await f.run(["connect", "codex", "--json"]), 0);
+  const second = JSON.parse(f.lines.at(-1));
+  assert.equal(second.results[0].status, "unchanged");
+
+  assert.equal(await f.run(["connect", "--remove", "codex", "--json"]), 0);
+  const third = JSON.parse(f.lines.at(-1));
+  assert.equal(third.results[0].status, "removed");
+  assert.equal(third.appReachable, undefined);
+  assert.doesNotMatch(await readFile(tomlPath, "utf8"), /anything-obsidian/);
+});
+
+test("connect with no args wires every detected agent", async (t) => {
+  const f = await fixture(t);
+  await mkdir(path.join(f.root, ".claude"), { recursive: true });
+  await mkdir(path.join(f.root, ".cursor"), { recursive: true });
+  assert.equal(await f.run(["connect", "--json"]), 0);
+  const payload = JSON.parse(f.lines.at(-1));
+  assert.deepEqual(
+    payload.results.map((result) => result.id).sort(),
+    ["claude-code", "cursor"],
+  );
+  assert.equal(payload.appReachable, true);
+});
+
+test("connect with no detected agents reports and exits cleanly", async (t) => {
+  const f = await fixture(t);
+  assert.equal(await f.run(["connect"]), 0);
+  assert.match(f.lines.join("\n"), /No supported coding agents detected/);
+});
+
+test("connect with an unknown agent fails and lists the known agents", async (t) => {
+  const f = await fixture(t);
+  assert.equal(await f.run(["connect", "nope"]), 1);
+  assert.match(f.lines.join("\n"), /Unknown agent "nope"/);
+});
+
+test("connect flags a missing explicit target and an unreachable app", async (t) => {
+  const f = await fixture(t);
+  assert.equal(await f.run(["connect", "codex"]), 1);
+  assert.match(f.lines.join("\n"), /not-installed/);
+
+  await mkdir(path.join(f.root, ".codex"), { recursive: true });
+  f.setOnline(false);
+  assert.equal(await f.run(["connect", "codex"]), 0);
+  const text = f.lines.join("\n");
+  assert.match(text, /anything-obsidian start/);
+  assert.match(text, /npx skills add Lettucech\/anything-obsidian/);
 });

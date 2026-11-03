@@ -32,6 +32,13 @@ import { withFileLock } from "../lib/state.mjs";
 import { updateApplication } from "../lib/updater.mjs";
 import { isContainer } from "../lib/deployment.mjs";
 import { adminHeaders, ensureContainerToken } from "../lib/container-admin.mjs";
+import {
+  AGENT_TARGETS,
+  DEFAULT_MCP_URL,
+  applyConnection,
+  detectAgents,
+  findAgentTarget,
+} from "../lib/agent-connect.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const exec = promisify(execFile);
@@ -50,6 +57,9 @@ const USAGE = `Usage: anything-obsidian <command>
   autostart   on | off | status (changing this does not stop running services)
   server      on | off | status — serve other users through this machine (default off)
   gateway     Deprecated alias for "server"
+  connect     Register the local MCP server with coding agents
+              (claude-code, cursor, windsurf, codex, gemini, vscode, zcode):
+              connect [agent...] | --list | --remove | --url <url>
   update      Stage, verify and activate an update; roll back failed activation
   run         <service> in the foreground for diagnostics ("app" is the merged service)
 
@@ -117,7 +127,14 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
         }
       : command === "logs"
         ? { follow: { type: "boolean", short: "f" }, lines: { type: "string" } }
-        : ["status", "autostart", "server", "gateway", "lan"].includes(command)
+        : command === "connect"
+          ? {
+              json: { type: "boolean" },
+              remove: { type: "boolean" },
+              list: { type: "boolean" },
+              url: { type: "string" },
+            }
+          : ["status", "autostart", "server", "gateway", "lan"].includes(command)
           ? { json: { type: "boolean" }, "allowed-hosts": { type: "string" } }
           : {};
   let machineReadable = false;
@@ -141,7 +158,10 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
       throw new Error(
         "Docker manages lifecycle and startup. Use docker compose up -d, stop, restart, or logs; rebuild the image to update.",
       );
-    if (!["run", "logs", "autostart", "lan", "server", "gateway"].includes(command) && positionals.length)
+    if (
+      !["run", "logs", "autostart", "lan", "server", "gateway", "connect"].includes(command) &&
+      positionals.length
+    )
       throw new Error(`Unexpected argument: ${positionals[0]}`);
     switch (command) {
       case "setup": {
@@ -172,6 +192,12 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
           log('Deprecation: "gateway" is now "server"; the alias keeps working.');
         return await serverCommand(context, action, flags.json);
       }
+      case "connect":
+        if (isContainer(env))
+          throw new Error(
+            "Agent connect writes host-side agent configs; run it on the host, not inside the container.",
+          );
+        return await connectCommand(context, positionals, flags);
       case "start":
         return await start(context, false);
       case "restart":
@@ -510,6 +536,76 @@ async function serverCommand(ctx, action, json) {
       : `Server on (not running yet); it will listen on port ${result.port} at the next start. Manage it at ${dashboardUrl(ctx)}/gateway/`,
   );
   return 0;
+}
+
+// Registers the local MCP endpoint (loopback, owner-trusted) with coding
+// agents' own config files. Each writer is idempotent and touches exactly one
+// key; skills stay with `npx skills add`, which this command only advertises.
+async function connectCommand(ctx, targets, flags) {
+  const { log, env, fetchImpl } = ctx;
+  const homeDir = env.HOME || os.homedir();
+  if (flags.list) {
+    const rows = await detectAgents({ homeDir });
+    log(
+      flags.json
+        ? JSON.stringify(rows)
+        : rows
+            .map((row) => `${row.detected ? "✔" : "·"} ${row.id.padEnd(12)} ${row.label}`)
+            .join("\n"),
+    );
+    return 0;
+  }
+  const ids = targets.map(String);
+  for (const id of ids) findAgentTarget(id);
+  let selected = ids;
+  if (!ids.length) {
+    const rows = await detectAgents({ homeDir });
+    selected = rows.filter((row) => row.detected).map((row) => row.id);
+    if (!selected.length) {
+      log(
+        flags.json
+          ? JSON.stringify({ results: [] })
+          : `No supported coding agents detected. Known agents: ${AGENT_TARGETS.map((t) => t.id).join(", ")}.`,
+      );
+      return 0;
+    }
+  }
+  const url = flags.url || DEFAULT_MCP_URL;
+  const results = [];
+  for (const id of selected)
+    results.push(await applyConnection({ id, homeDir, url, remove: flags.remove === true }));
+  let appReachable = null;
+  let healthUrl = null;
+  if (!flags.remove) {
+    healthUrl = `${url.replace(/\/mcp\/?$/, "")}/health`;
+    const response = await fetchWithTimeout(fetchImpl, healthUrl, {}, 1500).catch(() => null);
+    appReachable = Boolean(response && response.ok);
+  }
+  const describe = (result) => {
+    if (result.status === "connected") return `connected → ${result.configPath}`;
+    if (result.status === "removed") return `removed from ${result.configPath}`;
+    if (result.status === "unchanged")
+      return `already ${flags.remove ? "absent" : "connected"} (${result.configPath})`;
+    return `${result.status} — ${result.note}`;
+  };
+  if (flags.json) {
+    log(
+      JSON.stringify({
+        results,
+        ...(appReachable === null ? {} : { appReachable }),
+      }),
+    );
+  } else {
+    for (const result of results) log(`${result.id}: ${describe(result)}`);
+    if (!flags.remove) {
+      if (appReachable === false)
+        log(`Note: no answer from ${healthUrl} — run 'anything-obsidian start' before using the tools.`);
+      log(
+        "Skills (optional): npx skills add Lettucech/anything-obsidian --skill anything-obsidian-vault-workflow --agent <agent>",
+      );
+    }
+  }
+  return results.some((result) => result.status === "not-installed") ? 1 : 0;
 }
 
 function unreachable(error) {

@@ -1,0 +1,18 @@
+{
+  "name": "anything-obsidian",
+  "owner": {
+    "name": "Lettucech",
+    "url": "https://github.com/Lettucech"
+  },
+  "description": "Anything Obsidian (any-obs): a local bridge between Obsidian vaults and an AnythingLLM RAG index.",
+  "plugins": [
+    {
+      "name": "anything-obsidian",
+      "source": "./plugins/claude-code",
+      "description": "Local MCP tools for Anything Obsidian: per-vault RAG search, raw vault reads and vault management.",
+      "version": "1.0.0",
+      "category": "mcp",
+      "tags": ["obsidian", "anythingllm", "rag", "mcp", "knowledge"]
+    }
+  ]
+}

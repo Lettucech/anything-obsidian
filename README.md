@@ -175,17 +175,25 @@ The endpoint is bound to loopback only and starts with autostart:
 http://localhost:21503/mcp
 ```
 
+Register coding agents with one command instead of editing each config by
+hand — `anything-obsidian connect` writes the matching MCP entry for Claude
+Code, Cursor, Windsurf, Codex, Gemini CLI and VS Code (idempotent;
+`--remove` unregisters). Claude Code can alternatively install the
+repository's plugin: `/plugin marketplace add Lettucech/anything-obsidian`,
+then `/plugin install anything-obsidian@anything-obsidian`. Details and the
+per-agent config table live in `docs/agent-mcp.md`.
+
 Every tool is prefixed `any_obs_` — they all belong to this system. The
 second segment names the domain:
 
 | Domain | Meaning | Tools |
 |---|---|---|
 | `any_obs_vault_*` / `any_obs_file_*` | Read the vault source of truth | vault list (with last-sync state)/context/directory, file list/read |
-| `any_obs_rag_*` | Query the derived RAG index (verify against source) | search, answer |
-| `any_obs_*` (management verbs) | Manage any-obs itself | vault add/update/remove/sync/embed/doctor, job status, agent tokens, status, autostart, LAN |
+| `any_obs_rag_*` | Query the derived RAG index (verify against source) | search |
+| `any_obs_*` (management verbs) | Manage any-obs itself | vault add/update/remove/sync/embed/doctor, job status, status, autostart |
 
 Loopback callers may use management tools without a token: a local agent
-acts as the user's delegate. The LAN endpoint (below) never registers the
+acts as the user's delegate. The remote server never registers the
 management tools.
 
 - `any_obs_vault_list` returns only vault id and name.
@@ -223,8 +231,6 @@ discovery layer, verifies important information against source notes, reads the
 selected vault's own `AGENTS.md`, and requires local filesystem authority for
 edits. It does not add MCP write capability or grant permission to commit,
 sync, or push.
-
-### Optional LAN RAG MCP
 
 ### Remote agents (the server)
 

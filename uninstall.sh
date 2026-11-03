@@ -160,6 +160,8 @@ if [ -d "$HOME/.zcode/skills/anything-obsidian-setup" ] || [ -d "$HOME/.agents/s
   say "Installed agent skills were kept — remove them with: npx skills remove anything-obsidian-setup"
   say "  (and: npx skills remove anything-obsidian-vault-workflow, if installed)"
 fi
+say "MCP registrations written by 'anything-obsidian connect' outlive this uninstall;"
+say "  run 'anything-obsidian connect --remove' first if you want them gone."
 if [ -n "$VAULTS_ROOT" ] && [ -d "$VAULTS_ROOT" ]; then
   say ""
   say "Your vault folders were NOT touched. They live in:"
