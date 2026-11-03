@@ -1,7 +1,7 @@
 {
   "name": "anything-obsidian",
-  "version": "1.2.0",
-  "description": "Local MCP tools for Anything Obsidian (per-vault RAG search, raw vault reads and vault management, loopback 21503) plus the vault-workflow skill. Requires a running any-obs install (anything-obsidian start).",
+  "version": "1.3.0",
+  "description": "Local MCP tools for Anything Obsidian (per-vault RAG search, raw vault reads and vault management, loopback 21503) plus the vault-workflow skill. Requires a running any-obs install (anything-obsidian start). Codex agents joining a team server without an install: configure the server's :21500/mcp in ~/.codex/config.toml with bearer_token_env_var — see docs/agent-mcp.md.",
   "author": {
     "name": "Lettucech",
     "url": "https://github.com/Lettucech"

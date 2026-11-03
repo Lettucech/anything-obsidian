@@ -69,21 +69,7 @@ function renderWizard(state) {
         "Open your configured AnythingLLM instance and generate a developer API key. If it is bound to server loopback, use an SSH tunnel from your machine:",
       ),
     );
-    const pre = element("pre", "command", tunnelCommand);
-    const copy = element("button", "button button-quiet", "Copy");
-    copy.addEventListener("click", () => {
-      window.navigator.clipboard?.writeText(tunnelCommand);
-      copy.textContent = "Copied";
-    });
-    pre.append(copy);
-    card.append(
-      pre,
-      html(
-        "p",
-        "note",
-        `Open <code>${state.anythingllmUiUrl}</code> (on the server, or through the tunnel), finish AnythingLLM's first-boot wizard, then go to <strong>Settings → Developer API</strong> and generate an API key.`,
-      ),
-    );
+    card.append(commandBlock(tunnelCommand));
     const next = element("button", "button button-primary", "I have the API key");
     next.addEventListener("click", () => {
       step = 2;
@@ -430,7 +416,13 @@ async function renderOverview(state) {
     html(
       "p",
       "note connection-note",
-      `<strong>Connect an agent (MCP):</strong> <code>${state.publicUrl}/mcp</code> with a user token as Bearer.`,
+      `<strong>Connect an agent without installing anything (direct remote MCP):</strong> <code>${state.publicUrl}/mcp</code> with a user token as Bearer — paste-ready commands below, full guide in <code>docs/agent-mcp.md</code>.`,
+    ),
+    commandBlock(
+      `# Claude Code\nclaude mcp add --transport http --scope user any-obs ${state.publicUrl}/mcp \\\n  --header "Authorization: Bearer <user-token>"`,
+    ),
+    commandBlock(
+      `# Codex CLI — add to ~/.codex/config.toml\n[mcp_servers.any-obs]\nurl = "${state.publicUrl}/mcp"\nbearer_token_env_var = "ANY_OBS_TOKEN"  # export ANY_OBS_TOKEN=<user-token> first`,
     ),
     html(
       "p",
@@ -969,6 +961,18 @@ function element(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+// A paste-ready command block with a Copy button (server console snippets).
+function commandBlock(text) {
+  const pre = element("pre", "command", text);
+  const copy = element("button", "button button-quiet", "Copy");
+  copy.addEventListener("click", () => {
+    window.navigator.clipboard?.writeText(text);
+    copy.textContent = "Copied";
+  });
+  pre.append(copy);
+  return pre;
 }
 
 function html(tag, className, markup) {

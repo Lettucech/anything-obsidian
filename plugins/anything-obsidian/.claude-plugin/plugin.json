@@ -1,8 +1,8 @@
 {
   "name": "anything-obsidian",
   "displayName": "Anything Obsidian",
-  "version": "1.2.0",
-  "description": "Local MCP endpoint for Anything Obsidian (one RAG search across every vault workspace, raw vault reads and vault management) plus the vault-workflow skill. Requires a running any-obs install (anything-obsidian start); loopback 21503 only.",
+  "version": "1.3.0",
+  "description": "MCP tools for Anything Obsidian (one RAG search across every vault workspace, raw vault reads and vault management) plus the vault-workflow skill. Default endpoint is a running any-obs install on this machine (loopback 21503); point the endpoint at a team server (its :21500/mcp plus a user token) to connect without installing any-obs.",
   "author": {
     "name": "Lettucech",
     "url": "https://github.com/Lettucech"
@@ -12,10 +12,28 @@
   "license": "MIT",
   "keywords": ["obsidian", "anythingllm", "rag", "mcp", "knowledge"],
   "skills": "./skills/",
+  "userConfig": {
+    "mcp_url": {
+      "type": "string",
+      "title": "any-obs MCP endpoint",
+      "description": "Local install (default): http://127.0.0.1:21503/mcp — direct server: http://<server-host>:21500/mcp",
+      "default": "http://127.0.0.1:21503/mcp"
+    },
+    "mcp_token": {
+      "type": "string",
+      "title": "Bearer token (direct server only)",
+      "description": "Server user token for a direct server connection. Leave empty for a local install.",
+      "default": "",
+      "sensitive": true
+    }
+  },
   "mcpServers": {
     "anything-obsidian": {
       "type": "http",
-      "url": "http://127.0.0.1:21503/mcp"
+      "url": "${user_config.mcp_url}",
+      "headers": {
+        "Authorization": "Bearer ${user_config.mcp_token}"
+      }
     }
   }
 }

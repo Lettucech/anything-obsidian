@@ -2,11 +2,11 @@
 
 One plugin directory, two harness manifests: Claude Code
 (`.claude-plugin/plugin.json`) and Codex CLI v0.117.0+ (`.codex-plugin/
-plugin.json` + `.mcp.json`). Both register the local Anything Obsidian MCP
-endpoint (`http://127.0.0.1:21503/mcp`): one RAG search across every vault
-workspace, raw vault discovery and bounded source reads, plus the
-`any_obs_*` management tools. Nothing here writes vault content — the vault
-Git repository stays the source of truth.
+plugin.json` + `.mcp.json`). Both point at an Anything Obsidian MCP
+endpoint: one RAG search across every vault workspace, plus — on a local
+install — raw vault discovery, bounded source reads and the `any_obs_*`
+management tools. Nothing here writes vault content — the vault Git
+repository stays the source of truth.
 
 ## Install
 
@@ -27,25 +27,38 @@ codex plugin add anything-obsidian@anything-obsidian
 (For a checkout of this repository, pass the local path to
 `marketplace add` instead of the GitHub slug.)
 
-## Why the endpoint is fixed
+## Endpoint & token (Claude Code)
 
-The plugin registers `http://127.0.0.1:21503/mcp` and nothing else — that
-is the local profile by construction. It only exists where any-obs is
-installed, and the local MCP listener accepts loopback Host headers only,
-so a different value could never connect. Agents on machines without an
-any-obs install join a team server instead
-(`anything-obsidian server on`, port 21500, RAG-only,
-`Authorization: Bearer <user-token>`) — that setup is configured by hand,
-see `docs/agent-mcp.md`.
+At install time Claude Code asks for two values:
+
+- **MCP endpoint** — default `http://127.0.0.1:21503/mcp`, the local
+  profile of an any-obs install on this machine. To go zero-install
+  instead, enter a team server's endpoint:
+  `http://<server-host>:21500/mcp`.
+- **Bearer token** — empty for a local install (loopback is
+  owner-trusted). For a direct server connection this is your server user
+  token; it is stored masked, and the RAG-only server surface decides what
+  the token can read.
+
+The token rides along harmlessly on the local profile too: the loopback
+listener treats any non-matching credential as the anonymous local caller.
+
+## Endpoint (Codex CLI)
+
+The Codex manifest keeps the fixed local endpoint (`127.0.0.1:21503`) —
+it only exists where any-obs is installed, and the local listener accepts
+loopback Host headers only. Codex agents joining a team server without an
+any-obs install configure the server's MCP in `~/.codex/config.toml`
+directly (`url` + `bearer_token_env_var`) — see `docs/agent-mcp.md`.
 
 ## Requirements
 
-- A configured, running any-obs install on this machine — verify with
-  `anything-obsidian status --json` (exit 0 + `"ok": true`). If it is not
-  running, `anything-obsidian start`.
-- The MCP server binds loopback 21503, the owner-trusted local profile.
-  Remote machines join through the server feature
-  (`anything-obsidian server on`) with a user token instead — see
+- A configured, running any-obs install on this machine for the default
+  endpoint — verify with `anything-obsidian status --json` (exit 0 +
+  `"ok": true`). If it is not running, `anything-obsidian start`.
+- The local MCP server binds loopback 21503, the owner-trusted local
+  profile. Alternatively, point the endpoint at a team server's
+  `:21500/mcp` with a user token to skip the install entirely — see
   `docs/agent-mcp.md`.
 
 ## Skills

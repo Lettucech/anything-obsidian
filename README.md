@@ -225,7 +225,11 @@ anything-obsidian connect --remove   # unregister again
 
 Supported: Claude Code, Cursor, Windsurf, Codex, Gemini CLI and VS Code
 (idempotent, one key per agent config). Agents with a plugin system can
-install the repository's plugin instead — same fixed loopback endpoint:
+install the repository's plugin instead — Claude Code's manifest asks for
+the endpoint (default: this loopback) and an optional Bearer token at
+install time, so the same plugin also covers the zero-install direct
+remote MCP below; the Codex manifest carries the fixed loopback
+registration:
 
 ```text
 # Claude Code
@@ -272,10 +276,32 @@ anything-obsidian server on       # then dashboard → Server → Open server co
 
 Remote clients connect to `http://<host>:21500/mcp` with
 `Authorization: Bearer <user-token>` and reach RAG surfaces only
-(`any_obs_vault_list`, `any_obs_rag_search` — no filesystem tools, by
-construction). What a token can read is decided by its grants. Keep the
-dashboard and AnythingLLM management UI on loopback; a user token grants
-access to RAG results, which may contain source content.
+(`any_obs_vault_list`, `any_obs_rag_search`, `any_obs_shared_refresh`,
+`any_obs_job_get` — no filesystem tools, by construction). What a token
+can read is decided by its grants. Keep the dashboard and AnythingLLM
+management UI on loopback; a user token grants access to RAG results,
+which may contain source content.
+
+### Direct remote MCP (no install)
+
+Agents on machines without any-obs skip the install entirely and point
+straight at the server's MCP endpoint with a user token from the server
+console:
+
+```sh
+# Claude Code
+claude mcp add --transport http --scope user any-obs http://<host>:21500/mcp \
+  --header "Authorization: Bearer <user-token>"
+```
+
+Codex CLI reads the same endpoint from `~/.codex/config.toml` (`url` +
+`bearer_token_env_var`); Cursor, Windsurf, VS Code and Gemini CLI take a
+streamable-HTTP entry plus the `Authorization` header in their own
+configs. Claude Code can equally install the repository's plugin and
+enter the server endpoint + token when it asks — same result, plus the
+workflow skill. Full per-harness instructions and the transport-security
+notes (plain HTTP on 21500 — terminate TLS in front of it when leaving a
+trusted LAN) live in `docs/agent-mcp.md`.
 
 The former LAN MCP endpoint (port 21504) was retired in 2026-11; `lan on`
 is a no-op pointing at the server feature, and existing LAN agent tokens

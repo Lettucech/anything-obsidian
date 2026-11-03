@@ -423,6 +423,7 @@ test("MCP on the public plane is token-gated with the four RAG/pipeline tools", 
     "any_obs_job_get",
     "any_obs_rag_search",
     "any_obs_shared_refresh",
+    "any_obs_vault_list",
   ]);
 
   await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
@@ -433,6 +434,13 @@ test("MCP on the public plane is token-gated with the four RAG/pipeline tools", 
     method: "POST",
     body: JSON.stringify({ user: "brian" }),
   });
+
+  // Discovery is entitlement-scoped: only granted workspaces are listed,
+  // never the ones the gateway does not grant this token.
+  const listed = JSON.parse(
+    (await client.callTool({ name: "any_obs_vault_list", arguments: {} })).content[0].text,
+  );
+  assert.deepEqual(listed, [{ name: "company-kb", slug: "company-kb" }]);
 
   const search = JSON.parse(
     (
@@ -446,6 +454,28 @@ test("MCP on the public plane is token-gated with the four RAG/pipeline tools", 
     search.results.map((chunk) => chunk.workspace),
     ["company-kb"],
   );
+
+  // The workspace filter narrows to a granted workspace…
+  const filtered = JSON.parse(
+    (
+      await client.callTool({
+        name: "any_obs_rag_search",
+        arguments: { query: "anything", workspace: "company-kb" },
+      })
+    ).content[0].text,
+  );
+  assert.deepEqual(
+    filtered.results.map((chunk) => chunk.workspace),
+    ["company-kb"],
+  );
+
+  // …and rejects one the token cannot read.
+  const denied = await client.callTool({
+    name: "any_obs_rag_search",
+    arguments: { query: "anything", workspace: "other-secret" },
+  });
+  assert.equal(denied.isError, true);
+  assert.match(denied.content[0].text, /No read grant for workspace other-secret/);
 
   await client.close();
 });

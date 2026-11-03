@@ -1,11 +1,20 @@
 # Agent MCP setup
 
-Anything Obsidian (short name: any-obs) provides one MCP profile per
-connection kind: **local** (loopback, the owner's machine) and **remote**
-(the server feature, token-gated). Neither profile offers tools that write
-vault source files; the local profile additionally exposes `any_obs_*`
-management tools (vault lifecycle, sync/embed jobs, service control) that
-proxy the dashboard API.
+Anything Obsidian (short name: any-obs) serves two MCP endpoints, and an
+agent can use them three ways:
+
+1. **Local install** — the owner's machine talks to its own loopback MCP
+   (port 21503): RAG plus raw vault reads and `any_obs_*` management
+   tools (vault lifecycle, sync/embed jobs, service control) that proxy
+   the dashboard API.
+2. **Local install joined to a server** — same loopback endpoint; the
+   install is configured with a server URL and user token, so RAG comes
+   from the server's index and shared workspaces.
+3. **Zero-install direct remote MCP** — no any-obs install at all: an
+   agent connects straight to the server's `:21500/mcp` endpoint with a
+   user token (RAG-only; see below).
+
+Neither endpoint offers tools that write vault source files.
 
 ## Local agent
 
@@ -39,8 +48,11 @@ anything-obsidian connect --remove [agent...]   # unregister again
 | ZCode | — | no user-global MCP config; prints the project `.mcp.json` snippet instead |
 
 The repository also ships a plugin for the agents that have a plugin
-system (one directory, two manifests — `plugins/anything-obsidian/`),
-carrying the same registration:
+system (one directory, two manifests — `plugins/anything-obsidian/`).
+Claude Code's manifest asks for the endpoint and an optional Bearer token
+at install time — leave the defaults for the local profile below, or enter
+a server's `:21500/mcp` plus a user token for the zero-install path
+(below). The Codex manifest carries the fixed local registration:
 
 ```text
 # Claude Code
@@ -54,15 +66,9 @@ codex plugin marketplace add Lettucech/anything-obsidian
 codex plugin add anything-obsidian@anything-obsidian
 ```
 
-The plugin is the local profile, so its endpoint is fixed to
-`127.0.0.1:21503` — it only exists where any-obs is installed, and the
-local listener rejects non-loopback Hosts. Agents on machines without an
-any-obs install use the server plane (below) instead.
-
 After connecting, the command probes the endpoint's `/health` and points at
 `anything-obsidian start` when the app is not running. It wires the local
-profile only; remote agents (below) add `Authorization: Bearer <user-token>`
-headers by hand for now.
+profile only; the zero-install direct remote MCP setup is below.
 
 The local profile provides RAG plus raw-vault discovery and bounded source
 reads. `any_obs_vault_directory` is local-only and returns the configured
@@ -142,18 +148,54 @@ opt-in server. Turn it on and issue a user token in the server console:
 anything-obsidian server on       # then open the dashboard → Server → console
 ```
 
-Remote clients connect to `http://<host>:21500/mcp` with
-`Authorization: Bearer <user-token>`. The server exposes only:
+### Connect an agent directly (no install)
 
-- `any_obs_rag_search` (workspaces the token's grants permit)
+The server's MCP endpoint is `http://<host>:21500/mcp` — Streamable HTTP,
+`Authorization: Bearer <user-token>`.
+
+Claude Code (or install the plugin and enter the server endpoint + token
+when it asks):
+
+```bash
+claude mcp add --transport http --scope user any-obs http://<host>:21500/mcp \
+  --header "Authorization: Bearer <user-token>"
+```
+
+Codex CLI — add to `~/.codex/config.toml`, token through an environment
+variable so no secret lands in the file:
+
+```toml
+[mcp_servers.any-obs]
+url = "http://<host>:21500/mcp"
+bearer_token_env_var = "ANY_OBS_TOKEN"
+```
+
+(`export ANY_OBS_TOKEN=<user-token>` before starting Codex.)
+
+Cursor, Windsurf, VS Code and Gemini CLI take the same shape in their own
+MCP configs — a streamable-HTTP entry whose URL is the endpoint plus an
+`Authorization: Bearer <user-token>` header. The server console
+(dashboard → Server) shows ready-to-paste snippets.
+
+The server exposes only:
+
+- `any_obs_vault_list` (workspaces the token's grants permit — names and
+  slugs, never file contents)
+- `any_obs_rag_search` (one fan-out query across granted workspaces,
+  optional `workspace` filter)
 - `any_obs_shared_refresh` (queue refresh + reindex of shared sources)
 - `any_obs_job_get` (status of shared-source pipeline jobs)
 
 It does not mount the vault root and cannot return vault directories or raw
 source files — that boundary is by construction, not convention. What a
 token can read is decided by the grants its user holds (the server's
-workspace registry), and tokens are stored only as SHA-256 hashes. Keep them
-private: RAG results may contain source content.
+workspace registry), and tokens are stored only as SHA-256 hashes.
+
+**Transport security:** 21500 speaks plain HTTP. Inside a trusted LAN that
+is the designed trade-off; across the public internet, terminate TLS in
+front of it (reverse proxy) — otherwise the bearer token and content are
+readable in transit. Keep tokens private: RAG results may contain source
+content.
 
 ### Retired: the LAN MCP endpoint
 

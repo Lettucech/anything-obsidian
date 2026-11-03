@@ -15,7 +15,10 @@ It ships as a plain Node app, installed by `install.sh`, managed by the
 `anything-obsidian` CLI and a browser dashboard on port 21502. MCP endpoint:
 loopback 21503. There are exactly **two connection kinds**: local
 (loopback, owner-trusted, full tool surface) and remote (the opt-in
-**server**, token-gated, RAG-only). The former LAN MCP listener (21504)
+**server**, token-gated, RAG-only). A remote agent needs no install at
+all: it connects straight to the server's `/mcp` on 21500 with a Bearer
+user token (the Claude plugin's manifest takes a server endpoint + token
+for this). The former LAN MCP listener (21504)
 and its agent-token store were retired 2026-11; `lan on` is a no-op and
 old agent tokens migrated by hash into server users
 (`lib/lan-migration.mjs`).

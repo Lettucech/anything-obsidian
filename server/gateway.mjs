@@ -690,21 +690,43 @@ export function createGatewayRequestHandler({
     const server = new McpServer({ name: "any-obs-gateway", version: pkg.version });
 
     server.tool(
+      "any_obs_vault_list",
+      "List the workspaces this caller may read (one per vault, plus shared team workspaces). Discovery only — names and slugs, never file contents; search them with any_obs_rag_search.",
+      {},
+      async () => {
+        const entitlements = await entitlementsFor(identity);
+        const data = await anythingllmRequest("/api/v1/workspaces", { method: "GET" });
+        const workspaces = (data?.workspaces ?? []).filter(
+          (workspace) =>
+            identity.role === "admin" || entitlements.read.includes(workspace.slug),
+        );
+        return asJson(workspaces.map(({ name, slug }) => ({ name, slug })));
+      },
+    );
+
+    server.tool(
       "any_obs_rag_search",
-      "Search every RAG workspace this caller may read (shared workspaces plus owned personal workspaces) in one query. Every workspace's best chunk is guaranteed a slot, chunks carry the workspace they came from, and scores are raw — read the chunks and synthesize; when versions from different workspaces disagree, point both out and ask which is current.",
+      "Search the RAG workspaces this caller may read (shared workspaces plus owned personal workspaces) in one query, or pass `workspace` to restrict the query to one of them. Every workspace's best chunk is guaranteed a slot, chunks carry the workspace they came from, and scores are raw — read the chunks and synthesize; when versions from different workspaces disagree, point both out and ask which is current.",
       {
         query: z.string().min(1),
+        workspace: z.string().min(1).optional(),
         topN: z.number().int().positive().max(20).default(4),
         scoreThreshold: z.number().min(0).max(1).optional(),
       },
-      async ({ query, topN, scoreThreshold }) => {
+      async ({ query, workspace, topN, scoreThreshold }) => {
         const entitlements = await entitlementsFor(identity);
+        let workspaces = entitlements.read;
+        if (workspace) {
+          if (identity.role !== "admin" && !entitlements.read.includes(workspace))
+            throw httpError(403, `No read grant for workspace ${workspace}`);
+          workspaces = [workspace];
+        }
         return asJson(
           await fanoutSearch({
             query,
             topN,
             scoreThreshold,
-            workspaces: entitlements.read,
+            workspaces,
             baseUrl,
             apiKey: apiKeyActive(),
             fetchImpl,
