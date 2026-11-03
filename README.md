@@ -66,32 +66,136 @@ tokens migrated into the server's user directory.
 
 ## Getting started
 
-Choose **native** when you need to import local directories, or the optional
-**[Docker flavor](docs/docker.md)** for a client/gateway isolated from host files.
-Docker uses Git sources and separate persistent volumes; it does not import host
-directories. Both flavors use the same indexing pipeline and external AnythingLLM.
+Pick the path that matches your machine, follow its steps top to bottom:
 
-Install once. The installer prepares the app and its dependencies, asks which
-mode this machine is in, then starts and verifies the app service:
+- **[Path A — solo: everything on this machine](#path-a--solo-everything-on-this-machine)**
+  Your vaults, your AnythingLLM, your coding agent — one install.
+- **[Path B — team member: a client joined to a server](#path-b--team-member-a-client-joined-to-a-server)**
+  Install a client; RAG comes from the team server.
+- **[Path C — zero-install: a coding agent straight to a server](#path-c--zero-install-a-coding-agent-straight-to-a-server)**
+  No any-obs install at all; the agent connects to the server's MCP endpoint.
+- **[Path D — operator: serve a team](#path-d--operator-serve-a-team)**
+  Run the server others join through (paths B and C are your users).
 
-- **Local** (default): the AnythingLLM URL and its developer API key.
-- **Join a server**: the server URL and the administrator-issued user token.
+Native install everywhere unless you specifically want the
+**[Docker flavor](docs/docker.md)** (client/gateway isolated from host
+files; Git sources only, no host-directory imports). Both flavors use the
+same indexing pipeline and an external AnythingLLM — any-obs never bundles
+or hosts it.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh
-```
+### Path A — solo: everything on this machine
 
-For unattended client setup, supply the server URL and the user token issued
-by its administrator (members can index; readers can search):
+1. Install (the installer prepares dependencies, asks which mode this
+   machine is in, starts and verifies the service):
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
-  --vaults-root "$HOME/.anything-obsidian/vaults" \
-  --url http://<server-host>:21500 --api-key <user-token> --no-browser
-```
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh
+   ```
 
-A solo client can use an AnythingLLM URL and developer key directly. AnythingLLM
-is always an external dependency, operated by the user.
+2. At the mode prompt choose **Local** (the default) and enter your
+   AnythingLLM URL plus its developer API key (in AnythingLLM:
+   Settings → Developer API).
+3. Wire your coding agent — either works:
+   `anything-obsidian connect` (detects and writes every installed
+   agent's config), or install the
+   [plugin](#connect-your-coding-agents) (its defaults are already
+   local).
+4. Verify: `anything-obsidian status --json` exits 0 with `"ok": true`.
+   Dashboard: [localhost:21502](http://localhost:21502); MCP on loopback
+   21503. Register vaults from the dashboard, then embed.
+
+### Path B — team member: a client joined to a server
+
+1. Ask the server administrator for the server URL and your user token
+   (members can index; readers can search only).
+2. Install joined (or run the interactive installer and choose
+   **Join a server**):
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/Lettucech/anything-obsidian/main/install.sh | sh -s -- \
+     --vaults-root "$HOME/.anything-obsidian/vaults" \
+     --url http://<server-host>:21500 --api-key <user-token> --no-browser
+   ```
+
+3. `anything-obsidian connect` to wire your agents — the local MCP stays
+   on loopback 21503 and transparently proxies RAG to the server.
+4. Verify: `anything-obsidian status --json` exits 0 with `"ok": true`.
+
+### Path C — zero-install: a coding agent straight to a server
+
+Nothing is installed on this machine. Your agent talks to the server's
+MCP endpoint (`http://<host>:21500/mcp`, Streamable HTTP) with a
+user token as Bearer.
+
+1. Ask the server administrator for a user token (dashboard → Server →
+   console).
+2. Wire your agent — the recipe depends on the harness:
+
+   **Claude Code** — one command:
+
+   ```sh
+   claude mcp add --transport http --scope user any-obs http://<host>:21500/mcp \
+     --header "Authorization: Bearer <user-token>"
+   ```
+
+   …or install the plugin and enter the server endpoint + token when it
+   asks (defaults stay local; the token is stored masked).
+
+   **Codex CLI — do not use the plugin for this.** The Codex plugin's MCP
+   entry is fixed to a local any-obs install (loopback 21503) and cannot
+   be repointed. Register the server directly:
+
+   ```sh
+   codex mcp add any-obs --url http://<host>:21500/mcp --bearer-token-env-var ANY_OBS_TOKEN
+   export ANY_OBS_TOKEN=<user-token>   # before starting codex
+   ```
+
+   …or the same table in `~/.codex/config.toml`:
+
+   ```toml
+   [mcp_servers.any-obs]
+   url = "http://<host>:21500/mcp"
+   bearer_token_env_var = "ANY_OBS_TOKEN"
+   ```
+
+   Already installed the plugin on this machine?
+   `codex plugin remove anything-obsidian@anything-obsidian` first —
+   never stack both registrations. The workflow skill does not need the
+   plugin: `npx skills add Lettucech/anything-obsidian --skill
+   anything-obsidian-vault-workflow --agent codex`.
+
+   **Cursor / Windsurf / VS Code / Gemini CLI** — a streamable-HTTP entry
+   whose URL is the endpoint plus an `Authorization: Bearer <user-token>`
+   header, in each tool's own MCP config (shapes in
+   [`docs/agent-mcp.md`](docs/agent-mcp.md)).
+
+3. Verify: ask the agent to list its MCP tools. Exactly these four means
+   you are on the server surface:
+   `any_obs_vault_list`, `any_obs_rag_search`, `any_obs_shared_refresh`,
+   `any_obs_job_get` — no filesystem tools, by construction.
+4. Transport security: 21500 speaks plain HTTP — fine inside a trusted
+   LAN; terminate TLS in a reverse proxy before crossing the public
+   internet.
+
+### Path D — operator: serve a team
+
+1. Install (Path A step 1) and choose **Local** with the *shared*
+   AnythingLLM URL and its developer API key — the server holds that one
+   admin key; clients never see it.
+2. Turn the server on and open its console:
+
+   ```sh
+   anything-obsidian server on     # then dashboard → Server → Open server console
+   ```
+
+   (`setup --server` does install + enable in one pass.)
+3. In the console: create shared workspaces and their sources, create
+   users, and hand each person their token with the path that fits them —
+   **Path B** (installs a client) or **Path C** (zero-install agent).
+4. Continue with [Shared deployments](#shared-deployments-the-server)
+   below for workspace/grant model and hardening.
+
+### Every install: commands, data, updates
 
 The normal commands are the same on every install:
 
@@ -295,7 +399,9 @@ claude mcp add --transport http --scope user any-obs http://<host>:21500/mcp \
 ```
 
 Codex CLI reads the same endpoint from `~/.codex/config.toml` (`url` +
-`bearer_token_env_var`); Cursor, Windsurf, VS Code and Gemini CLI take a
+`bearer_token_env_var`) — the Codex plugin itself stays fixed to a local
+install (loopback 21503), so on a machine without any-obs remove it
+rather than stacking both registrations; Cursor, Windsurf, VS Code and Gemini CLI take a
 streamable-HTTP entry plus the `Authorization` header in their own
 configs. Claude Code can equally install the repository's plugin and
 enter the server endpoint + token when it asks — same result, plus the
