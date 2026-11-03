@@ -9,8 +9,8 @@
     {
       "name": "anything-obsidian",
       "source": "./plugins/anything-obsidian",
-      "description": "Local MCP tools for Anything Obsidian: per-vault RAG search, raw vault reads and vault management.",
-      "version": "1.1.0",
+      "description": "Local MCP tools for Anything Obsidian (per-vault RAG search, raw vault reads, vault management) plus the vault-workflow skill.",
+      "version": "1.2.0",
       "category": "mcp",
       "tags": ["obsidian", "anythingllm", "rag", "mcp", "knowledge"]
     }

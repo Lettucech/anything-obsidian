@@ -48,14 +48,18 @@ see `docs/agent-mcp.md`.
   (`anything-obsidian server on`) with a user token instead — see
   `docs/agent-mcp.md`.
 
-## Skills (optional)
+## Skills
 
-The retrieval/edit workflow skill is installed separately and stays
-canonical in the repository's `skills/` directory:
+The retrieval/edit workflow skill (`anything-obsidian-vault-workflow`)
+ships with the plugin — installing it above is all an agent needs. The
+canonical copy lives in the repository's `skills/` directory; agents
+without the plugin can install the skill on its own:
 
 ```bash
 npx skills add Lettucech/anything-obsidian --skill anything-obsidian-vault-workflow
 ```
+
+(Installing both the plugin and the skill is harmless but redundant.)
 
 Agents without a plugin system: `anything-obsidian connect` writes the
 matching MCP config for Claude Code, Cursor, Windsurf, Codex, Gemini CLI

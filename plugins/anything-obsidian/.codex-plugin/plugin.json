@@ -1,12 +1,13 @@
 {
   "name": "anything-obsidian",
-  "version": "1.1.0",
-  "description": "Local MCP tools for Anything Obsidian: per-vault RAG search, raw vault reads and vault management (loopback 21503). Requires a running any-obs install (anything-obsidian start).",
+  "version": "1.2.0",
+  "description": "Local MCP tools for Anything Obsidian (per-vault RAG search, raw vault reads and vault management, loopback 21503) plus the vault-workflow skill. Requires a running any-obs install (anything-obsidian start).",
   "author": {
     "name": "Lettucech",
     "url": "https://github.com/Lettucech"
   },
   "homepage": "https://github.com/Lettucech/anything-obsidian",
   "repository": "https://github.com/Lettucech/anything-obsidian",
-  "license": "MIT"
+  "license": "MIT",
+  "skills": "./skills/"
 }

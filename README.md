@@ -239,12 +239,15 @@ codex plugin marketplace add Lettucech/anything-obsidian
 codex plugin add anything-obsidian@anything-obsidian
 ```
 
-For the reusable retrieval-and-edit workflow, also install the skill
-(below). The per-agent config table and tool reference live in
-`docs/agent-mcp.md`.
+The plugin also bundles the retrieval-and-edit workflow skill, so a plugin
+install is all an agent needs; without the plugin, install the skill with
+`npx skills add` (next section). The per-agent config table and tool
+reference live in `docs/agent-mcp.md`.
 
 ### Agent workflow skill
 
+The coding-agent plugin bundles this skill; install it separately only for
+agents connected via `anything-obsidian connect` or hand-written configs.
 Install the repository's workflow skill when an agent should search, verify,
 assess, or locally edit managed vault knowledge:
 

@@ -1,8 +1,8 @@
 {
   "name": "anything-obsidian",
   "displayName": "Anything Obsidian",
-  "version": "1.1.0",
-  "description": "Local MCP endpoint for Anything Obsidian: one RAG search across every vault workspace, raw vault reads and vault management. Requires a running any-obs install (anything-obsidian start); loopback 21503 only.",
+  "version": "1.2.0",
+  "description": "Local MCP endpoint for Anything Obsidian (one RAG search across every vault workspace, raw vault reads and vault management) plus the vault-workflow skill. Requires a running any-obs install (anything-obsidian start); loopback 21503 only.",
   "author": {
     "name": "Lettucech",
     "url": "https://github.com/Lettucech"
@@ -11,6 +11,7 @@
   "repository": "https://github.com/Lettucech/anything-obsidian",
   "license": "MIT",
   "keywords": ["obsidian", "anythingllm", "rag", "mcp", "knowledge"],
+  "skills": "./skills/",
   "mcpServers": {
     "anything-obsidian": {
       "type": "http",

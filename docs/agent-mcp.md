@@ -111,7 +111,9 @@ or a confident paragraph. Chunks from workspaces outside the local registry
 — for example shared team knowledge — carry only their `workspace` tag, no
 `vaultId`, because they cannot be resolved to a locally readable file.
 
-For a reusable retrieval and edit workflow, install the repository skill:
+For a reusable retrieval and edit workflow, install the repository skill —
+the coding-agent plugin bundles it, so this is only needed for agents
+connected through `anything-obsidian connect` or hand-written configs:
 
 ```bash
 npx skills add Lettucech/anything-obsidian --skill anything-obsidian-vault-workflow --agent codex
