@@ -118,6 +118,16 @@ button:hover:not(:disabled) { border-color: var(--muted); background: var(--surf
 button:disabled { opacity: .45; cursor: not-allowed; }
 .workspace-line { margin: 2px 0 0; }
 .workspace-line select { flex: 0 1 220px; }
+/* Grants editor: checkbox list replacing the one-user-at-a-time dropdown */
+.grants-editor { flex-basis: 100%; margin-top: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-muted); }
+.grants-checklist { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px 16px; margin: 10px 0; }
+.field-inline { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-soft); cursor: pointer; }
+.field-inline input[type="checkbox"] { margin: 0; flex: 0 0 auto; width: auto; padding: 0; border: 0; background: transparent; }
+/* Minted tokens: one accumulating card at the bottom of the Users tab */
+.minted-tokens .row.item { flex-wrap: wrap; align-items: stretch; }
+.minted-tokens .row.item > .muted { flex: 1 1 100%; }
+.minted-tokens pre.command { flex: 1 1 320px; margin: 0; }
+.minted-note { flex-basis: 100%; margin: 4px 0 0; }
 .log-output { max-height: 24rem; overflow: auto; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--text-soft); background: var(--surface-muted); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono); }
 summary { cursor: pointer; padding: 8px 0; color: var(--text-soft); font-size: 13px; }
 .item p, .item strong, .row code { overflow-wrap: anywhere; }

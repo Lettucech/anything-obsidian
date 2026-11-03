@@ -236,6 +236,60 @@ test("shared workspaces: admin creates, grants users, search and answer respect 
   assert.deepEqual(afterRevoke.body.results, []);
 });
 
+test("shared workspaces: PUT /grants replaces the whole grants list in one save", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  await createUser(adminUrl, publicUrl, "brian");
+  await createUser(adminUrl, publicUrl, "scout");
+  await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
+    method: "POST",
+    body: JSON.stringify({ name: "company-kb", kind: "shared" }),
+  });
+
+  const saved = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
+    method: "PUT",
+    body: JSON.stringify({ grants: ["scout", "brian"] }),
+  });
+  assert.deepEqual(saved.body, { slug: "company-kb", grants: ["scout", "brian"] });
+
+  // Resaving a shorter list revokes everyone dropped — the posted list is
+  // the whole truth, so no separate revoke calls are needed.
+  const shrunk = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
+    method: "PUT",
+    body: JSON.stringify({ grants: ["brian"] }),
+  });
+  assert.deepEqual(shrunk.body, { slug: "company-kb", grants: ["brian"] });
+
+  const empty = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
+    method: "PUT",
+    body: JSON.stringify({ grants: [] }),
+  });
+  assert.deepEqual(empty.body, { slug: "company-kb", grants: [] });
+
+  // Duplicates collapse and unknown users are rejected outright.
+  const dupes = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
+    method: "PUT",
+    body: JSON.stringify({ grants: ["brian", "brian", "ghost"] }),
+  });
+  assert.equal(dupes.status, 500);
+  assert.match(dupes.body.error, /Unknown user/);
+  const listed = await fetchJson(`${adminUrl}/api/gateway/workspaces`);
+  assert.deepEqual(listed.body.workspaces, [
+    { slug: "company-kb", kind: "shared", grants: [] },
+  ]);
+
+  const badBody = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants`, {
+    method: "PUT",
+    body: JSON.stringify({ grants: "brian" }),
+  });
+  assert.equal(badBody.status, 400);
+
+  const badPath = await fetchJson(`${adminUrl}/api/gateway/workspaces/company-kb/grants/brian`, {
+    method: "PUT",
+    body: JSON.stringify({ grants: ["brian"] }),
+  });
+  assert.equal(badPath.status, 400);
+});
+
 test("public proxy: workspace listing is filtered and workspace creation mints ownership", async () => {
   const { adminUrl, publicUrl } = await startGateway();
   const adminAuthed = await createUser(adminUrl, publicUrl, "brian");

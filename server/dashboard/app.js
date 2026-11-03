@@ -334,6 +334,7 @@ async function renderWorkspaces(state) {
   }
 
   function grantsLine(workspace) {
+    const wrapper = element("div", "");
     const line = element("div", "row workspace-line");
     line.append(element("span", "muted", "read grants:"));
     const grants = workspace.grants ?? [];
@@ -356,29 +357,78 @@ async function renderWorkspaces(state) {
       chip.append(revoke);
       line.append(chip);
     }
-    const select = element("select", "", "");
-    select.setAttribute("aria-label", `Grant a user access to ${workspace.slug}`);
-    select.innerHTML =
-      '<option value="">grant a user…</option>' +
-      users
-        .filter((user) => !grants.includes(user.name))
-        .map((user) => `<option value="${user.name}">${user.name}</option>`)
-        .join("");
-    const grant = element("button", "button button-quiet", "Grant");
-    grant.disabled = !select.value;
-    select.addEventListener("change", () => {
-      grant.disabled = !select.value;
+    // One editor for the whole grants list: every user as a checkbox, an
+    // "All" master toggle, and a single Save that replaces the list in one
+    // request — no more granting one dropdown user at a time.
+    const editor = element("div", "grants-editor");
+    editor.hidden = true;
+    const edit = element("button", "button button-quiet", "Edit grants");
+    edit.setAttribute("aria-expanded", "false");
+    edit.addEventListener("click", () => {
+      if (editor.hidden) buildEditor();
+      editor.hidden = !editor.hidden;
+      edit.setAttribute("aria-expanded", String(!editor.hidden));
+      edit.textContent = editor.hidden ? "Edit grants" : "Close editor";
     });
-    grant.addEventListener("click", async () => {
-      if (!select.value) return;
-      await request(`/api/gateway/workspaces/${encodeURIComponent(workspace.slug)}/grants`, {
-        method: "POST",
-        body: JSON.stringify({ user: select.value }),
+    line.append(edit);
+    wrapper.append(line, editor);
+    return wrapper;
+
+    function buildEditor() {
+      const checks = new Map();
+      const master = element("input", "", "");
+      master.type = "checkbox";
+      const masterLabel = element("label", "field-inline", "");
+      masterLabel.append(master, element("span", "", "All"));
+      const checklist = element("div", "grants-checklist");
+      const syncMaster = () => {
+        const states = [...checks.values()].map((checkbox) => checkbox.checked);
+        master.checked = states.length > 0 && states.every(Boolean);
+        master.indeterminate = !master.checked && states.some(Boolean);
+      };
+      master.addEventListener("change", () => {
+        for (const checkbox of checks.values()) checkbox.checked = master.checked;
+        master.indeterminate = false;
       });
-      await fill();
-    });
-    line.append(select, grant);
-    return line;
+      for (const user of users) {
+        const checkbox = element("input", "", "");
+        checkbox.type = "checkbox";
+        checkbox.id = `grant-${workspace.slug}-${user.name}`;
+        checkbox.checked = grants.includes(user.name);
+        const label = element("label", "field-inline", "");
+        label.htmlFor = checkbox.id;
+        label.append(checkbox, element("span", "", user.name));
+        checkbox.addEventListener("change", syncMaster);
+        checks.set(user.name, checkbox);
+        checklist.append(label);
+      }
+      syncMaster();
+      const save = element("button", "button button-primary", "Save");
+      const cancel = element("button", "button button-quiet", "Cancel");
+      const actions = element("div", "row");
+      actions.append(save, cancel);
+      editor.replaceChildren(masterLabel, checklist, actions);
+      save.addEventListener("click", async () => {
+        save.disabled = true;
+        try {
+          await request(`/api/gateway/workspaces/${encodeURIComponent(workspace.slug)}/grants`, {
+            method: "PUT",
+            body: JSON.stringify({
+              grants: [...checks].filter(([, checkbox]) => checkbox.checked).map(([name]) => name),
+            }),
+          });
+          await fill();
+        } catch (error) {
+          save.disabled = false;
+          window.alert(error.message);
+        }
+      });
+      cancel.addEventListener("click", () => {
+        editor.hidden = true;
+        edit.setAttribute("aria-expanded", "false");
+        edit.textContent = "Edit grants";
+      });
+    }
   }
   await fill();
 }
@@ -511,11 +561,14 @@ async function renderUsers() {
     "reader (default): search only · member: shared + own workspaces · admin: also manages the gateway with this token",
   );
   roleHelp.classList.add("form-help");
+  const mintedNote = element("p", "note minted-note");
+  mintedNote.setAttribute("role", "status");
   form.append(
     field("User name", name),
     field("Role", role),
     element("button", "button button-primary", "Create user"),
     roleHelp,
+    mintedNote,
   );
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -526,6 +579,7 @@ async function renderUsers() {
       });
       name.value = "";
       revealToken(created.token, `Token for '${created.user.name}' (${created.user.role})`);
+      mintedNote.textContent = `✓ token minted for '${created.user.name}' — collected in "Minted tokens" below`;
       await fillList();
     } catch (error) {
       card.querySelector(".error")?.remove();
@@ -536,6 +590,7 @@ async function renderUsers() {
   const list = element("div", "list");
   card.append(list);
   els.view.append(card);
+  renderMintedCard();
 
   async function fillList() {
     const { users } = await request("/api/gateway/users");
@@ -634,15 +689,49 @@ async function renderUsers() {
   await fillList();
 }
 
+// Tokens are shown once at mint time, but batch user setup mints many in a
+// row — so entries accumulate in one card at the bottom of the Users tab
+// (kept in page memory across tab switches) instead of one box per mint,
+// and nothing ever scrolls the page under the admin.
+const mintedTokens = [];
+
 function revealToken(token, title) {
-  const reveal = element("section", "card");
-  reveal.append(
-    element("h2", "", `${title} — shown once`),
-    element("pre", "command", token),
-    element("p", "note", "Copy it now: it cannot be shown again."),
+  mintedTokens.push({ token, title });
+  renderMintedCard();
+}
+
+function renderMintedCard() {
+  document.querySelector(".minted-tokens")?.remove();
+  if (!mintedTokens.length || !els.view.querySelector(".tabs")) return;
+  const card = element("section", "card minted-tokens");
+  card.append(
+    element("h2", "", "Minted tokens — this page session"),
+    element(
+      "p",
+      "note",
+      "Every token minted on this page visit is kept here until dismissed or the page is reloaded. Copy each one now: a dismissed token cannot be shown again, only reset.",
+    ),
   );
-  els.view.append(reveal);
-  window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  for (const entry of mintedTokens) {
+    const row = element("div", "row item");
+    row.append(element("span", "muted", entry.title), commandBlock(entry.token));
+    const dismiss = element("button", "button button-quiet button-danger", "×");
+    dismiss.title = "Dismiss this token";
+    dismiss.setAttribute("aria-label", `Dismiss token: ${entry.title}`);
+    dismiss.addEventListener("click", () => {
+      if (
+        !window.confirm(
+          `Dismiss the token for '${entry.title}'? It cannot be shown again — make sure it is copied, or reset it later.`,
+        )
+      )
+        return;
+      mintedTokens.splice(mintedTokens.indexOf(entry), 1);
+      renderMintedCard();
+    });
+    row.append(dismiss);
+    card.append(row);
+  }
+  els.view.append(card);
 }
 
 async function renderSources(state) {

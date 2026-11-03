@@ -165,6 +165,20 @@ export function createUserStore({ dataDir }) {
       await write(state);
       return [...record.grants];
     },
+    // Bulk replacement for the console's checkbox editor: the posted list is
+    // the whole truth — users added become granted, users dropped are revoked.
+    async setWorkspaceGrants(slug, names) {
+      const state = await read();
+      const record = state.workspaces[slug];
+      if (!record || record.kind !== "shared") throw new Error(`Not a shared workspace: ${slug}`);
+      const wanted = [...new Set(names.map((name) => String(name).trim()).filter(Boolean))];
+      for (const name of wanted) {
+        if (!state.users.some((user) => user.name === name)) throw new Error(`Unknown user: ${name}`);
+      }
+      record.grants = wanted;
+      await write(state);
+      return [...record.grants];
+    },
     async removeWorkspace(slug) {
       const state = await read();
       if (!state.workspaces[slug]) return false;

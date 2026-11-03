@@ -404,9 +404,17 @@ export function createGatewayRequestHandler({
     const grantsMatch = url.pathname.match(
       /^\/api\/gateway\/workspaces\/([a-z0-9-]+)\/grants\/?([a-z0-9-]*)$/,
     );
-    if (grantsMatch && (req.method === "POST" || req.method === "DELETE")) {
+    if (grantsMatch && (req.method === "POST" || req.method === "PUT" || req.method === "DELETE")) {
       adminOnly();
       const [, slug, grantedUser] = grantsMatch;
+      if (req.method === "PUT") {
+        // Whole-list replacement from the console's checkbox editor; the
+        // empty URL user slot is what distinguishes it from POST /grants/:user.
+        if (grantedUser) throw httpError(400, "PUT expects /grants with the list in the body");
+        if (!Array.isArray(body?.grants)) throw httpError(400, "grants must be an array of user names");
+        const grants = await userStore.setWorkspaceGrants(slug, body.grants);
+        return sendJson(res, 200, { slug, grants });
+      }
       if (req.method === "POST") {
         const name = String(body?.user ?? grantedUser ?? "").trim();
         if (!name) throw httpError(400, "user is required");
