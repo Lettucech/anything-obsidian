@@ -38,12 +38,20 @@ anything-obsidian connect --remove [agent...]   # unregister again
 | VS Code (Copilot) | `~/.vscode/mcp.json` | `servers` → `{type: "http", url}` |
 | ZCode | — | no user-global MCP config; prints the project `.mcp.json` snippet instead |
 
-Claude Code users can alternatively install the repository's plugin, which
-carries the same registration:
+The repository also ships a plugin for the agents that have a plugin
+system (one directory, two manifests — `plugins/anything-obsidian/`),
+carrying the same registration:
 
 ```text
+# Claude Code
 /plugin marketplace add Lettucech/anything-obsidian
 /plugin install anything-obsidian@anything-obsidian
+```
+
+```bash
+# Codex CLI (v0.117.0+)
+codex plugin marketplace add Lettucech/anything-obsidian
+codex plugin add anything-obsidian@anything-obsidian
 ```
 
 After connecting, the command probes the endpoint's `/health` and points at

@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "anything-obsidian": {
+      "url": "http://127.0.0.1:21503/mcp"
+    }
+  }
+}

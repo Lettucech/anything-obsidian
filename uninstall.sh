@@ -162,6 +162,8 @@ if [ -d "$HOME/.zcode/skills/anything-obsidian-setup" ] || [ -d "$HOME/.agents/s
 fi
 say "MCP registrations written by 'anything-obsidian connect' outlive this uninstall;"
 say "  run 'anything-obsidian connect --remove' first if you want them gone."
+say "Installed agent plugins were kept — remove with /plugin remove (Claude Code)"
+say "  or 'codex plugin remove anything-obsidian' (Codex), if installed."
 if [ -n "$VAULTS_ROOT" ] && [ -d "$VAULTS_ROOT" ]; then
   say ""
   say "Your vault folders were NOT touched. They live in:"

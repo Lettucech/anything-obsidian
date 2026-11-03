@@ -13,10 +13,16 @@ endpoint. This change closes that gap:
 1. **`anything-obsidian connect`** — one CLI command that detects installed
    coding agents and writes the matching MCP registration into each agent's
    own config, idempotently, with `--remove` to unregister.
-2. **A Claude Code plugin package** — `.claude-plugin/marketplace.json` at
-   the repository root plus `plugins/claude-code/` carrying the same MCP
-   registration, so Claude Code users can
-   `/plugin install anything-obsidian@anything-obsidian` in one step.
+2. **A plugin package for the agents that have a plugin system** — one
+   directory, two harness manifests (`plugins/anything-obsidian/` holds
+   `.claude-plugin/plugin.json` for Claude Code and `.codex-plugin/
+   plugin.json` + `.mcp.json` for Codex CLI v0.117.0+; both harnesses read
+   the same marketplace manifest at `.claude-plugin/marketplace.json` —
+   verified live with codex 0.142.5, which resolves it without a
+   root-level `marketplace.json`), so users can
+   `/plugin install anything-obsidian@anything-obsidian` (Claude Code) or
+   `codex plugin add anything-obsidian@anything-obsidian` (Codex) in one
+   step.
 
 ## Decisions
 

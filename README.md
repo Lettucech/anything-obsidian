@@ -178,10 +178,13 @@ http://localhost:21503/mcp
 Register coding agents with one command instead of editing each config by
 hand — `anything-obsidian connect` writes the matching MCP entry for Claude
 Code, Cursor, Windsurf, Codex, Gemini CLI and VS Code (idempotent;
-`--remove` unregisters). Claude Code can alternatively install the
-repository's plugin: `/plugin marketplace add Lettucech/anything-obsidian`,
-then `/plugin install anything-obsidian@anything-obsidian`. Details and the
-per-agent config table live in `docs/agent-mcp.md`.
+`--remove` unregisters). Agents with a plugin system can install the
+repository's plugin instead: Claude Code via `/plugin marketplace add
+Lettucech/anything-obsidian` + `/plugin install
+anything-obsidian@anything-obsidian`, Codex CLI via `codex plugin
+marketplace add Lettucech/anything-obsidian` + `codex plugin add
+anything-obsidian@anything-obsidian`. Details and the per-agent config
+table live in `docs/agent-mcp.md`.
 
 Every tool is prefixed `any_obs_` — they all belong to this system. The
 second segment names the domain:

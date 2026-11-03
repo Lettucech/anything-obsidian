@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "anything-obsidian",
-      "source": "./plugins/claude-code",
+      "source": "./plugins/anything-obsidian",
       "description": "Local MCP tools for Anything Obsidian: per-vault RAG search, raw vault reads and vault management.",
       "version": "1.0.0",
       "category": "mcp",
