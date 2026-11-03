@@ -1,6 +1,6 @@
 {
   "name": "anything-obsidian",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local MCP tools for Anything Obsidian: per-vault RAG search, raw vault reads and vault management (loopback 21503). Requires a running any-obs install (anything-obsidian start).",
   "author": {
     "name": "Lettucech",

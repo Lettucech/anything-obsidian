@@ -1,8 +1,8 @@
 {
   "name": "anything-obsidian",
   "displayName": "Anything Obsidian",
-  "version": "1.0.0",
-  "description": "Local MCP endpoint for Anything Obsidian: one RAG search across every vault workspace, raw vault reads and vault management. Requires a running any-obs install (anything-obsidian start); loopback 21503 only.",
+  "version": "1.1.0",
+  "description": "Local MCP endpoint for Anything Obsidian: one RAG search across every vault workspace, raw vault reads and vault management. Requires a running any-obs install (anything-obsidian start); defaults to loopback 21503 and can point elsewhere at enable time.",
   "author": {
     "name": "Lettucech",
     "url": "https://github.com/Lettucech"
@@ -11,10 +11,18 @@
   "repository": "https://github.com/Lettucech/anything-obsidian",
   "license": "MIT",
   "keywords": ["obsidian", "anythingllm", "rag", "mcp", "knowledge"],
+  "userConfig": {
+    "mcp_url": {
+      "type": "string",
+      "title": "any-obs MCP endpoint",
+      "description": "Anything Obsidian MCP endpoint URL. Default is this machine's local install; a custom value should point at the machine running any-obs (the server plane adds Authorization headers on top — see docs/agent-mcp.md).",
+      "default": "http://127.0.0.1:21503/mcp"
+    }
+  },
   "mcpServers": {
     "anything-obsidian": {
       "type": "http",
-      "url": "http://127.0.0.1:21503/mcp"
+      "url": "${user_config.mcp_url}"
     }
   }
 }

@@ -42,6 +42,14 @@ endpoint. This change closes that gap:
   (MCP arrives via plugins and project `.mcp.json`), so its target prints
   the project-level snippet instead of inventing a config location.
 
+The endpoint is configurable, not hard-coded: Claude Code resolves
+`${user_config.mcp_url}` in the plugin's MCP `url` (declared via
+`userConfig`, default loopback 21503 — asked at enable time), while Codex
+plugins take a fixed `.mcp.json` and are overridden by name from
+`~/.codex/config.toml` (verified live: a same-name
+`[mcp_servers."anything-obsidian"]` table supersedes the plugin value).
+Both defaults remain the local loopback install.
+
 ## Surface
 
 - `lib/agent-connect.mjs`: `AGENT_TARGETS` (claude-code, cursor, windsurf,
