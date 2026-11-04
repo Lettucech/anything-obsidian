@@ -838,7 +838,14 @@ async function renderSources(state) {
         rows.delete(id);
       }
     list.querySelector(".empty-sources")?.remove();
-    if (!sources.length) list.append(element("p", "note empty-sources", "No shared sources yet."));
+    if (!sources.length)
+      list.append(
+        element(
+          "p",
+          "note empty-sources",
+          "No shared sources yet. Each source is what feeds its workspace: after you add one, its first refresh (git clone and embed) runs automatically within 30 seconds, and its row gains the Refresh changed / Rebuild all / Remove actions. Set the refresh interval to 0 to embed only when you trigger it manually.",
+        ),
+      );
     for (const source of sources) {
       let record = rows.get(source.id);
       if (!record) {
