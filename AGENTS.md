@@ -74,6 +74,10 @@ developer key, the default) or join a server (server URL + issued user
 token). For serving others, enable the server feature after a local setup
 (`server on` or `setup --server`); collect the external AnythingLLM URL
 and developer API key (Settings → Developer API). Never invent a credential. Verify with `status --json` after every change.
+Make sure the AnythingLLM instance has an **LLM Preference** set in its UI
+(Settings → AI Providers): any-obs never chats, but AnythingLLM's own
+vector-search constructs an LLM connector per search and answers 500 when
+none is configured.
 
 The installer calls `setup`, which configures the installation, starts the
 single app service and verifies readiness. `start` is idempotent and

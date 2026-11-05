@@ -473,7 +473,11 @@ your AnythingLLM's URL is then `http://localhost:21501`.
      it — with the reference compose that is `http://localhost:21501` on
      the server (tunnel `ssh -L 21501:127.0.0.1:21501 <server>` from your
      machine). Finish AnythingLLM's first-boot wizard and generate the
-     developer API key (Settings → Developer API).
+     developer API key (Settings → Developer API). Then set an **LLM
+     Preference** (Settings → AI Providers): any provider works, since
+     any-obs never chats — but AnythingLLM's own vector-search endpoint
+     constructs an LLM connector on every search and answers 500 when
+     none is configured.
    - **Step 2 — connect:** paste the key. The server verifies it, becomes
      its only holder (it never lives on any user's machine), and you can
      rotate it any time in the Settings tab.

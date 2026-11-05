@@ -11,6 +11,11 @@
 # project's reserved port) so first-boot setup and the developer API key
 # happen on the server itself or over an SSH tunnel:
 #   ssh -L 21501:127.0.0.1:21501 <server>
+#
+# After first-boot, set an LLM Preference (UI → Settings → AI Providers).
+# any-obs never chats, but AnythingLLM's own vector-search endpoint
+# constructs an LLM connector on every search and answers 500 when none
+# is configured — any provider choice works.
 services:
   anythingllm:
     image: mintplexlabs/anythingllm:latest
