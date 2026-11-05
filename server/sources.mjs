@@ -1,7 +1,7 @@
 import { assertLocalImport, assertRemoteRepository } from "../lib/deployment.mjs";
 import { execFile as nodeExecFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { embedVault as defaultEmbedVault } from "../scripts/embed-vault.mjs";
@@ -331,6 +331,11 @@ export function createSourceManager({
   async function refreshWorkingCopy(source, signal) {
     if (source.kind === "dir") {
       assertLocalImport(env);
+      // A dir source the user owns may itself be a git checkout; keep it fresh
+      // with the repo's own origin URL and this machine's credential helpers.
+      if (await isGitRepository(source.ref)) {
+        await runGit(["-C", source.ref, "pull", "--rebase", "--autostash"], undefined, { signal });
+      }
       return source.ref;
     }
     assertRemoteRepository(source.ref, env);
@@ -347,6 +352,15 @@ export function createSourceManager({
     return target;
   }
   return manager;
+}
+
+async function isGitRepository(dir) {
+  try {
+    await access(path.join(dir, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function conflict(message) {

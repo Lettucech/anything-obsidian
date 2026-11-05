@@ -307,6 +307,77 @@ test("private local imports also require an HTTPS credential for later sync", as
   assert.equal(vaultStorage.imported.length, 0);
 });
 
+test("importing a git checkout defaults gitAutoPull on; explicit values win", async () => {
+  const makeApp = () => {
+    const vaultStorage = fakeVaultStorage();
+    vaultStorage.import = async function (input) {
+      this.imported.push(input);
+      const isRepo = input.importPath.includes("team-repo");
+      return {
+        location: "imported",
+        importPath: input.importPath,
+        directory: "team-repo",
+        name: "Team Repo",
+        hasGit: isRepo,
+        ...(isRepo
+          ? { repositoryUrl: "https://git.example/team/repo.git", gitRemote: "origin", gitBranch: "main" }
+          : {}),
+      };
+    };
+    return createDashboardServer({
+      jobs: fakeJobs(),
+      registry: fakeRegistry(),
+      anythingllm: {
+        async listWorkspaces() {
+          return [];
+        },
+        async createWorkspace() {
+          return { slug: "team-repo" };
+        },
+      },
+      vaultStorage,
+      secrets: fakeSecrets(),
+      env: nativeEnv(),
+      native: nativePaths(),
+    });
+  };
+  const base = {
+    sourceMode: "import",
+    id: "team-repo",
+    directory: "team-repo",
+    name: "Team Repo",
+    repositoryVisibility: "public",
+    gitUserName: "X Bot",
+    gitUserEmail: "x@example.test",
+    syncIntervalSeconds: 300,
+    enabled: true,
+    accessMode: "open",
+    allowlist: [],
+  };
+
+  const gitRepo = await request(makeApp(), "POST", "/api/vaults", {
+    ...base,
+    importPath: "/Users/x/Workspace/team-repo",
+  });
+  assert.equal(gitRepo.status, 201);
+  assert.equal(gitRepo.body.gitAutoPull, true);
+
+  const plainFolder = await request(makeApp(), "POST", "/api/vaults", {
+    ...base,
+    importPath: "/Users/x/Workspace/plain-notes",
+  });
+  assert.equal(plainFolder.status, 201);
+  assert.equal(plainFolder.body.gitAutoPull, undefined);
+
+  const optedOut = await request(makeApp(), "POST", "/api/vaults", {
+    ...base,
+    importPath: "/Users/x/Workspace/team-repo",
+    gitAutoPull: false,
+  });
+  assert.equal(optedOut.status, 201);
+  assert.equal(optedOut.body.gitAutoPull, false);
+});
+
 test("vault creation checks AnythingLLM before cloning", async () => {
   const vaultStorage = fakeVaultStorage();
   const app = createDashboardServer({

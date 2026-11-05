@@ -755,7 +755,7 @@ async function renderSources(state) {
   const kind = element("select", "", "");
   kind.innerHTML =
     '<option value="git">git repository</option>' +
-    (localImport ? '<option value="dir">server directory</option>' : "");
+    (localImport ? '<option value="dir">server directory (auto-pulls git repos)</option>' : "");
   const ref = element("input", "", "");
   ref.placeholder = localImport
     ? "https://git.example/kb.git or /srv/kb"

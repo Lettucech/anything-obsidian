@@ -223,3 +223,49 @@ test("git sources clone once and pull on later refreshes; resolver keys are read
     ["one", "two"],
   );
 });
+
+test("dir sources that are git checkouts are pulled before embedding", async (t) => {
+  const f = await fixture(t);
+  const repo = await mkdtemp(path.join(tmpdir(), "any-obs-repo-"));
+  await mkdir(path.join(repo, ".git"), { recursive: true });
+  t.after(() => rm(repo, { recursive: true, force: true }));
+  await f.create("team", { ref: repo });
+
+  const job = await f.finish(await f.manager.requestRefresh("team"));
+
+  assert.equal(job.status, "succeeded");
+  assert.deepEqual(f.gitCalls[0], ["-C", repo, "pull", "--rebase", "--autostash"]);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].config.vaultPath, repo);
+});
+
+test("dir sources without .git keep reading files without touching git", async (t) => {
+  const f = await fixture(t);
+  const plain = await mkdtemp(path.join(tmpdir(), "any-obs-plain-"));
+  t.after(() => rm(plain, { recursive: true, force: true }));
+  await f.create("team", { ref: plain });
+
+  const job = await f.finish(await f.manager.requestRefresh("team"));
+
+  assert.equal(job.status, "succeeded");
+  assert.deepEqual(f.gitCalls, []);
+  assert.equal(f.calls.length, 1);
+});
+
+test("a failed dir-source pull fails the job with the git error", async (t) => {
+  const f = await fixture(t, {
+    runGit: async () => {
+      throw new Error("fatal: authentication failed for 'https://git.example/team.git/'");
+    },
+  });
+  const repo = await mkdtemp(path.join(tmpdir(), "any-obs-repo-"));
+  await mkdir(path.join(repo, ".git"), { recursive: true });
+  t.after(() => rm(repo, { recursive: true, force: true }));
+  await f.create("team", { ref: repo });
+
+  const job = await f.finish(await f.manager.requestRefresh("team"));
+
+  assert.equal(job.status, "failed");
+  assert.match(job.error, /authentication failed/);
+  assert.equal(f.calls.length, 0);
+});

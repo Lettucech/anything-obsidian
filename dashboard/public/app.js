@@ -410,7 +410,7 @@ if (typeof document !== "undefined") {
     els.importusefolder.title = useFolderBlockedReason(tree);
     setBrowseNote(useFolderBlockedReason(tree) || (tree.importMode === "managed"
       ? `Importing '${tree.name}' as a managed vault beneath the vault root.`
-      : `Importing '${tree.path}' as a folder you own; anyobs records the path and leaves auto-sync off.`));
+      : `Importing '${tree.path}' as a folder you own; if it is a git checkout, anyobs pulls it before every sync.`));
   }
 
   function setBrowseNote(text, error = false) {
@@ -447,7 +447,7 @@ if (typeof document !== "undefined") {
     syncFormControls();
     setDialogMessage(managed
       ? `Directory set to '${tree.name}' (managed beneath the vault root).`
-      : `Folder set to '${tree.path}' (yours — auto-sync stays off).`);
+      : `Folder set to '${tree.path}' (yours — git checkouts are pulled before each sync).`);
   }
 
   async function refresh() {

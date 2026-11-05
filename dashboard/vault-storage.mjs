@@ -58,7 +58,11 @@ export function createVaultStorage({ registry, runGit = runGitDefault, env = pro
         const identity = importedIdentity(input, importPath);
         const vaultPath = registry.resolvePath(identity);
         await assertDirectory(vaultPath);
-        return { ...identity, ...(await inspectGitRepository(vaultPath, runGit)) };
+        return {
+          ...identity,
+          hasGit: await isGitRepository(vaultPath),
+          ...(await inspectGitRepository(vaultPath, runGit)),
+        };
       }
       assertSlug(input.id, "id");
       assertSlug(input.directory, "directory");
@@ -86,6 +90,15 @@ function importedIdentity(input, importPath) {
     directory,
     name: String(input.name ?? "").trim() || path.basename(resolved),
   };
+}
+
+async function isGitRepository(dir) {
+  try {
+    await access(path.join(dir, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function assertDirectory(vaultPath) {

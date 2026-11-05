@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,36 +23,44 @@ export async function syncVaultOnce({ config, deps = {} }) {
     });
   };
   const env = gitEnv(config);
+  const hasGit = deps.hasGit ?? isGitRepository;
 
-  await configureGit(config, runner);
-  let pushSucceeded = !config.gitAutoPush;
+  // Location flavour and git-ness are independent: an imported folder may
+  // have no checkout at all, in which case every git step is skipped and
+  // only the embed pass runs.
+  const isCheckout = await hasGit(config.vaultPath);
 
-  if (config.gitAutoPull) {
+  if (isCheckout) await configureGit(config, runner);
+  let pushSucceeded = !config.gitAutoPush || !isCheckout;
+
+  if (config.gitAutoPull && isCheckout) {
     await runner("git", ["pull", "--rebase", "--autostash", config.gitRemote, config.gitBranch], {
       cwd: config.vaultPath,
       env,
     });
   }
 
-  const statusBefore = await capturer("git", ["status", "--porcelain"], {
-    cwd: config.vaultPath,
-    env,
-  });
-  if (statusBefore.trim()) {
-    await runner("git", ["add", "-A"], { cwd: config.vaultPath, env });
-    const statusAfterAdd = await capturer("git", ["status", "--porcelain"], {
+  if (isCheckout) {
+    const statusBefore = await capturer("git", ["status", "--porcelain"], {
       cwd: config.vaultPath,
       env,
     });
-    if (statusAfterAdd.trim()) {
-      await runner("git", ["commit", "-m", commitMessage(config)], { cwd: config.vaultPath, env });
-      log("Committed vault changes");
+    if (statusBefore.trim()) {
+      await runner("git", ["add", "-A"], { cwd: config.vaultPath, env });
+      const statusAfterAdd = await capturer("git", ["status", "--porcelain"], {
+        cwd: config.vaultPath,
+        env,
+      });
+      if (statusAfterAdd.trim()) {
+        await runner("git", ["commit", "-m", commitMessage(config)], { cwd: config.vaultPath, env });
+        log("Committed vault changes");
+      }
+    } else {
+      log("No vault changes to commit");
     }
-  } else {
-    log("No vault changes to commit");
   }
 
-  if (config.gitAutoPush) {
+  if (config.gitAutoPush && isCheckout) {
     if (config.gitPushUrl) {
       await runner("git", ["push", config.gitPushUrl, `HEAD:${config.gitBranch}`], {
         cwd: config.vaultPath,
@@ -83,6 +92,15 @@ export function gitEnv(config) {
     GIT_USERNAME: config.gitAuthUsername || "x-access-token",
     GIT_PASSWORD: config.gitAuthToken,
   };
+}
+
+async function isGitRepository(dir) {
+  try {
+    await access(path.join(dir, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function configureGit(config, runner = run) {

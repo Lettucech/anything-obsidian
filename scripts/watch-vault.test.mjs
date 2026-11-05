@@ -58,6 +58,7 @@ test("git auth env uses askpass without putting token in command args", async ()
         calls.push({ command, args, env: options.env });
       },
       capture: async () => "",
+      hasGit: async () => true,
     },
   });
 
@@ -73,4 +74,86 @@ test("git auth env uses askpass without putting token in command args", async ()
     calls.some((call) => call.args.some((arg) => arg.includes("ghp_secret"))),
     false,
   );
+});
+
+test("auto pull is skipped when the vault has no .git entry", async () => {
+  const calls = [];
+  const config = {
+    vaultPath: "/plain-folder",
+    gitRemote: "origin",
+    gitBranch: "main",
+    gitAutoPull: true,
+    gitAutoPush: false,
+    gitUserName: "anything-obsidian",
+    gitUserEmail: "anything-obsidian@local",
+  };
+
+  const result = await syncVaultOnce({
+    config,
+    deps: {
+      run: async (command, args) => {
+        calls.push({ command, args });
+      },
+      capture: async () => "",
+      hasGit: async () => false,
+    },
+  });
+
+  // No checkout: every git step is skipped (no pull, no configure, no
+  // commit/push) and the sync still completes so the embed pass runs.
+  assert.equal(calls.length, 0);
+  assert.equal(result.pushed, true);
+});
+
+test("auto pull is skipped when explicitly disabled even for git repos", async () => {
+  const calls = [];
+  const config = {
+    vaultPath: "/vault",
+    gitRemote: "origin",
+    gitBranch: "main",
+    gitAutoPull: false,
+    gitAutoPush: false,
+    gitUserName: "anything-obsidian",
+    gitUserEmail: "anything-obsidian@local",
+  };
+
+  await syncVaultOnce({
+    config,
+    deps: {
+      run: async (command, args) => {
+        calls.push({ command, args });
+      },
+      capture: async () => "",
+      hasGit: async () => true,
+    },
+  });
+
+  assert.equal(calls.some((call) => call.args.includes("pull")), false);
+});
+
+test("auto pull runs for an imported git checkout", async () => {
+  const calls = [];
+  const config = {
+    vaultPath: "/workspace/notes",
+    gitRemote: "origin",
+    gitBranch: "main",
+    gitAutoPull: true,
+    gitAutoPush: false,
+    gitUserName: "anything-obsidian",
+    gitUserEmail: "anything-obsidian@local",
+  };
+
+  await syncVaultOnce({
+    config,
+    deps: {
+      run: async (command, args) => {
+        calls.push({ command, args });
+      },
+      capture: async () => "",
+      hasGit: async () => true,
+    },
+  });
+
+  const pull = calls.find((call) => call.args.includes("pull"));
+  assert.deepEqual(pull.args, ["pull", "--rebase", "--autostash", "origin", "main"]);
 });

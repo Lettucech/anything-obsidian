@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -29,6 +29,7 @@ test("imports a directory anywhere on disk and records its git origin when it ha
   assert.match(discovered.directory, /^my-notes-[a-z0-9-]+$/);
   assert.equal(discovered.repositoryUrl, "https://github.com/acme/my-notes.git");
   assert.equal(discovered.gitBranch, "main");
+  assert.equal(discovered.hasGit, false);
 });
 
 test("imports a plain directory with no git repository and records no remote", async () => {
@@ -45,6 +46,27 @@ test("imports a plain directory with no git repository and records no remote", a
   assert.equal(discovered.location, "imported");
   assert.equal(discovered.repositoryUrl, undefined);
   assert.equal(discovered.gitBranch, undefined);
+  assert.equal(discovered.hasGit, false);
+});
+
+test("reports hasGit for an imported directory that is a git checkout", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "anything-obsidian-vaults-"));
+  const imported = await mkdtemp(path.join(tmpdir(), "Team KB-"));
+  const registry = createVaultRegistry({ rootPath: root, registryPath: path.join(root, "registry.json") });
+  const storage = createVaultStorage({
+    registry,
+    runGit: async (args) => {
+      if (args[0] === "remote") return "https://git.example/team/kb.git";
+      if (args[0] === "branch") return "main";
+      return "";
+    },
+  });
+  await mkdir(path.join(imported, ".git"), { recursive: true });
+
+  const discovered = await storage.import({ importPath: imported });
+
+  assert.equal(discovered.hasGit, true);
+  assert.equal(discovered.repositoryUrl, "https://git.example/team/kb.git");
 });
 
 test("rejects an import path that does not exist or is not a directory", async () => {

@@ -117,9 +117,15 @@ credentials are supported.
 - Vault locations come in two flavours, and the registry records which:
   `managed` entries live beneath `VAULTS_ROOT` and must be direct children of
   it — any-obs owns that area; `imported` entries store an absolute
-  `importPath` to a directory the user already owns, never auto-sync unless
-  they ask, and that directory is the boundary every raw-file tool anchors
-  its traversal checks to. Never collapse the two: a managed resolve must not
+  `importPath` to a directory the user already owns, and that directory is the
+  boundary every raw-file tool anchors its traversal checks to. Location and
+  git-ness are independent: an imported directory that is itself a git
+  checkout defaults to auto pull (explicit `gitAutoPull: false` opts out), and
+  a sync tick only pulls when a `.git` entry actually exists (see
+  `docs/superpowers/specs/2026-11-05-git-aware-auto-pull.md`). Server shared
+  sources follow the same rule: a `dir` source that is a git repo is pulled
+  with its own origin and the host's credential helpers before every refresh.
+  Never collapse the two: a managed resolve must not
   accept an absolute path, and an imported resolve must not be re-joined onto
   the root.
 - One AnythingLLM workspace **per vault** (per-vault model, 2026-11 — see

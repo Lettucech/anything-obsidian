@@ -573,9 +573,12 @@ and fails loudly if the endpoint no longer accepts the configured folder.
 - Two ways to add a vault: **managed** (a directory the installer created
   under the vaults root — any-obs owns its location) or **imported** (any
   existing directory you point at, e.g. `~/Workspace/my-vault` — you own the
-  location and any-obs never moves or auto-syncs it). Managed entries must be
+  location and any-obs never moves it). Managed entries must be
   direct children of the vaults root; an imported entry stores its absolute
   path and that directory becomes its own boundary for every raw-file tool.
+  An imported directory that is a git checkout defaults to auto pull (it is
+  pulled with its own remote and this machine's credentials before each sync;
+  untick "Pull before syncing" to opt out) — a plain folder is just embedded.
 - Local raw-vault tools reject traversal, symlinks, Git metadata, unsupported
   file types, and unbounded reads.
 - LAN MCP is read-only and token-protected, but it is still an information

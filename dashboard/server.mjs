@@ -197,6 +197,12 @@ export function createDashboardServer({
           ...discovered,
           gitAuthMode: effectiveGitAuth?.mode === "https-token" ? "https-token" : "none",
         };
+        // An imported directory that is itself a git checkout defaults to
+        // auto pull (its own origin + this machine's credentials); an explicit
+        // gitAutoPull in the request still wins. Managed vaults already sync.
+        if (sourceMode === "import" && discovered.hasGit && request.gitAutoPull === undefined) {
+          vaultInput.gitAutoPull = true;
+        }
         const vault = await registry.create(vaultInput);
         await secrets.save(vault.id, effectiveGitAuth);
         // The vault's own workspace is minted right away (per-vault model):
