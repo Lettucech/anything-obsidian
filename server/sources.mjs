@@ -3,6 +3,7 @@ import { execFile as nodeExecFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { embedVault as defaultEmbedVault } from "../scripts/embed-vault.mjs";
 import { vaultDocumentFolder, purgeVaultEmbeddings } from "../lib/unified-workspace.mjs";
@@ -12,11 +13,13 @@ import { readJson, writeJson, withFileLock } from "../lib/state.mjs";
 
 const SOURCE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ACTIVE = new Set(["queued", "running"]);
+const dashboardRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dashboard");
 
 export function createSourceManager({
   dataDir,
   baseUrl,
   apiKey,
+  secrets = null,
   embedVault = defaultEmbedVault,
   purge = purgeVaultEmbeddings,
   runGit = defaultRunGit,
@@ -34,8 +37,8 @@ export function createSourceManager({
   let accepting = true;
   const ready = jobStore.save([...jobs.values()]);
   const persist = () => jobStore.save([...jobs.values()]);
-  const clean = (value) => {
-    let text = redactSecretsText(value);
+  const clean = (value, extraSecrets = []) => {
+    let text = redactSecretsText(value, extraSecrets.filter(Boolean));
     if (typeof apiKey === "string" && apiKey) text = text.split(apiKey).join("[redacted]");
     return text.replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, "$1[redacted]@");
   };
@@ -75,10 +78,10 @@ export function createSourceManager({
       const intervalSeconds = Number(input?.intervalSeconds ?? 600);
       if (!Number.isInteger(intervalSeconds) || intervalSeconds < 0)
         throw new Error("intervalSeconds must be a non-negative integer");
-      return mutateRegistry((registry) => {
-        if (registry.sources.some((source) => source.id === id))
+      const source = await mutateRegistry((registry) => {
+        if (registry.sources.some((candidate) => candidate.id === id))
           throw new Error(`Source already exists: ${id}`);
-        const source = {
+        const created = {
           id,
           kind,
           ref,
@@ -90,9 +93,17 @@ export function createSourceManager({
           enabled: input?.enabled !== false,
           lastRefresh: null,
         };
-        registry.sources.push(source);
-        return source;
+        registry.sources.push(created);
+        return created;
       });
+      // Optional per-source HTTPS credentials never touch the registry —
+      // they live only in the secret store and are injected via GIT_ASKPASS
+      // at refresh time so headless syncs never prompt.
+      if (input?.gitAuth) {
+        if (!secrets) throw new Error("Credential storage is unavailable");
+        await secrets.save(id, input.gitAuth);
+      }
+      return source;
     },
     async remove(id) {
       const source = await manager.get(id);
@@ -114,6 +125,16 @@ export function createSourceManager({
           statusCode: 404,
         });
       return enqueue(id, { action: "refresh", force });
+    },
+    async refreshAll() {
+      // One refresh per eligible source; sources already running a job
+      // coalesce into it instead of double-queueing.
+      const eligible = (await manager.list()).filter(
+        (source) => source.enabled && !source.cleanupPending,
+      );
+      const jobs = [];
+      for (const source of eligible) jobs.push(await manager.requestRefresh(source.id, {}));
+      return jobs;
     },
     job(id) {
       return jobs.get(id) ?? null;
@@ -227,6 +248,13 @@ export function createSourceManager({
       return;
     }
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(jobTimeoutMs)]);
+    // Redact the source's own token from anything this job logs or reports.
+    const jobSecrets = secrets
+      ? await secrets
+          .get(job.sourceId)
+          .then((auth) => (auth?.token ? [auth.token] : []))
+          .catch(() => [])
+      : [];
     let lastPersisted = 0;
     const report = async (progress) => {
       const phaseChanged = job.phase !== progress.phase;
@@ -259,7 +287,7 @@ export function createSourceManager({
         throw new Error(
           "No AnythingLLM key configured — set it in the admin dashboard's Settings tab",
         );
-      const sanitize = (error) => clean(String(error).split(key).join("[redacted]"));
+      const sanitize = (error) => clean(String(error).split(key).join("[redacted]"), jobSecrets);
       try {
         if (job.action === "remove") {
           await report({ phase: "removing" });
@@ -276,6 +304,7 @@ export function createSourceManager({
           await mutateRegistry((registry) => {
             registry.sources = registry.sources.filter((candidate) => candidate.id !== source.id);
           });
+          if (secrets) await secrets.remove(source.id);
           job.result = result;
         } else {
           await report({ phase: source.kind === "git" ? "syncing" : "reading" });
@@ -312,12 +341,12 @@ export function createSourceManager({
       }
     } catch (error) {
       job.status = controller.signal.aborted ? "cancelled" : "failed";
-      job.error = clean(error.message);
+      job.error = clean(error.message, jobSecrets);
       await mutateRegistry((registry) => {
         const current = registry.sources.find((source) => source.id === job.sourceId);
         if (current) current.lastError = job.error;
       });
-      job.logs = clean(`${job.logs}${job.error}\n`).slice(-64 * 1024);
+      job.logs = clean(`${job.logs}${job.error}\n`, jobSecrets).slice(-64 * 1024);
     } finally {
       job.finishedAt = new Date(now()).toISOString();
       controllers.delete(job.id);
@@ -329,12 +358,32 @@ export function createSourceManager({
   }
 
   async function refreshWorkingCopy(source, signal) {
+    // A stored token means deterministic headless auth: inject it via
+    // GIT_ASKPASS and disable ambient credential helpers — otherwise git
+    // consults helpers first and a macOS keychain lookup can pop an ACL
+    // dialog nobody is at the machine to answer.
+    const auth = secrets ? await secrets.get(source.id).catch(() => null) : null;
+    const authEnv = auth?.token
+      ? {
+          ...process.env,
+          GIT_ASKPASS: path.join(dashboardRoot, "git-askpass.sh"),
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_USERNAME: auth.username || "x-access-token",
+          GIT_PASSWORD: auth.token,
+        }
+      : null;
+    const authArgs = auth?.token ? ["-c", "credential.helper="] : [];
     if (source.kind === "dir") {
       assertLocalImport(env);
-      // A dir source the user owns may itself be a git checkout; keep it fresh
-      // with the repo's own origin URL and this machine's credential helpers.
+      // A dir source the user owns may itself be a git checkout; keep it
+      // fresh with the repo's own origin URL and this machine's credential
+      // helpers (or the source's stored token when one exists).
       if (await isGitRepository(source.ref)) {
-        await runGit(["-C", source.ref, "pull", "--rebase", "--autostash"], undefined, { signal });
+        await runGit(
+          [...authArgs, "-C", source.ref, "pull", "--rebase", "--autostash"],
+          undefined,
+          { signal, env: authEnv },
+        );
       }
       return source.ref;
     }
@@ -345,10 +394,17 @@ export function createSourceManager({
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
       await mkdir(path.dirname(target), { recursive: true });
-      await runGit(["clone", "--branch", source.branch, source.ref, target], undefined, { signal });
+      await runGit(
+        [...authArgs, "clone", "--branch", source.branch, source.ref, target],
+        undefined,
+        { signal, env: authEnv },
+      );
       return target;
     }
-    await runGit(["-C", target, "pull", "--ff-only"], undefined, { signal });
+    await runGit([...authArgs, "-C", target, "pull", "--ff-only"], undefined, {
+      signal,
+      env: authEnv,
+    });
     return target;
   }
   return manager;
@@ -366,7 +422,7 @@ async function isGitRepository(dir) {
 function conflict(message) {
   return Object.assign(new Error(message), { statusCode: 409 });
 }
-async function defaultRunGit(args, cwd, { signal } = {}) {
+async function defaultRunGit(args, cwd, { signal, env } = {}) {
   try {
     return (
       await promisify(nodeExecFile)("git", args, {
@@ -374,7 +430,7 @@ async function defaultRunGit(args, cwd, { signal } = {}) {
         signal,
         timeout: 120_000,
         maxBuffer: 1024 * 1024,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        env: env ?? { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       })
     ).stdout;
   } catch (error) {

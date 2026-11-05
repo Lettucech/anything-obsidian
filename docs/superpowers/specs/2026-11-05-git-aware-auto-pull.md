@@ -64,6 +64,49 @@ git-ness are independent.
 - No opt-out flag was added for dir sources; add one only if a real case
   appears.
 
+## Follow-up (same day): Per-source credentials
+
+Live on 227, the first automated pull of a private repo popped a macOS
+keychain ACL dialog — git consults ambient credential helpers **before**
+askpass, and a headless instance has nobody to click "Always Allow"; the
+pull hangs then fails. Brian's rule: credentials are collected when the
+source is added, never prompted for at runtime.
+
+- Add-source form (console) gains optional HTTPS username/token; the token
+  is stored via the reused `lib/vault-secrets.mjs` store at
+  `<gateway-dataDir>/secrets/<sourceId>.json` (0600, atomic) — never in
+  sources.json, never in responses.
+- `refreshWorkingCopy`: with a stored token, git runs with
+  `GIT_ASKPASS=dashboard/git-askpass.sh` + `GIT_USERNAME`/`GIT_PASSWORD`
+  **and `-c credential.helper=`** — helpers are disabled for that call, so
+  no keychain lookup can happen (git consults helpers first; disabling them
+  is what makes the flow deterministic). Tokenless sources keep the ambient
+  behavior.
+- New admin `PATCH /api/gateway/sources/:id` (`{gitAuth}` required):
+  rotate a token (PAT expiry) or clear it (`{mode:"none"}`) — responds
+  `{id, configured}` only, never the token.
+- Console gains an "Update credentials" form (source dropdown +
+  username + token + Clear) for rotation without removing the source.
+- Job logs/errors pass the source's token into `redactSecretsText`'s
+  dynamic secret list (same pattern as `worker.secretValues`).
+- Removing a source purges its stored credential with the rest of cleanup.
+
+## Follow-up (same day): Sync all
+
+Deploying to a slower instance surfaced the gap that the scheduler interval
+(600s default) is the only way to trigger a fresh pull, and only per-source
+buttons existed. Added:
+
+- `sourceManager.refreshAll()` — one non-force refresh per eligible source
+  (enabled, not pending removal); sources already running a job coalesce
+  into it.
+- `POST /api/gateway/sources/refresh-all` — admin-only (same `adminOnly`
+  guard as source DELETE), returns 202 `{ jobs }`. (Agents already had the
+  bulk path: MCP `any_obs_shared_refresh` without `sourceId`.)
+- Console: a "Sync all" button above the source rows, disabled while any
+  source has an active job; per-row and bulk status render through the
+  existing 2s `fill()` poll.
+
 ## Files
 
 - `server/sources.mjs` — dir-source pull + `isGitRepository` helper

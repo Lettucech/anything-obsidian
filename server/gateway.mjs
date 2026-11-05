@@ -28,6 +28,7 @@ import { z } from "zod";
 
 import { createUserStore } from "./iam.mjs";
 import { createGatewayConfig } from "./gateway-config.mjs";
+import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
 import { decide } from "./proxy-rules.mjs";
 import { fanoutSearch } from "./fanout.mjs";
 import { createSourceManager } from "./sources.mjs";
@@ -55,6 +56,7 @@ export function createGatewayRequestHandler({
   env = process.env,
   userStore,
   sourceManager,
+  sourceSecrets = null,
   gatewayConfig = createGatewayConfig({ dataDir: defaultDataDir(env) }),
   anythingllmBaseUrl = "",
   anythingllmApiKey = "",
@@ -541,6 +543,24 @@ export function createGatewayRequestHandler({
         ? sendJson(res, 202, removed)
         : sendJson(res, 404, { error: "Source was not found" });
     }
+    if (sourceMatch && req.method === "PATCH") {
+      // Update a source's stored HTTPS credentials (e.g. a rotated PAT).
+      // Tokens are never returned — only whether a credential is configured.
+      adminOnly();
+      const source = await sourceManager.get(sourceMatch[1]);
+      if (!source) return sendJson(res, 404, { error: "Source was not found" });
+      if (!sourceSecrets) throw httpError(500, "Credential storage is unavailable");
+      if (!body?.gitAuth)
+        throw httpError(400, "Nothing to update — send gitAuth ({mode: 'none'} clears stored credentials)");
+      await sourceSecrets.save(source.id, body.gitAuth);
+      const configured = Boolean(await sourceSecrets.get(source.id));
+      return sendJson(res, 200, { id: source.id, configured });
+    }
+    if (url.pathname === "/api/gateway/sources/refresh-all" && req.method === "POST") {
+      adminOnly();
+      const jobs = await sourceManager.refreshAll();
+      return sendJson(res, 202, { jobs });
+    }
     const refreshMatch = url.pathname.match(/^\/api\/gateway\/sources\/([a-z0-9-]+)\/refresh$/);
     if (refreshMatch && req.method === "POST") {
       if (!identity) throw httpError(401, "Bearer token required");
@@ -833,15 +853,20 @@ export async function createGatewayRuntime({ env = process.env, dataDir = defaul
   const state = await gatewayConfig.load();
   const anythingllmBaseUrl = stripTrailingSlash(state.anythingllmBaseUrl || "");
   const userStore = createUserStore({ dataDir });
+  // Per-source git credentials (optional): collected when a source is added,
+  // injected via GIT_ASKPASS at refresh time so headless syncs never prompt.
+  const sourceSecrets = createVaultSecretStore({ rootPath: path.join(dataDir, "secrets") });
   const sourceManager = createSourceManager({
     dataDir,
     baseUrl: anythingllmBaseUrl,
+    secrets: sourceSecrets,
     // Resolve per job: the key lives in gateway.json, not the process env.
     apiKey: async () => (await gatewayConfig.load()).apiKey,
   });
   const shared = {
     userStore,
     sourceManager,
+    sourceSecrets,
     gatewayConfig,
     anythingllmBaseUrl,
     logPath: logPath ?? path.join(path.dirname(dataDir), "logs", "gateway.log"),

@@ -10,6 +10,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { createGatewayServer } from "./gateway.mjs";
 import { createUserStore } from "./iam.mjs";
 import { createSourceManager } from "./sources.mjs";
+import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
 
 test("public plane: health is public, everything else wants a user token", async () => {
   const { publicUrl } = await startGateway();
@@ -460,6 +461,90 @@ test("sources CRUD on the admin plane; refresh and jobs over the public plane", 
   assert.equal(job.body.sourceId, "team-kb");
 });
 
+test("refresh-all is admin-only and queues every eligible source", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  const { userToken } = await createUser(adminUrl, publicUrl, "brian");
+  const auth = { Authorization: `Bearer ${userToken}` };
+
+  await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
+    method: "POST",
+    body: JSON.stringify({ name: "company-kb", kind: "shared" }),
+  });
+  await fetchJson(`${adminUrl}/api/gateway/sources`, {
+    method: "POST",
+    body: JSON.stringify({ id: "team-kb", kind: "dir", ref: "/srv/kb", workspace: "company-kb" }),
+  });
+
+  // Non-admins (public plane, even with a token) get the same 404 the
+  // adminOnly guard gives every bulk surface.
+  const member = await fetchJson(`${publicUrl}/api/gateway/sources/refresh-all`, {
+    method: "POST",
+    headers: auth,
+  });
+  assert.equal(member.status, 404);
+
+  const all = await fetchJson(`${adminUrl}/api/gateway/sources/refresh-all`, {
+    method: "POST",
+  });
+  assert.equal(all.status, 202);
+  assert.deepEqual(all.body.jobs.map((entry) => entry.sourceId), ["team-kb"]);
+});
+
+test("source credentials round-trip without ever echoing the token", async () => {
+  const { adminUrl, publicUrl } = await startGateway();
+  const { userToken } = await createUser(adminUrl, publicUrl, "brian");
+  const auth = { Authorization: `Bearer ${userToken}` };
+
+  await fetchJson(`${adminUrl}/api/gateway/workspaces`, {
+    method: "POST",
+    body: JSON.stringify({ name: "company-kb", kind: "shared" }),
+  });
+  const created = await fetchJson(`${adminUrl}/api/gateway/sources`, {
+    method: "POST",
+    body: JSON.stringify({
+      id: "team-kb",
+      kind: "git",
+      ref: "https://git.example/team.git",
+      workspace: "company-kb",
+      gitAuth: { mode: "https-token", username: "oauth2", token: "super-secret-token" },
+    }),
+  });
+  assert.equal(created.status, 201);
+  assert.equal(JSON.stringify(created.body).includes("super-secret-token"), false);
+
+  const listed = await fetchJson(`${adminUrl}/api/gateway/sources`);
+  assert.equal(JSON.stringify(listed.body).includes("super-secret-token"), false);
+
+  const nothing = await fetchJson(`${adminUrl}/api/gateway/sources/team-kb`, {
+    method: "PATCH",
+    body: JSON.stringify({}),
+  });
+  assert.equal(nothing.status, 400);
+
+  const member = await fetchJson(`${publicUrl}/api/gateway/sources/team-kb`, {
+    method: "PATCH",
+    headers: auth,
+    body: JSON.stringify({ gitAuth: { mode: "none" } }),
+  });
+  assert.equal(member.status, 404);
+
+  const rotated = await fetchJson(`${adminUrl}/api/gateway/sources/team-kb`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      gitAuth: { mode: "https-token", username: "oauth2", token: "rotated-token" },
+    }),
+  });
+  assert.equal(rotated.status, 200);
+  assert.deepEqual(rotated.body, { id: "team-kb", configured: true });
+
+  const cleared = await fetchJson(`${adminUrl}/api/gateway/sources/team-kb`, {
+    method: "PATCH",
+    body: JSON.stringify({ gitAuth: { mode: "none" } }),
+  });
+  assert.equal(cleared.status, 200);
+  assert.deepEqual(cleared.body, { id: "team-kb", configured: false });
+});
+
 test("MCP on the public plane is token-gated with the four RAG/pipeline tools", async () => {
   const { adminUrl, publicUrl } = await startGateway();
   const { userToken } = await createUser(adminUrl, publicUrl, "brian");
@@ -865,13 +950,16 @@ async function startGateway({ envKey = true, dataDir: dataDirOverride } = {}) {
   const upstream = fakeAnythingllm();
   upstream.embeds = [];
   const gatewayConfig = (await import("./gateway-config.mjs")).createGatewayConfig({ dataDir });
+  const sourceSecrets = createVaultSecretStore({ rootPath: path.join(dataDir, "secrets") });
   const shared = {
     env: { ANYTHING_OBSIDIAN_HOME: path.dirname(dataDir) },
     userStore: createUserStore({ dataDir }),
     gatewayConfig,
+    sourceSecrets,
     sourceManager: createSourceManager({
       dataDir,
       baseUrl: "http://anythingllm.test",
+      secrets: sourceSecrets,
       apiKey: async () => (await gatewayConfig.load()).apiKey || (envKey ? "admin-key" : ""),
       embedVault: async ({ config }) => {
         upstream.embeds.push({ config });

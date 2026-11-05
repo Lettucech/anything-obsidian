@@ -125,6 +125,11 @@ credentials are supported.
   `docs/superpowers/specs/2026-11-05-git-aware-auto-pull.md`). Server shared
   sources follow the same rule: a `dir` source that is a git repo is pulled
   with its own origin and the host's credential helpers before every refresh.
+  Shared sources additionally accept optional per-source HTTPS credentials
+  (collected at add time, stored 0600 under the gateway secrets dir): a
+  source with a stored token runs git through GIT_ASKPASS with ambient
+  credential helpers disabled, so headless scheduled syncs never pop a
+  keychain prompt.
   Never collapse the two: a managed resolve must not
   accept an absolute path, and an imported resolve must not be re-joined onto
   the root.

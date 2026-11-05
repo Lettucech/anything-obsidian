@@ -4,17 +4,21 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createSourceManager } from "./sources.mjs";
+import { createVaultSecretStore } from "../lib/vault-secrets.mjs";
 import { writeJson } from "../lib/state.mjs";
 
 async function fixture(t, overrides = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "any-obs-source-"));
   const calls = [],
     gitCalls = [],
+    gitOptions = [],
     purges = [];
+  const secrets = createVaultSecretStore({ rootPath: path.join(root, "secrets") });
   const options = {
     dataDir: root,
     baseUrl: "http://upstream.test",
     apiKey: "secret-key",
+    secrets,
     embedVault: async (args) => {
       calls.push(args);
       await args.onProgress({ phase: "embedding", completed: 1, total: 1 });
@@ -24,11 +28,13 @@ async function fixture(t, overrides = {}) {
       purges.push(args);
       return { purged: true };
     },
-    runGit: async (args) => {
+    runGit: async (args, cwd, runOptions) => {
       gitCalls.push(args);
-      if (args[0] === "clone") {
-        await mkdir(path.join(args[4], ".git"), { recursive: true });
-        await writeFile(path.join(args[4], ".git", "HEAD"), "ref: refs/heads/main");
+      gitOptions.push(runOptions);
+      if (args.includes("clone")) {
+        const target = args.at(-1);
+        await mkdir(path.join(target, ".git"), { recursive: true });
+        await writeFile(path.join(target, ".git", "HEAD"), "ref: refs/heads/main");
       }
     },
     ...overrides,
@@ -45,7 +51,7 @@ async function fixture(t, overrides = {}) {
     waitFor(() => !["running", "queued"].includes(manager.job(job.id)?.status)).then(() =>
       manager.job(job.id),
     );
-  return { root, manager, options, calls, gitCalls, purges, create, finish };
+  return { root, manager, options, calls, gitCalls, gitOptions, purges, secrets, create, finish };
 }
 async function waitFor(predicate) {
   for (let attempt = 0; attempt < 200; attempt++) {
@@ -252,6 +258,29 @@ test("dir sources without .git keep reading files without touching git", async (
   assert.equal(f.calls.length, 1);
 });
 
+test("refreshAll enqueues one refresh per eligible source and coalesces active ones", async (t) => {
+  const f = await fixture(t);
+  await f.create("one");
+  await f.create("two");
+  await f.create("off", { enabled: false });
+
+  const jobs = await f.manager.refreshAll();
+
+  assert.deepEqual(
+    jobs.map((job) => job.sourceId).sort(),
+    ["one", "two"],
+  );
+  for (const job of jobs) assert.ok(["queued", "running"].includes(job.status));
+
+  // A second sync-all while those jobs run coalesces onto them instead of
+  // double-queueing: same job ids come back.
+  const again = await f.manager.refreshAll();
+  assert.deepEqual(
+    again.map((job) => job.id).sort(),
+    jobs.map((job) => job.id).sort(),
+  );
+});
+
 test("a failed dir-source pull fails the job with the git error", async (t) => {
   const f = await fixture(t, {
     runGit: async () => {
@@ -268,4 +297,86 @@ test("a failed dir-source pull fails the job with the git error", async (t) => {
   assert.equal(job.status, "failed");
   assert.match(job.error, /authentication failed/);
   assert.equal(f.calls.length, 0);
+});
+
+test("a stored token rides GIT_ASKPASS and disables ambient credential helpers", async (t) => {
+  const f = await fixture(t);
+  await f.create("secure", {
+    kind: "git",
+    ref: "https://git.example/team/private.git",
+    gitAuth: { mode: "https-token", username: "oauth2", token: "pat-secret" },
+  });
+
+  // The token lives only in the secret store, never on the source record.
+  const created = await f.manager.get("secure");
+  assert.equal(created.gitAuth, undefined);
+  const stored = await f.secrets.get("secure");
+  assert.equal(stored.username, "oauth2");
+  assert.equal(stored.token, "pat-secret");
+
+  await f.finish(await f.manager.requestRefresh("secure"));
+  await f.finish(await f.manager.requestRefresh("secure"));
+
+  const [cloneArgs, cloneOptions] = [f.gitCalls[0], f.gitOptions[0]];
+  assert.deepEqual(cloneArgs.slice(0, 3), ["-c", "credential.helper=", "clone"]);
+  assert.equal(cloneOptions.env.GIT_USERNAME, "oauth2");
+  assert.equal(cloneOptions.env.GIT_PASSWORD, "pat-secret");
+  assert.match(cloneOptions.env.GIT_ASKPASS, /git-askpass\.sh$/);
+  assert.deepEqual(f.gitCalls[1].slice(0, 3), ["-c", "credential.helper=", "-C"]);
+  assert.equal(f.gitOptions[1].env.GIT_PASSWORD, "pat-secret");
+});
+
+test("dir-source pulls inject a stored token; tokenless sources stay ambient", async (t) => {
+  const f = await fixture(t);
+  const repo = await mkdtemp(path.join(tmpdir(), "any-obs-repo-"));
+  await mkdir(path.join(repo, ".git"), { recursive: true });
+  t.after(() => rm(repo, { recursive: true, force: true }));
+  const plain = await mkdtemp(path.join(tmpdir(), "any-obs-repo2-"));
+  await mkdir(path.join(plain, ".git"), { recursive: true });
+  t.after(() => rm(plain, { recursive: true, force: true }));
+  await f.create("team", {
+    ref: repo,
+    gitAuth: { mode: "https-token", username: "bob", token: "dir-token" },
+  });
+  await f.create("ambient", { ref: plain });
+
+  await f.finish(await f.manager.requestRefresh("team"));
+  assert.deepEqual(f.gitCalls[0].slice(0, 4), ["-c", "credential.helper=", "-C", repo]);
+  assert.equal(f.gitOptions[0].env.GIT_PASSWORD, "dir-token");
+
+  await f.finish(await f.manager.requestRefresh("ambient"));
+  assert.deepEqual(f.gitCalls[1], ["-C", plain, "pull", "--rebase", "--autostash"]);
+  assert.equal(f.gitOptions[1].env?.GIT_ASKPASS, undefined);
+});
+
+test("removing a source clears its stored credentials", async (t) => {
+  const f = await fixture(t);
+  await f.create("doomed", {
+    gitAuth: { mode: "https-token", username: "u", token: "t" },
+  });
+
+  const job = await f.finish(await f.manager.remove("doomed"));
+
+  assert.equal(job.status, "succeeded");
+  assert.equal(await f.secrets.get("doomed"), null);
+});
+
+test("job errors are redacted of the stored token", async (t) => {
+  const f = await fixture(t, {
+    runGit: async () => {
+      throw new Error("fatal: could not authenticate with token pat-secret");
+    },
+  });
+  const repo = await mkdtemp(path.join(tmpdir(), "any-obs-repo-"));
+  await mkdir(path.join(repo, ".git"), { recursive: true });
+  t.after(() => rm(repo, { recursive: true, force: true }));
+  await f.create("team", {
+    ref: repo,
+    gitAuth: { mode: "https-token", username: "u", token: "pat-secret" },
+  });
+
+  const job = await f.finish(await f.manager.requestRefresh("team"));
+
+  assert.equal(job.status, "failed");
+  assert.equal(job.error.includes("pat-secret"), false);
 });

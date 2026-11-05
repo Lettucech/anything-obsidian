@@ -744,7 +744,7 @@ async function renderSources(state) {
       "p",
       "note",
       localImport
-        ? "Knowledge enters the shared workspaces only through these sources: a git repository (pulled on refresh) or a directory on this server (read as-is). Each source targets one workspace — create it in the Workspaces tab first."
+        ? "Knowledge enters the shared workspaces only through these sources: a git repository (pulled on refresh) or a directory on this server (pulled on refresh too when it is itself a git checkout, read as-is otherwise). Each source targets one workspace — create it in the Workspaces tab first."
         : "Docker sources use Git repositories stored in the data volume. Local directory import is unavailable. Create a shared workspace in the Workspaces tab first.",
     ),
   );
@@ -780,6 +780,12 @@ async function renderSources(state) {
   interval.value = "600";
   interval.min = "0";
   interval.setAttribute("aria-label", "Refresh interval in seconds (0 disables scheduling)");
+  const authUser = element("input", "", "");
+  authUser.placeholder = "x-access-token";
+  authUser.autocomplete = "username";
+  const authToken = element("input", "", "");
+  authToken.type = "password";
+  authToken.autocomplete = "new-password";
   form.append(
     field("Source ID", id),
     field("Kind", kind),
@@ -787,11 +793,14 @@ async function renderSources(state) {
     field("Target workspace", target),
     field("Git branch", branch),
     field("Refresh interval (seconds)", interval),
+    field("HTTPS username (optional)", authUser),
+    field("HTTPS token (optional)", authToken),
     element("button", "button button-primary", "Add source"),
   );
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
+      const token = authToken.value.trim();
       await request("/api/gateway/sources", {
         method: "POST",
         body: JSON.stringify({
@@ -801,8 +810,14 @@ async function renderSources(state) {
           workspace: target.value,
           branch: branch.value,
           intervalSeconds: Number(interval.value),
+          // A stored token means headless-safe pulls (ambient credential
+          // helpers are disabled for that source); empty stays ambient.
+          ...(token
+            ? { gitAuth: { mode: "https-token", username: authUser.value.trim(), token } }
+            : {}),
         }),
       });
+      authToken.value = "";
       await fill();
     } catch (error) {
       card.querySelector(".error")?.remove();
@@ -814,15 +829,89 @@ async function renderSources(state) {
     [kind, "Source kind"],
     [ref, localImport ? "Repository URL or server directory" : "Repository URL"],
     [target, "Target shared workspace"],
+    [authUser, "HTTPS username"],
+    [authToken, "HTTPS token"],
   ])
     input.setAttribute("aria-label", label);
   card.append(form);
+  // Rotating a stored token (PATs expire) without removing the source.
+  const credHeading = element("h3", "", "Update credentials");
+  const credNote = element(
+    "p",
+    "note",
+    "Stored server-side (0600) for private repositories. A source with a stored token runs git with ambient credential helpers disabled, so scheduled syncs never prompt. Clear to fall back to this machine's credential store.",
+  );
+  const credSource = element("select", "", "");
+  credSource.required = true;
+  credSource.setAttribute("aria-label", "Source");
+  const credUser = element("input", "", "");
+  credUser.placeholder = "x-access-token";
+  credUser.autocomplete = "username";
+  credUser.setAttribute("aria-label", "HTTPS username");
+  const credToken = element("input", "", "");
+  credToken.type = "password";
+  credToken.autocomplete = "new-password";
+  credToken.setAttribute("aria-label", "New HTTPS token");
+  const credForm = element("form", "row form-layout");
+  const credClear = element("button", "button button-quiet button-danger", "Clear");
+  credClear.type = "button";
+  const patchCredentials = async (gitAuth) => {
+    warning.textContent = "";
+    try {
+      const result = await request(`/api/gateway/sources/${encodeURIComponent(credSource.value)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ gitAuth }),
+      });
+      credToken.value = "";
+      warning.textContent = result.configured
+        ? `Credentials stored for '${result.id}'.`
+        : `Credentials cleared for '${result.id}'.`;
+    } catch (error) {
+      warning.textContent = error.message;
+    }
+    if (!signal.aborted) await fill();
+  };
+  credForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    patchCredentials(
+      credToken.value.trim()
+        ? {
+            mode: "https-token",
+            username: credUser.value.trim(),
+            token: credToken.value.trim(),
+          }
+        : { mode: "none" },
+    );
+  });
+  credClear.addEventListener("click", () => patchCredentials({ mode: "none" }));
+  credForm.append(
+    field("Source", credSource),
+    field("HTTPS username", credUser),
+    field("New HTTPS token (empty saves an empty token — use Clear to remove)", credToken),
+    element("button", "button button-quiet", "Save credentials"),
+    credClear,
+  );
+  card.append(credHeading, credNote, credForm);
   const warning = element("p", "error");
   warning.setAttribute("role", "status");
   card.append(warning);
   const rows = new Map();
   const list = element("div", "list");
-  card.append(list);
+  const syncAll = element("button", "button button-quiet", "Sync all");
+  syncAll.setAttribute("aria-label", "Refresh every shared source now");
+  syncAll.addEventListener("click", async () => {
+    syncAll.disabled = true;
+    try {
+      const { jobs } = await request("/api/gateway/sources/refresh-all", { method: "POST" });
+      if (!signal.aborted) warning.textContent = jobs.length ? "" : "No eligible shared sources to sync.";
+    } catch (error) {
+      if (!signal.aborted) warning.textContent = error.message;
+    }
+    if (!signal.aborted) await fill();
+  });
+  const syncAllRow = element("div", "row");
+  syncAllRow.append(syncAll);
+  card.append(syncAllRow, list);
   els.view.append(card);
 
   async function fill() {
@@ -843,7 +932,7 @@ async function renderSources(state) {
         element(
           "p",
           "note empty-sources",
-          "No shared sources yet. Each source is what feeds its workspace: after you add one, its first refresh (git clone and embed) runs automatically within 30 seconds, and its row gains the Refresh changed / Rebuild all / Remove actions. Set the refresh interval to 0 to embed only when you trigger it manually.",
+          "No shared sources yet. Each source is what feeds its workspace: after you add one, its first refresh (git clone and embed) runs automatically within 30 seconds, and its row gains the Refresh changed / Rebuild all / Remove actions — Sync all above refreshes every source at once. Set the refresh interval to 0 to embed only when you trigger it manually.",
         ),
       );
     for (const source of sources) {
@@ -904,6 +993,15 @@ async function renderSources(state) {
       record.remove.disabled = active;
       record.remove.textContent = source.cleanupPending ? "Retry cleanup" : "Remove";
     }
+    syncAll.disabled = sources.some((source) => {
+      const job = jobs.find((candidate) => candidate.sourceId === source.id);
+      return source.cleanupPending || ["queued", "running"].includes(job?.status);
+    });
+    const credOptions = sources
+      .map((source) => `<option value="${source.id}">${source.id}</option>`)
+      .join("");
+    if (credSource.innerHTML !== credOptions) credSource.innerHTML = credOptions;
+    credSource.disabled = credClear.disabled = !sources.length;
   }
   await fill();
   while (!signal.aborted && card.isConnected) {
